@@ -1,114 +1,150 @@
-# C# WPF PDF Viewer
+# Impertio PDF Viewer
 
-A modern Windows PDF viewer built with WPF and PDFium, featuring clean architecture and comprehensive testing.
+A modern cross-platform PDF viewer built with Avalonia UI and PDFium, featuring clean architecture and a ribbon-style interface.
 
-## 📋 Project Overview
+## Project Overview
 
-This is a C# .NET WPF application designed for Windows with a focus on:
+This is a C# .NET application designed for cross-platform use (Windows, macOS, Linux) with a focus on:
 - **Clean Architecture**: Separated into Core, Desktop, and Rendering layers
-- **Modern UI**: WPF-based user interface
-- **PDF Rendering**: Using PDFium.NET SDK for high-quality rendering
-- **Testability**: Comprehensive unit test coverage
+- **Modern UI**: Avalonia UI with Foxit/PDF-XChange style ribbon interface
+- **PDF Rendering**: Using PDFium for high-quality rendering
+- **Cross-Platform**: Runs on Windows, macOS, and Linux
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
-csharp-pdf-viewer/
+impertio-pdf-editor/
 ├── src/
 │   ├── PdfViewer.Core/         # Core business logic and interfaces
-│   ├── PdfViewer.Desktop/      # WPF UI layer
+│   ├── PdfViewer.Desktop/      # Avalonia UI layer
 │   └── PdfViewer.Rendering/    # PDF rendering implementation
 ├── tests/                      # Unit tests
 ├── docs/                       # Project documentation
-│   ├── PROJECT_SUMMARY.md      # Architecture and goals
-│   ├── SESSION_LOG.md          # Development logs
-│   └── TESTING_GUIDE.md        # Testing procedures
 └── PdfViewer.sln              # Visual Studio solution
 ```
 
-## 🔧 Technologies
+## Technologies
 
-- **.NET 6.0+** - Framework
-- **WPF** - Windows Presentation Foundation for UI
-- **PDFium.NET SDK** - PDF rendering engine
-- **xUnit** - Testing framework
+- **.NET 10.0** - Framework
+- **Avalonia UI** - Cross-platform UI framework
+- **PDFium** - PDF rendering engine
+- **CommunityToolkit.Mvvm** - MVVM framework
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
-- Visual Studio 2022 or later
-- .NET 6.0 SDK or later
-- Windows 10/11
+- .NET 10.0 SDK
+- Visual Studio 2022 / VS Code / JetBrains Rider
 
 ### Build and Run
 
-1. **Open the solution**:
-   ```
-   Open PdfViewer.sln in Visual Studio
-   ```
-
-2. **Restore NuGet packages**:
-   ```
-   Right-click solution → Restore NuGet Packages
-   ```
-
-3. **Build the solution**:
-   ```
-   Build → Build Solution (Ctrl+Shift+B)
-   ```
-
-4. **Run the application**:
-   ```
-   Debug → Start Debugging (F5)
-   ```
-
-### Running Tests
-
-```
-Test → Run All Tests (Ctrl+R, A)
+**Using CLI:**
+```bash
+cd impertio-pdf-editor
+dotnet run --project src/PdfViewer.Desktop/PdfViewer.Desktop.csproj
 ```
 
-## ✨ Features
+**Using Visual Studio:**
+1. Open `PdfViewer.sln` in Visual Studio
+2. Set `PdfViewer.Desktop` as startup project
+3. Press F5 to run
 
-### Currently Implemented
-- Basic WPF application structure
-- Clean architecture setup
-- Core interfaces and models
-- Unit test framework
+## Features
 
-### Planned Features
+### Implemented
 - PDF file opening and rendering
-- Zoom and rotation controls
-- Page navigation
-- Thumbnail sidebar
-- Search functionality
-- Annotation tools
+- Multiple view modes (Single Page, Continuous, Two-Page)
+- Zoom controls (zoom in/out, fit width, fit page, presets)
+- Page rotation (clockwise/counter-clockwise)
+- Page navigation with keyboard shortcuts
+- Thumbnail sidebar with auto-scroll
+- Bookmarks/Outline panel
+- Search functionality (Ctrl+F)
+- Hand tool for panning
+- Select text tool
+- Drag and drop PDF files
+- Recent files menu
+- Document properties dialog
+- Presentation mode (slideshow)
 - Print support
-- Export capabilities
+- Save As functionality
+- Full screen mode (F11)
+- Keyboard navigation (Page Up/Down, Home, End, Arrow keys)
+- Mouse wheel zoom (Ctrl+Scroll)
 
-## 📚 Documentation
+### Keyboard Shortcuts
+- **Ctrl+O** - Open file
+- **Ctrl+S** - Save
+- **Ctrl+Shift+S** - Save As
+- **Ctrl+P** - Print
+- **Ctrl+F** - Find text
+- **Ctrl+G** - Go to page
+- **Ctrl++** - Zoom in
+- **Ctrl+-** - Zoom out
+- **F11** - Toggle full screen
+- **Page Up/Down** - Navigate pages
+- **Home/End** - First/Last page
+- **Escape** - Close search/exit full screen
 
-Detailed documentation is available in the `docs/` folder:
+## Development Status
 
-- **[PROJECT_SUMMARY.md](docs/PROJECT_SUMMARY.md)** - Complete project architecture and goals
-- **[SESSION_LOG.md](docs/SESSION_LOG.md)** - Development history and decisions
-- **[TESTING_GUIDE.md](docs/TESTING_GUIDE.md)** - How to write and run tests
+**Current Phase**: Phase 2 - Core Features (In Progress)
 
-## 🎯 Development Status
+### Roadmap
 
-**Current Phase**: Infrastructure Setup
-- ✅ Project structure created
-- ✅ Solution and projects configured
-- ✅ Clean architecture layers defined
-- 🔄 Core rendering implementation (in progress)
-- ⏳ UI implementation (planned)
-- ⏳ Advanced features (planned)
+#### Phase 1: Foundation (Completed)
+- Project structure and architecture
+- Basic PDF rendering with PDFium
+- Core UI components
 
-## 🤝 Contributing
+#### Phase 2: Core Features (In Progress)
+- [x] PDF viewing with high-quality rendering
+- [x] Multiple view modes (Single, Continuous, Two-Page)
+- [x] Navigation, zoom, and rotation
+- [x] Search and bookmarks
+- [x] Print and save
+- [x] Thumbnail sidebar
+- [x] Keyboard shortcuts
+- [x] Hand tool for panning
+- [x] Drag and drop support
+- [x] Recent files
+- [x] Document properties
+- [x] Presentation mode
+- [ ] Text selection and copy
+- [ ] Page extraction
+- [ ] Page deletion/reordering
+- [ ] Merge PDF files
+- [ ] Split PDF files
+- [ ] Export pages as images
+- [ ] Night/Dark mode
+- [ ] Customizable toolbar
+- [ ] Tab support (multiple documents)
 
-This is a personal project. For questions or suggestions, please refer to the documentation in the `docs/` folder.
+#### Phase 3: Performance Optimization (Planned)
+- GPU-accelerated rendering
+- Progressive page rendering
+- Virtual scrolling for large documents
+- Memory pooling and optimization
+- Multi-threaded rendering
+- Page caching improvements
 
-## 📄 License
+#### Phase 4: Advanced Features (Planned)
+- Text selection and copy
+- Annotations (highlight, underline, notes)
+- Form filling
+- Digital signatures
+- Document comparison
+- OCR integration
 
-Copyright © 2026. All rights reserved.
+#### Phase 5: Collaboration & Cloud (Planned)
+- Cloud storage integration
+- Document sharing
+- Collaborative annotations
+- Version history
+
+## License
+
+This project is open source software developed by **Impertio** and licensed under the [MIT License](LICENSE).
+
+Copyright (c) 2026 Impertio
