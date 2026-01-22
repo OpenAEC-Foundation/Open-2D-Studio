@@ -134,13 +134,6 @@ export function Toolbar() {
         onClick={toggleSnap}
       />
 
-      {/* Spacer */}
-      <div className="flex-1" />
-
-      {/* App title */}
-      <span className="text-cad-text-dim text-sm font-medium mr-2">
-        Open 2D Modeler
-      </span>
     </div>
   );
 }

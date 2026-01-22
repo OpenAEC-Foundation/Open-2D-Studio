@@ -99,8 +99,9 @@ interface AppState {
   historyIndex: number;     // Current position in history (-1 means at latest)
   maxHistorySize: number;   // Maximum number of history entries
 
-  // Print dialog
+  // Dialogs
   printDialogOpen: boolean;
+  aboutDialogOpen: boolean;
 
   // Actions - Shapes
   addShape: (shape: Shape) => void;
@@ -169,8 +170,9 @@ interface AppState {
   canUndo: () => boolean;
   canRedo: () => boolean;
 
-  // Actions - Print
+  // Actions - Dialogs
   setPrintDialogOpen: (open: boolean) => void;
+  setAboutDialogOpen: (open: boolean) => void;
 }
 
 // Deep clone helper for shapes
@@ -210,6 +212,7 @@ export const useAppStore = create<AppState>()(
     historyIndex: -1,
     maxHistorySize: 50,
     printDialogOpen: false,
+    aboutDialogOpen: false,
 
     // Shape actions (with history tracking)
     addShape: (shape) =>
@@ -615,10 +618,14 @@ export const useAppStore = create<AppState>()(
       return state.historyStack.length > 0 && state.historyIndex < state.historyStack.length - 1;
     },
 
-    // Print actions
+    // Dialog actions
     setPrintDialogOpen: (open) =>
       set((state) => {
         state.printDialogOpen = open;
+      }),
+    setAboutDialogOpen: (open) =>
+      set((state) => {
+        state.aboutDialogOpen = open;
       }),
   }))
 );

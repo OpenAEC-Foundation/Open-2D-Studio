@@ -74,6 +74,34 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
     [snapEnabled, gridSize]
   );
 
+  // Snap point to 45-degree angle increments relative to base point
+  const snapToAngle = useCallback(
+    (basePoint: Point, targetPoint: Point): Point => {
+      const dx = targetPoint.x - basePoint.x;
+      const dy = targetPoint.y - basePoint.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance === 0) return targetPoint;
+
+      // Calculate angle in radians
+      const angle = Math.atan2(dy, dx);
+
+      // Convert to degrees and snap to nearest 45
+      const degrees = angle * (180 / Math.PI);
+      const snappedDegrees = Math.round(degrees / 45) * 45;
+
+      // Convert back to radians
+      const snappedAngle = snappedDegrees * (Math.PI / 180);
+
+      // Calculate new point at snapped angle with same distance
+      return {
+        x: basePoint.x + distance * Math.cos(snappedAngle),
+        y: basePoint.y + distance * Math.sin(snappedAngle),
+      };
+    },
+    []
+  );
+
   // Get mouse position from event
   const getMousePos = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>): Point => {
@@ -274,14 +302,16 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
           } else {
             // Subsequent clicks - create line from last point to this point
             const lastPoint = drawingPoints[drawingPoints.length - 1];
-            const dx = Math.abs(snappedPos.x - lastPoint.x);
-            const dy = Math.abs(snappedPos.y - lastPoint.y);
+            // Apply angle snap if Shift is held
+            const finalPos = e.shiftKey ? snapToAngle(lastPoint, snappedPos) : snappedPos;
+            const dx = Math.abs(finalPos.x - lastPoint.x);
+            const dy = Math.abs(finalPos.y - lastPoint.y);
 
             // Only create if there's actual distance
             if (dx > 1 || dy > 1) {
-              createLine(lastPoint, snappedPos);
+              createLine(lastPoint, finalPos);
               // Continue drawing from this point
-              addDrawingPoint(snappedPos);
+              addDrawingPoint(finalPos);
             }
           }
           break;
@@ -327,7 +357,14 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
 
         case 'polyline': {
           // Add point to polyline - continues until user presses Enter/Escape or right-clicks
-          addDrawingPoint(snappedPos);
+          // Apply angle snap if Shift is held and there's a previous point
+          if (e.shiftKey && drawingPoints.length > 0) {
+            const lastPoint = drawingPoints[drawingPoints.length - 1];
+            const finalPos = snapToAngle(lastPoint, snappedPos);
+            addDrawingPoint(finalPos);
+          } else {
+            addDrawingPoint(snappedPos);
+          }
           break;
         }
 
@@ -343,6 +380,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       getMousePos,
       screenToWorld,
       snapToGrid,
+      snapToAngle,
       activeTool,
       findShapeAtPoint,
       selectShape,
@@ -403,13 +441,16 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
         const lastPoint = drawingPoints[drawingPoints.length - 1];
 
         switch (activeTool) {
-          case 'line':
+          case 'line': {
+            // Apply angle snap if Shift is held
+            const previewPos = e.shiftKey ? snapToAngle(lastPoint, snappedPos) : snappedPos;
             setDrawingPreview({
               type: 'line',
               start: lastPoint,
-              end: snappedPos,
+              end: previewPos,
             });
             break;
+          }
 
           case 'rectangle':
             setDrawingPreview({
@@ -431,13 +472,16 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
             break;
           }
 
-          case 'polyline':
+          case 'polyline': {
+            // Apply angle snap if Shift is held
+            const previewPos = e.shiftKey ? snapToAngle(lastPoint, snappedPos) : snappedPos;
             setDrawingPreview({
               type: 'polyline',
               points: drawingPoints,
-              currentPoint: snappedPos,
+              currentPoint: previewPos,
             });
             break;
+          }
         }
       }
     },
@@ -445,6 +489,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       getMousePos,
       screenToWorld,
       snapToGrid,
+      snapToAngle,
       activeTool,
       setViewport,
       viewport,
