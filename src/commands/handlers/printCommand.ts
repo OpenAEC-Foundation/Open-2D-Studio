@@ -1,6 +1,5 @@
 import type { CommandHandler, CommandState, CommandInput, CommandResult } from '../types';
 import type { Shape } from '../../types/geometry';
-import { createInitialCommandState } from '../index';
 
 export const printCommand: CommandHandler = {
   name: 'PRINT',
@@ -18,9 +17,9 @@ export const printCommand: CommandHandler = {
   },
 
   handleInput: (
-    state: CommandState,
-    input: CommandInput,
-    shapes: Shape[]
+    _state: CommandState,
+    _input: CommandInput,
+    _shapes: Shape[]
   ): CommandResult => {
     // PRINT command opens the print dialog and completes immediately
     return {
