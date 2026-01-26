@@ -1,6 +1,6 @@
 [package]
 name = "open-2d-modeler"
-version = "0.1.1"
+version = "0.2.0"
 description = "A cross-platform 2D CAD application"
 authors = ["Open 2D Modeler Contributors"]
 license = "MIT"
