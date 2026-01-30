@@ -1,7 +1,7 @@
 /**
  * Draft Types - Enhanced types for Model Space (drafts)
  *
- * These types support Revit-style draft functionality including:
+ * These types support draft functionality including:
  * - Named views within drafts
  * - Draft boundaries (regions)
  * - Draft categories and metadata
@@ -66,7 +66,7 @@ export interface DraftView {
 // ============================================================================
 
 /**
- * Draft category for organization (like Revit view types)
+ * Draft category for organization
  */
 export type DraftCategory =
   | 'floor-plan'
@@ -246,7 +246,7 @@ export interface DraftTemplate {
 // ============================================================================
 
 /**
- * Group of related drafts (like Revit view groups)
+ * Group of related drafts
  */
 export interface DraftGroup {
   id: string;

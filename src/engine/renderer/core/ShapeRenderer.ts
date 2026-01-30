@@ -257,7 +257,7 @@ export class ShapeRenderer extends BaseRenderer {
   drawCommandPreviewShapes(shapes: Shape[]): void {
     const ctx = this.ctx;
 
-    // AutoCAD-like preview style: green dashed lines
+    // Preview style: green dashed lines
     ctx.strokeStyle = COLORS.commandPreview;
     ctx.setLineDash([8, 4]);
     ctx.lineWidth = 1;

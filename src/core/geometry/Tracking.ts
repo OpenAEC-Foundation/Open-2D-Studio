@@ -1,5 +1,5 @@
 /**
- * Tracking System - AutoCAD-like polar tracking and object tracking
+ * Tracking System - Polar tracking and object tracking
  * Enables drawing lines aligned with existing geometry
  */
 

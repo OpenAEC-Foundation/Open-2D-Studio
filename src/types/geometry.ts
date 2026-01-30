@@ -201,14 +201,14 @@ export type ToolType =
   | 'sheet-callout'
   | 'sheet-revision-cloud';
 
-// Circle drawing modes (like AutoCAD)
+// Circle drawing modes
 export type CircleMode =
   | 'center-radius'    // Default: click center, then radius point
   | 'center-diameter'  // Click center, then diameter point
   | '2point'           // Two points define diameter endpoints
   | '3point';          // Three points on circumference
 
-// Rectangle drawing modes (like AutoCAD)
+// Rectangle drawing modes
 export type RectangleMode =
   | 'corner'           // Default: click two opposite corners
   | 'center'           // Click center, then corner
@@ -226,7 +226,7 @@ export interface DrawingBoundary {
   height: number; // Height in drawing units
 }
 
-// Drawing - working canvas (like Revit Drafting View)
+// Drawing - working canvas
 export interface Drawing {
   id: string;
   name: string;
@@ -250,7 +250,7 @@ export type PaperOrientation = 'portrait' | 'landscape';
 // Using import type to avoid circular dependency
 import type { SheetAnnotation } from './sheet';
 
-// Sheet - printable layout (like AutoCAD Paper Space)
+// Sheet - printable layout (paper space)
 export interface Sheet {
   id: string;
   name: string;

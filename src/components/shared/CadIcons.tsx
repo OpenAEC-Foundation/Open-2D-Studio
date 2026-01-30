@@ -1,5 +1,5 @@
 /**
- * Custom CAD Icons - Revit-style icons for drawing tools
+ * Custom CAD Icons for drawing tools
  */
 
 interface IconProps {
@@ -431,7 +431,7 @@ export function InsulationIcon({ size = 24, className }: IconProps) {
  * Aligned Dimension Icon - Dimension parallel to measured points
  */
 export function AlignedDimensionIcon({ size = 24, className }: IconProps) {
-  // Revit-style: two angled reference walls with a dimension line measuring between them
+  // Two angled reference walls with a dimension line measuring between them
   return (
     <svg
       width={size}

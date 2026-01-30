@@ -40,7 +40,7 @@ export function parseCoordinateInput(
 
     if (isNaN(distance) || isNaN(angleDeg)) return null;
 
-    // Convert angle to radians (AutoCAD uses degrees, 0 = East, counter-clockwise)
+    // Convert angle to radians (degrees, 0 = East, counter-clockwise)
     const angleRad = (angleDeg * Math.PI) / 180;
 
     const dx = distance * Math.cos(angleRad);

@@ -52,7 +52,7 @@ export class HandleRenderer extends BaseRenderer {
     ctx.setLineDash([]);
 
     if (isSelected) {
-      // Draw resize handles (Revit-style blue arrow controls)
+      // Draw resize handles
       this.drawBoundaryHandles(boundary, viewport);
     } else {
       // Draw corner markers for normal state

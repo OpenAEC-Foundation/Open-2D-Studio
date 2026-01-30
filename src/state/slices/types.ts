@@ -85,7 +85,7 @@ export interface SelectionBox {
   mode: SelectionBoxMode;  // 'window' (left-to-right) or 'crossing' (right-to-left)
 }
 
-// Boundary handle types for interactive editing (like Revit crop region handles)
+// Boundary handle types for interactive editing
 export type BoundaryHandleType =
   | 'top-left' | 'top' | 'top-right'
   | 'left' | 'center' | 'right'
@@ -100,7 +100,7 @@ export interface BoundaryEditState {
   originalBoundary: DrawingBoundary | null;   // Boundary state before drag started
 }
 
-// Viewport handle types for interactive editing (like Revit viewport handles)
+// Viewport handle types for interactive editing
 export type ViewportHandleType =
   | 'top-left' | 'top' | 'top-right'
   | 'left' | 'center' | 'right'
@@ -275,7 +275,7 @@ export const getShapeBounds = (shape: Shape): { minX: number; minY: number; maxX
   }
 };
 
-// Default title block fields - Revit-like comprehensive layout
+// Default title block fields
 export const createDefaultTitleBlock = (): TitleBlock => ({
   visible: true,
   x: 10,

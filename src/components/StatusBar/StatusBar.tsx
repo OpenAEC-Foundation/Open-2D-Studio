@@ -45,7 +45,7 @@ export const StatusBar = memo(function StatusBar() {
         <span className="text-cad-text font-mono">{gridSize}</span>
       </div>
 
-      {/* Snap and Tracking toggles - AutoCAD style */}
+      {/* Snap and Tracking toggles */}
       <div className="flex items-center gap-1">
         <button
           onClick={toggleSnap}

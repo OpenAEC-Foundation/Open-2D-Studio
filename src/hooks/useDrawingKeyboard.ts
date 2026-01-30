@@ -3,7 +3,7 @@ import { useAppStore, generateId } from '../state/appStore';
 import type { LineShape, PolylineShape, SplineShape } from '../types/geometry';
 
 /**
- * Hook to handle keyboard shortcuts for drawing operations (AutoCAD-style)
+ * Hook to handle keyboard shortcuts for drawing operations
  * - Enter/Escape: End current drawing operation
  * - U: Undo last point
  * - C: Close shape (connect last point to first point)

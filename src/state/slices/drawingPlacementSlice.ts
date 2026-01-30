@@ -1,6 +1,6 @@
 /**
  * Drawing Placement Slice - Manages drawing-to-sheet placement state
- * (Revit-like drag-and-drop placement of drawings onto sheets as viewports)
+ * (drag-and-drop placement of drawings onto sheets as viewports)
  *
  * Includes:
  * - Placement mode state

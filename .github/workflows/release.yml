@@ -42,8 +42,8 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               tag_name: version,
-              name: `Open 2D Modeler ${version}`,
-              body: `## What's New in ${version}\n\nAutoCAD-like 2D CAD modeler built with Tauri + React.\n\n### Downloads\n- **Windows**: Download the \`.msi\` installer or \`.exe\` file\n- **Linux**: Download the \`.deb\` package or \`.AppImage\`\n\n### Features\n- Drawing tools: Line, Rectangle, Circle, Arc, Polyline, Ellipse\n- Modify tools: Move, Copy, Rotate, Scale, Mirror, Offset\n- Undo/Redo support\n- Grid and snap functionality\n- Layer management\n- AutoCAD-style command line interface`,
+              name: `Open 2D Studio ${version}`,
+              body: `## What's New in ${version}\n\n2D CAD application built with Tauri + React.\n\n### Downloads\n- **Windows**: Download the \`.msi\` installer or \`.exe\` file\n- **Linux**: Download the \`.deb\` package or \`.AppImage\`\n\n### Features\n- Drawing tools: Line, Rectangle, Circle, Arc, Polyline, Ellipse\n- Modify tools: Move, Copy, Rotate, Scale, Mirror, Offset\n- Undo/Redo support\n- Grid and snap functionality\n- Layer management\n- CAD-style command line interface`,
               draft: true,
               prerelease: false
             });

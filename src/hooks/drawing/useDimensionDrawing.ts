@@ -244,7 +244,7 @@ export function useDimensionDrawing() {
   );
 
   /**
-   * Handle click for angular dimension (3 clicks, Revit-style)
+   * Handle click for angular dimension (3 clicks)
    * Click 1: Click on first line/edge
    * Click 2: Click on second line/edge (vertex auto-computed as intersection)
    * Click 3: Click to position dimension arc
@@ -311,7 +311,7 @@ export function useDimensionDrawing() {
   );
 
   /**
-   * Handle click for radius/diameter dimension (2 clicks, Revit-style)
+   * Handle click for radius/diameter dimension (2 clicks)
    * Click 1: Click on the edge of a circle/arc — auto-detect geometry
    * Click 2: Click to position/angle the dimension line
    */

@@ -28,7 +28,7 @@ export const PROJECT_FILTER = {
 // Export formats
 export const EXPORT_FILTERS = {
   svg: { name: 'SVG Vector Image', extensions: ['svg'] },
-  dxf: { name: 'AutoCAD DXF', extensions: ['dxf'] },
+  dxf: { name: 'DXF', extensions: ['dxf'] },
   json: { name: 'JSON Data', extensions: ['json'] },
 };
 

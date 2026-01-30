@@ -476,7 +476,7 @@ export function useShapeDrawing() {
   /**
    * Handle click for arc drawing
    * Modes:
-   * - '3point': Click start, click point on arc, click end (like Revit)
+   * - '3point': Click start, click point on arc, click end
    * - 'center-start-end': Click center, click start point (defines radius), click end point
    */
   const handleArcClick = useCallback(
@@ -545,7 +545,7 @@ export function useShapeDrawing() {
   /**
    * Handle click for ellipse drawing
    * Modes:
-   * - 'center-axes': Click center, click to define radiusX, click to define radiusY (like Revit)
+   * - 'center-axes': Click center, click to define radiusX, click to define radiusY
    * - 'corner': Click corner, drag to opposite corner (bounding box defines ellipse)
    */
   const handleEllipseClick = useCallback(

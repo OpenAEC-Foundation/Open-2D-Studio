@@ -1,6 +1,6 @@
-# Open 2D Modeler
+# Open 2D Studio
 
-A comprehensive, cross-platform 2D CAD application inspired by AutoCAD. Built with modern technologies for performance, extensibility, and ease of use.
+A comprehensive, cross-platform 2D CAD application. Built with modern technologies for performance, extensibility, and ease of use.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)
@@ -9,7 +9,7 @@ A comprehensive, cross-platform 2D CAD application inspired by AutoCAD. Built wi
 
 ## Overview
 
-Open 2D Modeler is a free, open-source 2D CAD (Computer-Aided Design) application that provides professional-grade drawing tools for technical drawings, floor plans, mechanical designs, and more. It aims to be a lightweight, fast alternative to commercial CAD software.
+Open 2D Studio is a free, open-source 2D CAD (Computer-Aided Design) application that provides professional-grade drawing tools for technical drawings, floor plans, mechanical designs, and more. It aims to be a lightweight, fast alternative to commercial CAD software.
 
 ### Key Features
 
@@ -19,7 +19,7 @@ Open 2D Modeler is a free, open-source 2D CAD (Computer-Aided Design) applicatio
 - **Pan & Zoom**: Smooth navigation with mouse wheel zoom and middle-button pan
 - **Selection**: Click, box selection, shift-click to add to selection
 - **Properties Panel**: Edit stroke color, width, and line style
-- **Command Line**: AutoCAD-style command input
+- **Command Line**: CAD-style command input
 - **File Support**: Native JSON format, DXF import/export (via Rust backend)
 - **Cross-Platform**: Runs on Windows, Linux, and macOS
 
@@ -36,7 +36,7 @@ Open 2D Modeler is a free, open-source 2D CAD (Computer-Aided Design) applicatio
 | **Zustand** | State management | Lightweight, simple API, works great with React |
 | **TailwindCSS** | Styling | Rapid UI development, consistent design system |
 | **Rust** | Backend (Tauri) | Memory safety, native performance for file I/O and geometry |
-| **dxf-rs** | DXF support | Native Rust library for reading/writing AutoCAD DXF files |
+| **dxf-rs** | DXF support | Native Rust library for reading/writing DXF files |
 
 ### Architecture
 
@@ -72,8 +72,8 @@ Open 2D Modeler is a free, open-source 2D CAD (Computer-Aided Design) applicatio
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/open-2D-modeler.git
-   cd open-2D-modeler
+   git clone https://github.com/your-username/open-2D-studio.git
+   cd open-2D-studio
    ```
 
 2. Install dependencies:
@@ -131,7 +131,7 @@ Open 2D Modeler is a free, open-source 2D CAD (Computer-Aided Design) applicatio
 ## Project Structure
 
 ```
-open-2D-modeler/
+open-2D-studio/
 ├── src/                      # Frontend source code
 │   ├── components/           # React components
 │   │   ├── Canvas/          # Drawing canvas
@@ -197,7 +197,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Acknowledgments
 
-- Inspired by AutoCAD and LibreCAD
+- Inspired by professional CAD software
 - Built with [Tauri](https://tauri.app/), [React](https://react.dev/), and [Rust](https://www.rust-lang.org/)
 - Icons by [Lucide](https://lucide.dev/)
 

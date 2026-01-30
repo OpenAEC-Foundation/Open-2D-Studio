@@ -1,6 +1,6 @@
 /**
  * Boundary Slice - Manages drawing boundary editing state
- * (Revit-like crop region manipulation)
+ * (crop region manipulation)
  */
 
 import type { BoundaryEditState, BoundaryHandleType, Point, Drawing, DrawingBoundary } from './types';

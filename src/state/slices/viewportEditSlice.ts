@@ -1,6 +1,6 @@
 /**
  * Viewport Edit Slice - Manages sheet viewport editing state
- * (Revit-like viewport manipulation on sheets)
+ * (viewport manipulation on sheets)
  *
  * Includes:
  * - Viewport selection and manipulation

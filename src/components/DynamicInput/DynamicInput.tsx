@@ -2,7 +2,7 @@ import { useAppStore } from '../../state/appStore';
 import { getDistance, getAngle } from '../../utils/coordinateParser';
 
 /**
- * DynamicInput - AutoCAD-style tooltip that appears near the cursor
+ * DynamicInput - Tooltip that appears near the cursor
  * Shows coordinates, distance, and angle while drawing
  */
 export function DynamicInput() {

@@ -1,7 +1,7 @@
 /**
  * Drawing Types - Enhanced types for Model Space (drawings)
  *
- * These types support Revit-style drawing functionality including:
+ * These types support drawing functionality including:
  * - Named views within drawings
  * - Drawing boundaries (regions)
  * - Drawing categories and metadata
@@ -66,7 +66,7 @@ export interface DrawingView {
 // ============================================================================
 
 /**
- * Drawing category for organization (like Revit view types)
+ * Drawing category for organization
  */
 export type DrawingCategory =
   | 'floor-plan'
@@ -246,7 +246,7 @@ export interface DrawingTemplate {
 // ============================================================================
 
 /**
- * Group of related drawings (like Revit view groups)
+ * Group of related drawings
  */
 export interface DrawingGroup {
   id: string;

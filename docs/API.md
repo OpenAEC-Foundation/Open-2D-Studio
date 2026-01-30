@@ -1,8 +1,8 @@
-# Open 2D Modeler - Programmatic API Documentation
+# Open 2D Studio - Programmatic API Documentation
 
 ## Overview
 
-Open 2D Modeler exposes a full programmatic API accessible in two ways:
+Open 2D Studio exposes a full programmatic API accessible in two ways:
 
 1. **Browser Console** (`window.cad`) -- for interactive scripting inside the app
 2. **HTTP API** (`localhost:49100`) -- for external tools, scripts, and AI assistants to control the app remotely
@@ -67,15 +67,15 @@ Use `return` to send a value back. The result is JSON-serialized (you may need t
 Launch the app with a custom API port:
 
 ```bash
-open-2d-modeler.exe --api-port 9200
+open-2d-studio.exe --api-port 9200
 ```
 
 ### Multiple Instances
 
 Each instance picks a free port starting from 49100 (scans up to +100). Discovery files are written to:
 
-- **Windows**: `%APPDATA%\Open2DModeler\instances\instance-{pid}.json`
-- **Linux/Mac**: `~/.config/open-2d-modeler/instances/instance-{pid}.json`
+- **Windows**: `%APPDATA%\Open2DStudio\instances\instance-{pid}.json`
+- **Linux/Mac**: `~/.config/open-2d-studio/instances/instance-{pid}.json`
 
 Each file contains:
 

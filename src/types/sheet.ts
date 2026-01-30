@@ -1,7 +1,7 @@
 /**
  * Sheet Types - Enhanced types for Paper Space (sheets and viewports)
  *
- * These types support Revit-style sheet functionality including:
+ * These types support sheet functionality including:
  * - Sheet annotations (text, dimensions, leaders on sheets)
  * - Viewport crop regions
  * - Per-viewport layer visibility overrides

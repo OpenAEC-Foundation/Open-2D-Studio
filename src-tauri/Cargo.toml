@@ -1,8 +1,8 @@
 [package]
-name = "open-2d-modeler"
-version = "0.5.0"
+name = "open-2d-studio"
+version = "0.6.0"
 description = "A cross-platform 2D CAD application"
-authors = ["Open 2D Modeler Contributors"]
+authors = ["Open 2D Studio Contributors"]
 license = "MIT"
 repository = ""
 edition = "2021"
