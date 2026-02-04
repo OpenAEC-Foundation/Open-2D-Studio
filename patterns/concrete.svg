@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" viewBox="0 0 10 10">
+  <defs>
+    <pattern id="concrete" width="10" height="10" patternUnits="userSpaceOnUse">
+      <rect width="10" height="10" fill="white"/>
+      <!-- Stipple dots representing aggregate -->
+      <circle cx="1" cy="1" r="0.3" fill="black"/>
+      <circle cx="4" cy="2" r="0.4" fill="black"/>
+      <circle cx="7" cy="1.5" r="0.25" fill="black"/>
+      <circle cx="2" cy="4" r="0.35" fill="black"/>
+      <circle cx="5" cy="5" r="0.3" fill="black"/>
+      <circle cx="8" cy="4.5" r="0.4" fill="black"/>
+      <circle cx="1.5" cy="7" r="0.3" fill="black"/>
+      <circle cx="4.5" cy="8" r="0.35" fill="black"/>
+      <circle cx="7.5" cy="7.5" r="0.25" fill="black"/>
+      <circle cx="9" cy="9" r="0.3" fill="black"/>
+      <circle cx="3" cy="6" r="0.2" fill="black"/>
+      <circle cx="6" cy="3" r="0.2" fill="black"/>
+      <circle cx="9" cy="2" r="0.2" fill="black"/>
+      <circle cx="0.5" cy="9" r="0.2" fill="black"/>
+    </pattern>
+  </defs>
+  <rect width="10" height="10" fill="url(#concrete)"/>
+</svg>

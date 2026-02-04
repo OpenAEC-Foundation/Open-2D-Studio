@@ -19,7 +19,7 @@ import {
   distance,
   angleBetweenPoints,
 } from '../../engine/geometry/DimensionUtils';
-import { findShapeAtPoint } from '../../services/selectionService';
+import { findShapeAtPoint } from '../../services/drawing/selectionService';
 import type { Shape } from '../../types/geometry';
 
 /**

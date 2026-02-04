@@ -5,7 +5,7 @@
 import type { AppState } from '../state/appStore';
 import type { Viewport as ViewportType, Point } from '../types/geometry';
 import { toPoint, type ApiPoint } from './types';
-import { getShapesBounds } from '../services/shapeService';
+import { getShapesBounds } from '../services/drawing/shapeService';
 
 export class ViewportApi {
   constructor(private getState: () => AppState) {}

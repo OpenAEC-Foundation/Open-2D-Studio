@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" viewBox="0 0 10 10">
+  <defs>
+    <pattern id="insulation" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="8" height="8" fill="white"/>
+      <!-- Wavy zigzag lines representing insulation -->
+      <path d="M0,2 Q2,0 4,2 Q6,4 8,2" stroke="black" stroke-width="0.25" fill="none"/>
+      <path d="M0,6 Q2,4 4,6 Q6,8 8,6" stroke="black" stroke-width="0.25" fill="none"/>
+    </pattern>
+  </defs>
+  <rect width="10" height="10" fill="url(#insulation)"/>
+</svg>

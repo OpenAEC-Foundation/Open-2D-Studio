@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" viewBox="0 0 10 10">
+  <defs>
+    <pattern id="water" width="12" height="4" patternUnits="userSpaceOnUse">
+      <rect width="12" height="4" fill="white"/>
+      <!-- Wavy horizontal lines representing water -->
+      <path d="M0,1 Q1.5,0 3,1 Q4.5,2 6,1 Q7.5,0 9,1 Q10.5,2 12,1"
+            stroke="black" stroke-width="0.25" fill="none"/>
+      <path d="M0,3 Q1.5,2 3,3 Q4.5,4 6,3 Q7.5,2 9,3 Q10.5,4 12,3"
+            stroke="black" stroke-width="0.25" fill="none"/>
+    </pattern>
+  </defs>
+  <rect width="10" height="10" fill="url(#water)"/>
+</svg>

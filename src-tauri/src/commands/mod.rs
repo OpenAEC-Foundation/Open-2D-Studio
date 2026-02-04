@@ -243,6 +243,249 @@ pub fn open_file_with_default_app(path: String) -> SaveResult {
     }
 }
 
+/// Get list of available printers
+#[tauri::command]
+pub fn get_printers() -> Vec<String> {
+    #[cfg(target_os = "windows")]
+    {
+        // Use PowerShell to get printer list
+        let output = Command::new("powershell")
+            .args(["-Command", "Get-Printer | Select-Object -ExpandProperty Name"])
+            .output();
+
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                stdout
+                    .lines()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            }
+            Err(_) => vec![]
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Use lpstat to get printer list
+        let output = Command::new("lpstat")
+            .args(["-p"])
+            .output();
+
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                stdout
+                    .lines()
+                    .filter_map(|line| {
+                        if line.starts_with("printer ") {
+                            Some(line.split_whitespace().nth(1)?.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            }
+            Err(_) => vec![]
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Use lpstat to get printer list
+        let output = Command::new("lpstat")
+            .args(["-p"])
+            .output();
+
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                stdout
+                    .lines()
+                    .filter_map(|line| {
+                        if line.starts_with("printer ") {
+                            Some(line.split_whitespace().nth(1)?.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            }
+            Err(_) => vec![]
+        }
+    }
+}
+
+/// Print a PDF file to a specific printer
+#[tauri::command]
+pub fn print_file(path: String, printer: Option<String>) -> SaveResult {
+    #[cfg(target_os = "windows")]
+    {
+        // Use PowerShell to print PDF to specific printer
+        let ps_command = if let Some(ref printer_name) = printer {
+            format!(
+                "Start-Process -FilePath '{}' -Verb PrintTo -ArgumentList '\"{}\"'",
+                path.replace("'", "''"),
+                printer_name.replace("'", "''")
+            )
+        } else {
+            // Print to default printer
+            format!(
+                "Start-Process -FilePath '{}' -Verb Print",
+                path.replace("'", "''")
+            )
+        };
+
+        match Command::new("powershell")
+            .args(["-Command", &ps_command])
+            .output()
+        {
+            Ok(output) => {
+                if output.status.success() {
+                    SaveResult {
+                        success: true,
+                        message: format!("Print job sent to {}", printer.unwrap_or_else(|| "default printer".to_string())),
+                    }
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    SaveResult {
+                        success: false,
+                        message: format!("Print failed: {}", stderr),
+                    }
+                }
+            }
+            Err(e) => SaveResult {
+                success: false,
+                message: format!("Failed to print: {}", e),
+            },
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Use lpr command
+        let mut cmd = Command::new("lpr");
+        if let Some(ref printer_name) = printer {
+            cmd.args(["-P", printer_name]);
+        }
+        cmd.arg(&path);
+
+        match cmd.output() {
+            Ok(output) => {
+                if output.status.success() {
+                    SaveResult {
+                        success: true,
+                        message: format!("Print job sent to {}", printer.unwrap_or_else(|| "default printer".to_string())),
+                    }
+                } else {
+                    SaveResult {
+                        success: false,
+                        message: "Print failed".to_string(),
+                    }
+                }
+            }
+            Err(e) => SaveResult {
+                success: false,
+                message: format!("Failed to print: {}", e),
+            },
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Use lpr command
+        let mut cmd = Command::new("lpr");
+        if let Some(ref printer_name) = printer {
+            cmd.args(["-P", printer_name]);
+        }
+        cmd.arg(&path);
+
+        match cmd.output() {
+            Ok(output) => {
+                if output.status.success() {
+                    SaveResult {
+                        success: true,
+                        message: format!("Print job sent to {}", printer.unwrap_or_else(|| "default printer".to_string())),
+                    }
+                } else {
+                    SaveResult {
+                        success: false,
+                        message: "Print failed".to_string(),
+                    }
+                }
+            }
+            Err(e) => SaveResult {
+                success: false,
+                message: format!("Failed to print: {}", e),
+            },
+        }
+    }
+}
+
+/// Open printer properties/preferences dialog
+#[tauri::command]
+pub fn open_printer_properties(printer: String) -> SaveResult {
+    #[cfg(target_os = "windows")]
+    {
+        // Use rundll32 to open printer properties dialog
+        // Users can click "Preferences" button inside to change paper size, orientation, etc.
+        match Command::new("rundll32")
+            .args(["printui.dll,PrintUIEntry", "/e", "/n", &printer])
+            .spawn()
+        {
+            Ok(_) => SaveResult {
+                success: true,
+                message: format!("Opened properties for {}", printer),
+            },
+            Err(e) => SaveResult {
+                success: false,
+                message: format!("Failed to open printer properties: {}", e),
+            },
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // Open System Preferences > Printers & Scanners
+        match Command::new("open")
+            .args(["-a", "System Preferences", "/System/Library/PreferencePanes/PrintAndScan.prefPane"])
+            .spawn()
+        {
+            Ok(_) => SaveResult {
+                success: true,
+                message: "Opened Printers & Scanners preferences".to_string(),
+            },
+            Err(e) => SaveResult {
+                success: false,
+                message: format!("Failed to open printer settings: {}", e),
+            },
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Try to open system-config-printer or GNOME settings
+        let result = Command::new("system-config-printer").spawn();
+        match result {
+            Ok(_) => SaveResult {
+                success: true,
+                message: "Opened printer settings".to_string(),
+            },
+            Err(_) => {
+                // Fallback to GNOME settings
+                match Command::new("gnome-control-center")
+                    .arg("printers")
+                    .spawn()
+                {
+                    Ok(_) => SaveResult {
+                        success: true,
+                        message: "Opened printer settings".to_string(),
+                    },
+                    Err(e) => SaveResult {
+                        success: false,
+                        message: format!("Failed to open printer settings: {}", e),
+                    },
+                }
+            }
+        }
+    }
+}
+
 /// Execute a shell command (git, claude, or other allowed commands)
 /// This is async to prevent blocking the UI while waiting for the command to complete
 #[tauri::command]

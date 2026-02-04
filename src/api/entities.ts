@@ -12,8 +12,8 @@ import {
   createArcShape, createEllipseShape, createPolylineShape, createSplineShape, createPointShape,
   cloneShape, translateShape, rotateShape, scaleShape, mirrorShape,
   doesShapeIntersectBounds,
-} from '../services/shapeService';
-import { findShapeAtPoint } from '../services/selectionService';
+} from '../services/drawing/shapeService';
+import { findShapeAtPoint } from '../services/drawing/selectionService';
 import { generateId } from '../state/slices/types';
 
 export class EntitiesApi {

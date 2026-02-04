@@ -16,6 +16,7 @@ import type {
   Sheet,
   SheetViewport,
   TitleBlock,
+  TitleBlockField,
   EditorMode,
   PaperSize,
   PaperOrientation,
@@ -39,6 +40,7 @@ export type {
   Sheet,
   SheetViewport,
   TitleBlock,
+  TitleBlockField,
   EditorMode,
   PaperSize,
   PaperOrientation,
@@ -60,7 +62,7 @@ export type DrawingPreview =
   | { type: 'circle'; center: Point; radius: number }
   | { type: 'ellipse'; center: Point; radiusX: number; radiusY: number; rotation: number }
   | { type: 'arc'; center: Point; radius: number; startAngle: number; endAngle: number }
-  | { type: 'polyline'; points: Point[]; currentPoint: Point; bulges?: number[]; currentBulge?: number }
+  | { type: 'polyline'; points: Point[]; currentPoint: Point; bulges?: number[]; currentBulge?: number; arcThroughPoint?: Point }
   | { type: 'spline'; points: Point[]; currentPoint: Point }
   | { type: 'text'; position: Point }
   | { type: 'dimension'; dimensionType: DimensionType; points: Point[]; dimensionLineOffset: number; linearDirection?: 'horizontal' | 'vertical'; value: string }

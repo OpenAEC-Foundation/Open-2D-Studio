@@ -207,6 +207,132 @@ export function bulgeToArc(p1: Point, p2: Point, bulge: number): {
 }
 
 /**
+ * Calculate the tangent angle at the end of a polyline segment.
+ * For a straight line, it's the direction from start to end.
+ * For an arc (bulge != 0), it's perpendicular to the radius at the endpoint.
+ */
+export function getSegmentEndTangent(p1: Point, p2: Point, bulge: number): number {
+  if (bulge === 0 || Math.abs(bulge) < 0.0001) {
+    // Straight line: tangent is direction from p1 to p2
+    return Math.atan2(p2.y - p1.y, p2.x - p1.x);
+  }
+
+  // Arc: tangent at p2 is perpendicular to radius at p2
+  const { center, clockwise } = bulgeToArc(p1, p2, bulge);
+  const radiusAngle = Math.atan2(p2.y - center.y, p2.x - center.x);
+
+  // Tangent is perpendicular to radius
+  // For CCW (positive bulge), tangent points 90° counter-clockwise from radius
+  // For CW (negative bulge), tangent points 90° clockwise from radius
+  return clockwise ? radiusAngle - Math.PI / 2 : radiusAngle + Math.PI / 2;
+}
+
+/**
+ * Calculate bulge value for an arc that starts tangent to a given direction
+ * and ends at the specified endpoint.
+ *
+ * @param startPoint - Start point of the arc
+ * @param endPoint - End point of the arc
+ * @param tangentAngle - Tangent direction at start point (in radians)
+ * @returns Bulge value for the arc
+ */
+export function calculateBulgeFromTangent(
+  startPoint: Point,
+  endPoint: Point,
+  tangentAngle: number
+): number {
+  const dx = endPoint.x - startPoint.x;
+  const dy = endPoint.y - startPoint.y;
+
+  // If points are the same or very close, no arc
+  if (Math.abs(dx) < 0.0001 && Math.abs(dy) < 0.0001) return 0;
+
+  // Angle from start to end (chord direction)
+  const chordAngle = Math.atan2(dy, dx);
+
+  // Angle between tangent and chord
+  // This is half the included angle of the arc
+  let alpha = chordAngle - tangentAngle;
+
+  // Normalize to [-PI, PI]
+  while (alpha > Math.PI) alpha -= 2 * Math.PI;
+  while (alpha < -Math.PI) alpha += 2 * Math.PI;
+
+  // Handle edge cases where arc would be too extreme
+  // Clamp to about ±170 degrees included angle (alpha = ±85 degrees)
+  const maxAlpha = Math.PI * 0.47; // ~85 degrees
+  alpha = Math.max(-maxAlpha, Math.min(maxAlpha, alpha));
+
+  // Bulge = tan(alpha/2) because included angle = 2*alpha
+  return Math.tan(alpha / 2);
+}
+
+/**
+ * Calculate bulge value from 3 points (start, point on arc, end).
+ * The arc passes through all 3 points.
+ *
+ * @param start - Start point of the arc
+ * @param onArc - A point that lies on the arc
+ * @param end - End point of the arc
+ * @returns Bulge value for the arc, or 0 if points are collinear
+ */
+export function calculateBulgeFrom3Points(
+  start: Point,
+  onArc: Point,
+  end: Point
+): number {
+  // Find the circle passing through all 3 points
+  const circle = calculateCircleFrom3Points(start, onArc, end);
+  if (!circle) return 0; // Points are collinear
+
+  const { center } = circle;
+
+  // Calculate angles from center to start and end
+  const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
+  const onArcAngle = Math.atan2(onArc.y - center.y, onArc.x - center.x);
+  const endAngle = Math.atan2(end.y - center.y, end.x - center.x);
+
+  // Normalize angles to [0, 2*PI)
+  const normalize = (a: number): number => {
+    let n = a % (Math.PI * 2);
+    if (n < 0) n += Math.PI * 2;
+    return n;
+  };
+
+  const nStart = normalize(startAngle);
+  const nOnArc = normalize(onArcAngle);
+  const nEnd = normalize(endAngle);
+
+  // Determine if we go counter-clockwise (CCW) or clockwise (CW) from start to end
+  // by checking which direction passes through onArc
+  const ccwFromStart = (angle: number): number => {
+    const diff = normalize(angle - nStart);
+    return diff;
+  };
+
+  const onArcCcw = ccwFromStart(nOnArc);
+  const endCcw = ccwFromStart(nEnd);
+
+  let includedAngle: number;
+  let clockwise: boolean;
+
+  if (onArcCcw < endCcw) {
+    // Counter-clockwise from start to end passes through onArc
+    includedAngle = endCcw;
+    clockwise = false;
+  } else {
+    // Clockwise from start to end passes through onArc
+    includedAngle = 2 * Math.PI - endCcw;
+    clockwise = true;
+  }
+
+  // Bulge = tan(includedAngle / 4)
+  // Positive for CCW, negative for CW
+  const bulge = Math.tan(includedAngle / 4);
+  return clockwise ? -bulge : bulge;
+}
+
+/**
  * Get the midpoint of an arc defined by bulge between two points.
  */
 export function bulgeArcMidpoint(p1: Point, p2: Point, bulge: number): Point {
@@ -1144,5 +1270,26 @@ export function getShapeBoundaryPoints(shape: Shape, segmentCount: number = 64):
     }
     default:
       return [];
+  }
+}
+
+/**
+ * Get boundary points and bulge data from a closed shape for hatch creation
+ * Returns both points and optional bulge array for curved polylines
+ */
+export function getShapeBoundaryWithBulge(shape: Shape, segmentCount: number = 64): { points: Point[]; bulge?: number[] } {
+  switch (shape.type) {
+    case 'polyline': {
+      if (shape.closed) {
+        return {
+          points: [...shape.points],
+          bulge: shape.bulge ? [...shape.bulge] : undefined,
+        };
+      }
+      return { points: [] };
+    }
+    default:
+      // For other shapes, just return points (no bulge needed - they're approximated with straight segments)
+      return { points: getShapeBoundaryPoints(shape, segmentCount) };
   }
 }

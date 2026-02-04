@@ -15,7 +15,7 @@ import { TitleBlockRenderer } from '../sheet/TitleBlockRenderer';
 import { AnnotationRenderer } from '../sheet/AnnotationRenderer';
 import { HandleRenderer, ViewportHandleType } from '../ui/HandleRenderer';
 import { PAPER_SIZES, MM_TO_PIXELS, COLORS } from '../types';
-import { loadCustomSVGTemplates } from '../../../services/svgTitleBlockService';
+import { loadCustomSVGTemplates } from '../../../services/export/svgTitleBlockService';
 
 /** Point type for placement preview */
 interface Point {
@@ -80,10 +80,23 @@ export class SheetRenderer extends BaseRenderer {
   updateSize(width: number, height: number): void {
     this.width = width;
     this.height = height;
+    const oldCallback = (this.titleBlockRenderer as any).onImageLoadCallback;
     this.viewportRenderer = new ViewportRenderer(this.ctx, width, height, this.dpr);
     this.titleBlockRenderer = new TitleBlockRenderer(this.ctx, width, height, this.dpr);
     this.annotationRenderer = new AnnotationRenderer(this.ctx, width, height, this.dpr);
     this.handleRenderer = new HandleRenderer(this.ctx, width, height, this.dpr);
+    // Preserve callback after recreation
+    if (oldCallback) {
+      this.titleBlockRenderer.setOnImageLoadCallback(oldCallback);
+    }
+  }
+
+  /**
+   * Set callback to be invoked when title block images finish loading
+   * This allows the canvas to trigger a re-render after async loads
+   */
+  setOnImageLoadCallback(callback: (() => void) | null): void {
+    this.titleBlockRenderer.setOnImageLoadCallback(callback);
   }
 
   /**
@@ -152,8 +165,8 @@ export class SheetRenderer extends BaseRenderer {
     }
 
     // Draw viewports
-    for (const vp of sheet.viewports) {
-      if (!vp.visible) continue;
+    const visibleViewports = sheet.viewports.filter(v => v.visible);
+    for (const vp of visibleViewports) {
       const isSelected = selectedViewportId === vp.id;
       const isCropRegionEditing = cropRegionEditing && cropRegionViewportId === vp.id;
 
@@ -169,6 +182,7 @@ export class SheetRenderer extends BaseRenderer {
           isCropRegionEditing,
           sheetZoom: viewport.zoom,
           customPatterns,
+          totalViewportsOnSheet: visibleViewports.length,
         }
       );
     }

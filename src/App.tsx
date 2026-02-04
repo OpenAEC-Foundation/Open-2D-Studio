@@ -1,24 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getSetting, setSetting } from './utils/settings';
-import { MenuBar } from './components/MenuBar/MenuBar';
-import { Ribbon } from './components/Ribbon/Ribbon';
-import { Canvas } from './components/Canvas/Canvas';
-import { NavigationPanel } from './components/NavigationPanel';
-import { SheetPropertiesPanel } from './components/Panels/SheetPropertiesPanel';
-import { RightPanelLayout } from './components/Panels/RightPanelLayout';
-import { StatusBar } from './components/StatusBar/StatusBar';
-import { FileTabBar } from './components/FileTabBar/FileTabBar';
-import { PrintDialog } from './components/PrintDialog/PrintDialog';
+// Layout components
+import { MenuBar } from './components/layout/MenuBar/MenuBar';
+import { Ribbon } from './components/layout/Ribbon/Ribbon';
+import { StatusBar } from './components/layout/StatusBar/StatusBar';
+import { FileTabBar } from './components/layout/FileTabBar/FileTabBar';
 
-import { SnapSettingsDialog } from './components/SnapSettingsDialog/SnapSettingsDialog';
-import { Backstage, type BackstageView } from './components/Backstage/Backstage';
-import { TitleBlockEditor } from './components/TitleBlockEditor';
-import { TitleBlockImportDialog } from './components/TitleBlockImportDialog';
-import { NewSheetDialog } from './components/NewSheetDialog';
-import { SectionDialog } from './components/SectionDialog';
-import { PatternManagerDialog } from './components/PatternManager';
-import { OptionsBar } from './components/OptionsBar/OptionsBar';
-import { TerminalPanel } from './components/TerminalPanel';
+// Canvas components
+import { Canvas } from './components/canvas/Canvas';
+import { OptionsBar } from './components/canvas/OptionsBar/OptionsBar';
+
+// Panel components
+import { NavigationPanel } from './components/panels/NavigationPanel';
+import { SheetPropertiesPanel } from './components/panels/SheetPropertiesPanel';
+import { RightPanelLayout } from './components/panels/RightPanelLayout';
+
+// Dialog components
+import { PrintDialog } from './components/dialogs/PrintDialog/PrintDialog';
+import { SnapSettingsDialog } from './components/dialogs/SnapSettingsDialog/SnapSettingsDialog';
+import { Backstage, type BackstageView } from './components/dialogs/Backstage/Backstage';
+import { TitleBlockEditor } from './components/dialogs/TitleBlockEditor';
+import { TitleBlockImportDialog } from './components/dialogs/TitleBlockImportDialog';
+import { NewSheetDialog } from './components/dialogs/NewSheetDialog';
+import { SectionDialog } from './components/dialogs/SectionDialog';
+
+// Editor components
+import { PatternManagerDialog } from './components/editors/PatternManager';
+import { TerminalPanel } from './components/editors/TerminalPanel';
 import { useKeyboardShortcuts } from './hooks/keyboard/useKeyboardShortcuts';
 import { useGlobalKeyboard } from './hooks/keyboard/useGlobalKeyboard';
 import { useAppStore } from './state/appStore';

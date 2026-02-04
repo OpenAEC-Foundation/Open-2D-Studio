@@ -683,9 +683,10 @@ export function findNearestSnapPoint(
     center: 3,
     intersection: 4,
     perpendicular: 5,
-    tangent: 6,
-    nearest: 7,
-    grid: 8,
+    parallel: 6,
+    tangent: 7,
+    nearest: 8,
+    grid: 9,
   };
 
   snapPoints.forEach((snap) => {
@@ -717,6 +718,8 @@ export function getSnapSymbol(type: SnapType): string {
       return '×';
     case 'perpendicular':
       return '⊥';
+    case 'parallel':
+      return '∥';
     case 'tangent':
       return '◎';
     case 'nearest':
@@ -741,6 +744,8 @@ export function getSnapTypeName(type: SnapType): string {
       return 'Intersection';
     case 'perpendicular':
       return 'Perpendicular';
+    case 'parallel':
+      return 'Parallel';
     case 'tangent':
       return 'Tangent';
     case 'nearest':

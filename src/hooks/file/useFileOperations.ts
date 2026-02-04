@@ -17,7 +17,7 @@ import {
   showImportDxfDialog,
   parseDXF,
   type ProjectFile,
-} from '../../services/fileService';
+} from '../../services/file/fileService';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 
 export function useFileOperations() {

@@ -52,6 +52,7 @@ interface FullStore extends BoundaryState {
   activeDrawingId: string;
   selectedShapeIds: string[];
   isModified: boolean;
+  sheets: { id: string; viewports: { id: string; drawingId: string; scale: number; width: number; height: number; centerX: number; centerY: number }[] }[];
 }
 
 export const createBoundarySlice = (
@@ -156,6 +157,25 @@ export const createBoundarySlice = (
         if (draft) {
           draft.modifiedAt = new Date().toISOString();
           state.isModified = true;
+
+          // Update all viewports showing this drawing (Revit-style: viewport resizes with boundary)
+          for (const sheet of state.sheets) {
+            for (const viewport of sheet.viewports) {
+              if (viewport.drawingId === state.activeDrawingId) {
+                // Calculate new viewport size from updated boundary × viewport scale
+                const newWidth = draft.boundary.width * viewport.scale;
+                const newHeight = draft.boundary.height * viewport.scale;
+
+                // Update viewport dimensions
+                viewport.width = newWidth;
+                viewport.height = newHeight;
+
+                // Update center to match new boundary center
+                viewport.centerX = draft.boundary.x + draft.boundary.width / 2;
+                viewport.centerY = draft.boundary.y + draft.boundary.height / 2;
+              }
+            }
+          }
         }
       }
       state.boundaryEditState.activeHandle = null;

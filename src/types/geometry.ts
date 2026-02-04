@@ -42,6 +42,7 @@ export type HatchPatternType = 'solid' | 'diagonal' | 'crosshatch' | 'horizontal
 export interface HatchShape extends BaseShape {
   type: 'hatch';
   points: Point[];          // Boundary polygon vertices (always closed)
+  bulge?: number[];         // Arc bulge values for each segment (like polyline)
   patternType: HatchPatternType;
   patternAngle: number;     // Rotation in degrees
   patternScale: number;     // Spacing multiplier (1 = default)
@@ -123,6 +124,7 @@ export interface TextShape extends BaseShape {
   lineHeight: number;        // Multiplier (default 1.2)
   fixedWidth?: number;       // If set, text wraps at this width
   leaderPoints?: Point[];    // Leader line waypoints (from text to geometry)
+  isModelText?: boolean;     // If true, text size is in model units (doesn't scale with drawing scale)
 }
 
 export interface PointShape extends BaseShape {
@@ -174,6 +176,7 @@ export type SnapType =
   | 'center'
   | 'intersection'
   | 'perpendicular'
+  | 'parallel'
   | 'tangent'
   | 'nearest';
 
@@ -332,6 +335,9 @@ export interface ViewportLayerOverride {
 // Sheet Viewport
 // ============================================================================
 
+// Viewport title visibility mode
+export type ViewportTitleVisibility = 'always' | 'never' | 'whenMultiple';
+
 // Viewport on sheet showing a drawing
 export interface SheetViewport {
   id: string;
@@ -353,6 +359,14 @@ export interface SheetViewport {
   referenceNumber?: string;
   /** Custom viewport title (overrides drawing name) */
   customTitle?: string;
+  /** Title visibility: 'always', 'never', or 'whenMultiple' (default: 'always') */
+  titleVisibility?: ViewportTitleVisibility;
+  /** Whether to show extension line below viewport (default: true) */
+  showExtensionLine?: boolean;
+  /** Extension line length in mm, or undefined for auto (viewport width) */
+  extensionLineLength?: number;
+  /** Whether to show scale in title (default: true) */
+  showScale?: boolean;
 }
 
 // Title block with editable fields

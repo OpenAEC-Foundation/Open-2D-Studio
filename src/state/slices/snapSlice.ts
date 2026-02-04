@@ -72,7 +72,7 @@ export const initialSnapState: SnapState = {
   gridSize: 10,
   gridVisible: false,
   snapEnabled: true,
-  activeSnaps: ['grid', 'endpoint', 'midpoint', 'center', 'intersection'],
+  activeSnaps: ['endpoint', 'midpoint', 'center', 'intersection'],
   snapTolerance: 10,
   currentSnapPoint: null,
   snapSettingsOpen: false,

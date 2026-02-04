@@ -31,6 +31,7 @@ export interface ToolState {
 
   // Phase 3: Polyline segment mode
   polylineArcMode: boolean;         // When true, next polyline segment is an arc
+  polylineArcThroughPoint: Point | null;  // For 3-point arc: the point the arc passes through
 
   // Phase 2: Dynamic input locked values
   lockedDistance: number | null;
@@ -77,6 +78,10 @@ export interface ToolState {
   hatchFillColor: string;
   hatchBackgroundColor: string | null;
   hatchCustomPatternId: string | null;  // ID of custom pattern (when patternType is 'custom')
+
+  // Filled Region mode (sketch-based boundary drawing)
+  filledRegionMode: boolean;
+  filledRegionDrawTool: 'line' | 'rectangle' | 'polygon' | 'circle' | 'arc' | 'spline' | 'pickLines';
 }
 
 // ============================================================================
@@ -112,6 +117,7 @@ export interface ToolActions {
   setPickLinesMode: (enabled: boolean) => void;
   setPickLinesOffset: (offset: number) => void;
   setPolylineArcMode: (enabled: boolean) => void;
+  setPolylineArcThroughPoint: (point: Point | null) => void;
 
   // Text editing actions
   startTextEditing: (shapeId: string) => void;
@@ -142,6 +148,12 @@ export interface ToolActions {
   setHatchFillColor: (color: string) => void;
   setHatchBackgroundColor: (color: string | null) => void;
   setHatchCustomPatternId: (id: string | null) => void;
+
+  // Filled Region mode actions
+  startFilledRegionMode: () => void;
+  cancelFilledRegionMode: () => void;
+  finishFilledRegion: () => void;
+  setFilledRegionDrawTool: (tool: 'line' | 'rectangle' | 'polygon' | 'circle' | 'arc' | 'spline' | 'pickLines') => void;
 }
 
 export type ToolSlice = ToolState & ToolActions;
@@ -169,6 +181,7 @@ export const initialToolState: ToolState = {
   lockedRadius: null,
   cornerRadius: 0,
   polylineArcMode: false,
+  polylineArcThroughPoint: null,
   lockedDistance: null,
   lockedAngle: null,
   dimensionPrecision: 2,
@@ -215,6 +228,10 @@ export const initialToolState: ToolState = {
   hatchFillColor: '#ffffff',
   hatchBackgroundColor: null,
   hatchCustomPatternId: null,
+
+  // Filled Region mode
+  filledRegionMode: false,
+  filledRegionDrawTool: 'line' as const,
 };
 
 // ============================================================================
@@ -233,6 +250,7 @@ export const createToolSlice = (
       state.drawingPoints = [];
       state.drawingBulges = [];
       state.polylineArcMode = false;
+      state.polylineArcThroughPoint = null;
       state.modifyRefShapeId = null;
       // Reset copy flag for mirror (default on)
       if (tool === 'mirror') {
@@ -334,6 +352,7 @@ export const createToolSlice = (
       state.isDrawing = false;
       state.drawingPreview = null;
       state.polylineArcMode = false;
+      state.polylineArcThroughPoint = null;
     }),
 
   closeDrawing: () =>
@@ -343,6 +362,7 @@ export const createToolSlice = (
       state.isDrawing = false;
       state.drawingPreview = null;
       state.polylineArcMode = false;
+      state.polylineArcThroughPoint = null;
     }),
 
   addDrawingBulge: (bulge) =>
@@ -404,6 +424,14 @@ export const createToolSlice = (
   setPolylineArcMode: (enabled) =>
     set((state) => {
       state.polylineArcMode = enabled;
+      if (!enabled) {
+        state.polylineArcThroughPoint = null;
+      }
+    }),
+
+  setPolylineArcThroughPoint: (point) =>
+    set((state) => {
+      state.polylineArcThroughPoint = point;
     }),
 
   // Text editing actions
@@ -467,4 +495,67 @@ export const createToolSlice = (
     set((state) => { state.hatchBackgroundColor = color; }),
   setHatchCustomPatternId: (id) =>
     set((state) => { state.hatchCustomPatternId = id; }),
+
+  // Filled Region mode actions
+  startFilledRegionMode: () =>
+    set((state) => {
+      state.filledRegionMode = true;
+      state.filledRegionDrawTool = 'line';
+      // Set actual activeTool to the drawing tool so canvas handles it
+      state.activeTool = 'polyline'; // Default to polyline for drawing boundary
+      state.drawingPoints = [];
+      state.drawingBulges = [];
+      state.drawingPreview = null;
+    }),
+
+  cancelFilledRegionMode: () =>
+    set((state) => {
+      state.filledRegionMode = false;
+      state.activeTool = 'select';
+      state.drawingPoints = [];
+      state.drawingBulges = [];
+      state.drawingPreview = null;
+    }),
+
+  finishFilledRegion: () =>
+    set((state) => {
+      // The actual hatch creation is handled by the component
+      // This just exits the mode
+      state.filledRegionMode = false;
+      state.activeTool = 'select';
+      state.drawingPoints = [];
+      state.drawingBulges = [];
+      state.drawingPreview = null;
+    }),
+
+  setFilledRegionDrawTool: (tool) =>
+    set((state) => {
+      const prevTool = state.filledRegionDrawTool;
+      state.filledRegionDrawTool = tool;
+
+      // Line and Arc are both polyline modes - just toggle arc mode without resetting
+      if ((prevTool === 'line' || prevTool === 'arc') && (tool === 'line' || tool === 'arc')) {
+        state.polylineArcMode = tool === 'arc';
+        state.polylineArcThroughPoint = null;
+        // Don't reset drawing points - continue the chain
+        return;
+      }
+
+      // Switching to a different tool type - reset drawing
+      const toolMap: Record<string, string> = {
+        'line': 'polyline',      // Polyline in line mode
+        'arc': 'polyline',       // Polyline in arc mode
+        'rectangle': 'rectangle',
+        'polygon': 'polyline',   // Polygon is a closed polyline
+        'circle': 'circle',
+        'spline': 'spline',
+        'pickLines': 'select',   // Pick lines uses selection
+      };
+      state.activeTool = (toolMap[tool] || 'polyline') as any;
+      state.polylineArcMode = tool === 'arc';
+      state.polylineArcThroughPoint = null;
+      state.drawingPoints = [];
+      state.drawingBulges = [];
+      state.drawingPreview = null;
+    }),
 });

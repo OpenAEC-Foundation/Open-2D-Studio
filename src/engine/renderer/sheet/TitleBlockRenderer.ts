@@ -9,12 +9,21 @@ import type { TitleBlock } from '../types';
 import type { EnhancedTitleBlock, TitleBlockTemplate, TitleBlockLayout } from '../../../types/sheet';
 import { BaseRenderer } from '../core/BaseRenderer';
 import { MM_TO_PIXELS, COLORS } from '../types';
-import { getTemplateById } from '../../../services/titleBlockService';
-import { loadCustomSVGTemplates, renderSVGTitleBlock } from '../../../services/svgTitleBlockService';
+import { getTemplateById } from '../../../services/template/titleBlockService';
+import { loadCustomSVGTemplates, renderSVGTitleBlock } from '../../../services/export/svgTitleBlockService';
 
 export class TitleBlockRenderer extends BaseRenderer {
   private logoImageCache: Map<string, HTMLImageElement> = new Map();
   private svgImageCache: Map<string, HTMLImageElement> = new Map();
+  private onImageLoadCallback: (() => void) | null = null;
+
+  /**
+   * Set callback to be invoked when an image finishes loading
+   * This allows the canvas to re-render after async image loads
+   */
+  setOnImageLoadCallback(callback: (() => void) | null): void {
+    this.onImageLoadCallback = callback;
+  }
 
   /**
    * Draw title block at bottom-right of paper
@@ -136,15 +145,25 @@ export class TitleBlockRenderer extends BaseRenderer {
     let img = this.svgImageCache.get(cacheKey);
 
     if (!img) {
+      // Clear old cache entries for this template (field values changed)
+      for (const key of this.svgImageCache.keys()) {
+        if (key.startsWith(`${svgTemplateId}_`)) {
+          this.svgImageCache.delete(key);
+        }
+      }
+
       // Create new image from SVG
       img = new Image();
       const blob = new Blob([renderedSvg], { type: 'image/svg+xml' });
       const url = URL.createObjectURL(blob);
 
+      // Store callback reference to avoid closure issues
+      const callback = this.onImageLoadCallback;
+
       img.onload = () => {
-        // Draw the image once loaded
-        ctx.drawImage(img!, tbX, tbY, tbWidth, tbHeight);
         URL.revokeObjectURL(url);
+        // Trigger re-render callback so canvas redraws with the loaded image
+        callback?.();
       };
 
       img.onerror = () => {
@@ -154,8 +173,10 @@ export class TitleBlockRenderer extends BaseRenderer {
 
       img.src = url;
       this.svgImageCache.set(cacheKey, img);
-    } else if (img.complete) {
-      // Draw cached image
+    }
+
+    // Always try to draw if image is loaded
+    if (img.complete && img.naturalWidth > 0) {
       ctx.drawImage(img, tbX, tbY, tbWidth, tbHeight);
     }
   }

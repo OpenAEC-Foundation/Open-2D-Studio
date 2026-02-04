@@ -8,7 +8,7 @@ import {
   showOpenDialog, showSaveDialog, showExportDialog,
   readProjectFile, writeProjectFile,
   exportToSVG, exportToDXF, exportToIFC,
-} from '../services/fileService';
+} from '../services/file/fileService';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 
 export class ApplicationApi {

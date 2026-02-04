@@ -41,7 +41,7 @@ import {
   getTemplatesForPaperSize,
   calculateAutoFields,
   type AutoFieldContext,
-} from '../../services/titleBlockService';
+} from '../../services/template/titleBlockService';
 
 import {
   BUILT_IN_SHEET_TEMPLATES,
@@ -49,10 +49,50 @@ import {
   getNextSheetNumber,
   DEFAULT_NUMBERING_SCHEME,
   type SheetNumberingScheme,
-} from '../../services/sheetTemplateService';
+} from '../../services/template/sheetTemplateService';
+
+import {
+  loadCustomSVGTemplates,
+} from '../../services/export/svgTitleBlockService';
+
+import type { TitleBlock, TitleBlockField } from './types';
 
 // mm to pixels conversion (same as renderer)
 const MM_TO_PIXELS = 3.78;
+
+/**
+ * Create title block with fields from SVG template
+ */
+function createTitleBlockFromSVGTemplate(svgTemplateId: string): TitleBlock | null {
+  const templates = loadCustomSVGTemplates();
+  const svgTemplate = templates.find(t => t.id === svgTemplateId);
+
+  if (!svgTemplate) return null;
+
+  // Create fields from SVG template's field mappings
+  const fields: TitleBlockField[] = svgTemplate.fieldMappings.map((mapping, index) => ({
+    id: mapping.fieldId,
+    label: mapping.label,
+    value: mapping.defaultValue || '',
+    x: 5,
+    y: 5 + index * 15,
+    width: 80,
+    height: 12,
+    fontSize: 10,
+    fontFamily: 'Arial',
+    align: 'left' as const,
+  }));
+
+  return {
+    visible: true,
+    x: 10,
+    y: 10,
+    width: svgTemplate.width,
+    height: svgTemplate.height,
+    fields,
+    svgTemplateId, // Store the SVG template reference
+  } as TitleBlock & { svgTemplateId: string };
+}
 
 // Assumed canvas dimensions for initial viewport calculation
 // These are reasonable defaults for most screen sizes
@@ -149,7 +189,7 @@ export interface ModelActions {
   switchToDrawing: (id: string) => void;
 
   // Sheet actions
-  addSheet: (name?: string, paperSize?: PaperSize, orientation?: PaperOrientation, svgTitleBlockId?: string) => void;
+  addSheet: (name?: string, paperSize?: PaperSize, orientation?: PaperOrientation, svgTitleBlockId?: string) => string;
   deleteSheet: (id: string) => void;
   renameSheet: (id: string, name: string) => void;
   updateSheet: (id: string, updates: Partial<Sheet>) => void;
@@ -180,7 +220,7 @@ export interface ModelActions {
   updateAutoFields: (sheetId: string, projectName?: string) => void;
 
   // Sheet Template actions
-  addSheetFromTemplate: (templateId: string, name: string, draftAssignments?: Record<string, string>) => void;
+  addSheetFromTemplate: (templateId: string, name: string, draftAssignments?: Record<string, string>) => string | null;
   saveSheetAsTemplate: (sheetId: string, name: string, description: string) => void;
   addCustomSheetTemplate: (template: SheetTemplate) => void;
   deleteCustomSheetTemplate: (templateId: string) => void;
@@ -475,6 +515,25 @@ export const createModelSlice = (
         drawing.boundary = { ...drawing.boundary, ...boundary };
         drawing.modifiedAt = new Date().toISOString();
         state.isModified = true;
+
+        // Update all viewports showing this drawing (viewport resizes with boundary)
+        for (const sheet of state.sheets) {
+          for (const viewport of sheet.viewports) {
+            if (viewport.drawingId === id) {
+              // Calculate new viewport size from updated boundary × viewport scale
+              const newWidth = drawing.boundary.width * viewport.scale;
+              const newHeight = drawing.boundary.height * viewport.scale;
+
+              // Update viewport dimensions
+              viewport.width = newWidth;
+              viewport.height = newHeight;
+
+              // Update center to match new boundary center
+              viewport.centerX = drawing.boundary.x + drawing.boundary.width / 2;
+              viewport.centerY = drawing.boundary.y + drawing.boundary.height / 2;
+            }
+          }
+        }
       }
     }),
 
@@ -595,16 +654,24 @@ export const createModelSlice = (
   // Sheet Actions
   // ============================================================================
 
-  addSheet: (name, paperSize = 'A4', orientation = 'landscape', svgTitleBlockId) =>
-    set((state) => {
-      const id = generateId();
-      const titleBlock = createDefaultTitleBlock();
+  addSheet: (name, paperSize = 'A4', orientation = 'landscape', svgTitleBlockId) => {
+    const id = generateId();
 
-      // If SVG title block ID is provided, store it for rendering
+    // If SVG title block ID is provided, create title block from SVG template
+    // This must be done outside set() because loadCustomSVGTemplates() reads from localStorage
+    let titleBlock;
+    if (svgTitleBlockId) {
+      titleBlock = createTitleBlockFromSVGTemplate(svgTitleBlockId);
+    }
+    if (!titleBlock) {
+      titleBlock = createDefaultTitleBlock();
+      // Store SVG template ID if provided (fallback case)
       if (svgTitleBlockId) {
         (titleBlock as unknown as { svgTemplateId?: string }).svgTemplateId = svgTitleBlockId;
       }
+    }
 
+    set((state) => {
       const newSheet: Sheet = {
         id,
         name: name || `Sheet ${state.sheets.length + 1}`,
@@ -628,7 +695,9 @@ export const createModelSlice = (
       state.viewport = initialViewport;
 
       state.isModified = true;
-    }),
+    });
+    return id;
+  },
 
   deleteSheet: (id) =>
     set((state) => {
@@ -1065,27 +1134,28 @@ export const createModelSlice = (
   // Sheet Template Actions
   // ============================================================================
 
-  addSheetFromTemplate: (templateId, name, draftAssignments = {}) =>
-    set((state) => {
-      // Find template (check built-in first, then custom)
-      let template = BUILT_IN_SHEET_TEMPLATES.find((t) => t.id === templateId);
-      if (!template) {
-        template = state.customSheetTemplates.find((t) => t.id === templateId);
-      }
-      if (!template) return;
+  addSheetFromTemplate: (templateId, name, draftAssignments = {}) => {
+    // Find template before calling set() so we can return null if not found
+    let template = BUILT_IN_SHEET_TEMPLATES.find((t) => t.id === templateId);
+    if (!template) {
+      template = get().customSheetTemplates.find((t) => t.id === templateId);
+    }
+    if (!template) return null;
 
+    const id = generateId();
+    set((state) => {
       // Generate sheet number
       const sheetNumber = getNextSheetNumber(state.sheets, DEFAULT_NUMBERING_SCHEME);
 
       // Create viewports from template placeholders
-      const viewports = createViewportsFromTemplate(template, draftAssignments);
+      const viewports = createViewportsFromTemplate(template!, draftAssignments);
 
       // Create the sheet
       const newSheet: Sheet = {
-        id: generateId(),
+        id,
         name: name || `Sheet ${state.sheets.length + 1}`,
-        paperSize: template.paperSize as PaperSize,
-        orientation: template.orientation as PaperOrientation,
+        paperSize: template!.paperSize as PaperSize,
+        orientation: template!.orientation as PaperOrientation,
         viewports,
         titleBlock: createDefaultTitleBlock(),
         annotations: [],
@@ -1107,7 +1177,9 @@ export const createModelSlice = (
       state.editorMode = 'sheet';
       state.viewport = { offsetX: 0, offsetY: 0, zoom: 1 };
       state.selectedShapeIds = [];
-    }),
+    });
+    return id;
+  },
 
   saveSheetAsTemplate: (sheetId, name, description) =>
     set((state) => {

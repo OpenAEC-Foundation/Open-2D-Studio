@@ -12,7 +12,7 @@ import { DimensionRenderer } from './DimensionRenderer';
 import type { DimensionShape } from '../../../types/dimension';
 import { drawSplinePath } from '../../geometry/SplineUtils';
 import { bulgeToArc, bulgeArcMidpoint } from '../../geometry/GeometryUtils';
-import { svgToImage } from '../../../services/svgPatternService';
+import { svgToImage } from '../../../services/export/svgPatternService';
 
 export class ShapeRenderer extends BaseRenderer {
   private dimensionRenderer: DimensionRenderer;
@@ -20,10 +20,23 @@ export class ShapeRenderer extends BaseRenderer {
   // Cache for loaded SVG pattern images
   private svgImageCache: Map<string, HTMLImageElement> = new Map();
   private svgLoadingPromises: Map<string, Promise<HTMLImageElement | null>> = new Map();
+  // Drawing scale for annotation text scaling (default 1:50 = 0.02)
+  private drawingScale: number = 0.02;
+  // Reference scale - text looks the same as before at this scale
+  private static readonly REFERENCE_SCALE = 0.02; // 1:50
 
   constructor(ctx: CanvasRenderingContext2D, width: number = 0, height: number = 0, dpr?: number) {
     super(ctx, width, height, dpr);
     this.dimensionRenderer = new DimensionRenderer(ctx, width, height, dpr);
+  }
+
+  /**
+   * Set the drawing scale for annotation text scaling
+   * Annotation text (non-model text) will scale inversely with drawing scale
+   * to maintain consistent paper size
+   */
+  setDrawingScale(scale: number): void {
+    this.drawingScale = scale;
   }
 
   /**
@@ -304,10 +317,29 @@ export class ShapeRenderer extends BaseRenderer {
           }
           // Draw current (in-progress) segment
           const currentBulge = preview.currentBulge ?? 0;
-          if (currentBulge !== 0) {
+          const throughPoint = preview.arcThroughPoint;
+          if (currentBulge !== 0 && throughPoint) {
+            // 3-point arc mode with through point set: draw the arc
             const lastPt = preview.points[preview.points.length - 1];
             const arc = bulgeToArc(lastPt, preview.currentPoint, currentBulge);
             ctx.arc(arc.center.x, arc.center.y, arc.radius, arc.startAngle, arc.endAngle, arc.clockwise);
+          } else if (throughPoint) {
+            // Through point is set but we're showing where the endpoint will be
+            // Draw dashed lines: lastPt -> throughPoint -> currentPoint
+            const lastPt = preview.points[preview.points.length - 1];
+            ctx.stroke(); // Stroke completed segments first
+            ctx.beginPath();
+            ctx.setLineDash([5, 5]);
+            ctx.moveTo(lastPt.x, lastPt.y);
+            ctx.lineTo(throughPoint.x, throughPoint.y);
+            ctx.lineTo(preview.currentPoint.x, preview.currentPoint.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            // Draw small circle at through point
+            ctx.beginPath();
+            ctx.arc(throughPoint.x, throughPoint.y, 4, 0, Math.PI * 2);
+            ctx.fill();
+            return; // Already stroked
           } else {
             ctx.lineTo(preview.currentPoint.x, preview.currentPoint.y);
           }
@@ -741,6 +773,7 @@ export class ShapeRenderer extends BaseRenderer {
       underline,
       color,
       lineHeight = 1.2,
+      isModelText = false,
     } = shape;
 
     ctx.save();
@@ -752,9 +785,17 @@ export class ShapeRenderer extends BaseRenderer {
       ctx.translate(-position.x, -position.y);
     }
 
+    // Calculate effective font size:
+    // - Annotation text (default): scales relative to reference scale (1:50)
+    //   At 1:50, text looks the same as before. At 1:100, text appears 2x larger (model is smaller)
+    // - Model text: uses fontSize directly in model units
+    const effectiveFontSize = isModelText
+      ? fontSize
+      : fontSize * (ShapeRenderer.REFERENCE_SCALE / this.drawingScale);
+
     // Build font string
     const fontStyle = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}`;
-    ctx.font = `${fontStyle}${fontSize}px ${fontFamily}`;
+    ctx.font = `${fontStyle}${effectiveFontSize}px ${fontFamily}`;
 
     // Set text color - invert white to black for sheet mode
     let textColor = color || shape.style.strokeColor;
@@ -770,7 +811,7 @@ export class ShapeRenderer extends BaseRenderer {
 
     // Handle multi-line text
     const lines = text.split('\n');
-    const actualLineHeight = fontSize * lineHeight;
+    const actualLineHeight = effectiveFontSize * lineHeight;
 
     // Draw text lines
     for (let i = 0; i < lines.length; i++) {
@@ -787,8 +828,8 @@ export class ShapeRenderer extends BaseRenderer {
         ctx.strokeStyle = textColor;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(startX, y + fontSize + 2);
-        ctx.lineTo(startX + metrics.width, y + fontSize + 2);
+        ctx.moveTo(startX, y + effectiveFontSize + 2);
+        ctx.lineTo(startX + metrics.width, y + effectiveFontSize + 2);
         ctx.stroke();
       }
     }
@@ -846,16 +887,21 @@ export class ShapeRenderer extends BaseRenderer {
     if (shape.type !== 'text') return;
     const ctx = this.ctx;
 
-    const { position, text, fontSize, fontFamily, alignment, verticalAlignment, bold, italic, lineHeight = 1.2 } = shape;
+    const { position, text, fontSize, fontFamily, alignment, verticalAlignment, bold, italic, lineHeight = 1.2, isModelText = false } = shape;
+
+    // Calculate effective font size (same as drawText)
+    const effectiveFontSize = isModelText
+      ? fontSize
+      : fontSize * (ShapeRenderer.REFERENCE_SCALE / this.drawingScale);
 
     // Set font and baseline to match drawText rendering
     const fontStyle = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}`;
-    ctx.font = `${fontStyle}${fontSize}px ${fontFamily}`;
+    ctx.font = `${fontStyle}${effectiveFontSize}px ${fontFamily}`;
     ctx.textBaseline = verticalAlignment === 'middle' ? 'middle' :
                        verticalAlignment === 'bottom' ? 'bottom' : 'top';
 
     const lines = text.split('\n');
-    const actualLineHeight = fontSize * lineHeight;
+    const actualLineHeight = effectiveFontSize * lineHeight;
 
     // Use actual font metrics for accurate bounds
     let maxWidth = 0;
@@ -1066,18 +1112,33 @@ export class ShapeRenderer extends BaseRenderer {
 
   private drawHatch(shape: HatchShape, invertColors: boolean = false): void {
     const ctx = this.ctx;
-    const { points, patternType, patternAngle, patternScale, fillColor, backgroundColor, customPatternId } = shape;
+    const { points, bulge, patternType, patternAngle, patternScale, fillColor, backgroundColor, customPatternId } = shape;
 
     if (points.length < 3) return;
 
-    // Build boundary path
+    // Build boundary path (supports bulge/arc segments like polyline)
     const buildPath = () => {
       ctx.beginPath();
       ctx.moveTo(points[0].x, points[0].y);
-      for (let i = 1; i < points.length; i++) {
-        ctx.lineTo(points[i].x, points[i].y);
+
+      for (let i = 0; i < points.length - 1; i++) {
+        const b = bulge?.[i] ?? 0;
+        if (b !== 0) {
+          const arc = bulgeToArc(points[i], points[i + 1], b);
+          ctx.arc(arc.center.x, arc.center.y, arc.radius, arc.startAngle, arc.endAngle, arc.clockwise);
+        } else {
+          ctx.lineTo(points[i + 1].x, points[i + 1].y);
+        }
       }
-      ctx.closePath();
+
+      // Close path (handle last segment bulge)
+      const lastB = bulge?.[points.length - 1] ?? 0;
+      if (lastB !== 0) {
+        const arc = bulgeToArc(points[points.length - 1], points[0], lastB);
+        ctx.arc(arc.center.x, arc.center.y, arc.radius, arc.startAngle, arc.endAngle, arc.clockwise);
+      } else {
+        ctx.closePath();
+      }
     };
 
     // Fill background if set

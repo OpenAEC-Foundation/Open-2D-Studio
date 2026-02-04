@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" viewBox="0 0 10 10">
+  <defs>
+    <pattern id="sand_gravel" width="10" height="10" patternUnits="userSpaceOnUse">
+      <rect width="10" height="10" fill="white"/>
+      <!-- Dense dot pattern for sand/gravel -->
+      <circle cx="0.5" cy="0.5" r="0.15" fill="black"/>
+      <circle cx="2.5" cy="1" r="0.15" fill="black"/>
+      <circle cx="4.5" cy="0.3" r="0.15" fill="black"/>
+      <circle cx="6.5" cy="1.2" r="0.15" fill="black"/>
+      <circle cx="8.5" cy="0.7" r="0.15" fill="black"/>
+      <circle cx="1.5" cy="2.5" r="0.15" fill="black"/>
+      <circle cx="3.5" cy="2.8" r="0.15" fill="black"/>
+      <circle cx="5.5" cy="2.2" r="0.15" fill="black"/>
+      <circle cx="7.5" cy="2.9" r="0.15" fill="black"/>
+      <circle cx="9.5" cy="2.4" r="0.15" fill="black"/>
+      <circle cx="0.8" cy="4.5" r="0.15" fill="black"/>
+      <circle cx="2.8" cy="4.2" r="0.15" fill="black"/>
+      <circle cx="4.8" cy="4.8" r="0.15" fill="black"/>
+      <circle cx="6.8" cy="4.3" r="0.15" fill="black"/>
+      <circle cx="8.8" cy="4.6" r="0.15" fill="black"/>
+      <circle cx="1.2" cy="6.5" r="0.15" fill="black"/>
+      <circle cx="3.2" cy="6.8" r="0.15" fill="black"/>
+      <circle cx="5.2" cy="6.2" r="0.15" fill="black"/>
+      <circle cx="7.2" cy="6.9" r="0.15" fill="black"/>
+      <circle cx="9.2" cy="6.4" r="0.15" fill="black"/>
+      <circle cx="0.6" cy="8.5" r="0.15" fill="black"/>
+      <circle cx="2.6" cy="8.2" r="0.15" fill="black"/>
+      <circle cx="4.6" cy="8.8" r="0.15" fill="black"/>
+      <circle cx="6.6" cy="8.3" r="0.15" fill="black"/>
+      <circle cx="8.6" cy="8.6" r="0.15" fill="black"/>
+    </pattern>
+  </defs>
+  <rect width="10" height="10" fill="url(#sand_gravel)"/>
+</svg>

@@ -5,7 +5,7 @@
 import { useCallback } from 'react';
 import { useAppStore, generateId } from '../../state/appStore';
 import type { Point, LineShape, RectangleShape, CircleShape, ArcShape, PolylineShape, SplineShape, EllipseShape, SnapPoint, Shape, HatchShape } from '../../types/geometry';
-import { snapToAngle, calculateCircleFrom3Points, isPointNearShape, findClosedShapeContainingPoint, getShapeBoundaryPoints } from '../../engine/geometry/GeometryUtils';
+import { snapToAngle, calculateCircleFrom3Points, isPointNearShape, findClosedShapeContainingPoint, getShapeBoundaryWithBulge, calculateBulgeFrom3Points } from '../../engine/geometry/GeometryUtils';
 import { useDimensionDrawing } from './useDimensionDrawing';
 
 /**
@@ -119,6 +119,8 @@ export function useShapeDrawing() {
     setLockedDistance,
     setLockedAngle,
     polylineArcMode,
+    polylineArcThroughPoint,
+    setPolylineArcThroughPoint,
     drawingBulges,
     addDrawingBulge,
   } = useAppStore();
@@ -290,7 +292,7 @@ export function useShapeDrawing() {
    * Create a hatch shape
    */
   const createHatch = useCallback(
-    (points: Point[]) => {
+    (points: Point[], bulge?: number[]) => {
       if (points.length < 3) return;
       const {
         hatchPatternType,
@@ -308,6 +310,7 @@ export function useShapeDrawing() {
         visible: true,
         locked: false,
         points: [...points],
+        bulge: bulge ? [...bulge] : undefined,
         patternType: hatchPatternType,
         patternAngle: hatchPatternAngle,
         patternScale: hatchPatternScale,
@@ -333,11 +336,11 @@ export function useShapeDrawing() {
         const containingShape = findClosedShapeContainingPoint(snappedPos, activeShapes);
 
         if (containingShape) {
-          // Get boundary points from the shape
-          const boundaryPoints = getShapeBoundaryPoints(containingShape);
-          if (boundaryPoints.length >= 3) {
-            // Create hatch immediately with this boundary
-            createHatch(boundaryPoints);
+          // Get boundary points and bulge data from the shape
+          const boundary = getShapeBoundaryWithBulge(containingShape);
+          if (boundary.points.length >= 3) {
+            // Create hatch immediately with this boundary (including curves)
+            createHatch(boundary.points, boundary.bulge);
             return;
           }
         }
@@ -603,6 +606,7 @@ export function useShapeDrawing() {
 
   /**
    * Handle click for polyline drawing
+   * In arc mode, uses 3-point arc: first click sets through point, second click sets endpoint
    */
   const handlePolylineClick = useCallback(
     (snappedPos: Point, shiftKey: boolean) => {
@@ -612,16 +616,35 @@ export function useShapeDrawing() {
         finalPos = snapToAngle(lastPoint, snappedPos);
       }
 
-      // If we have at least one point, record the bulge for the segment we're completing
-      if (drawingPoints.length > 0) {
-        // In arc mode, use a default bulge of 0.4142 (quarter-circle arc, ~45 degree sweep)
-        // The user can later adjust; this provides a visible arc
-        addDrawingBulge(polylineArcMode ? 0.4142 : 0);
+      // If no points yet, just add the first point
+      if (drawingPoints.length === 0) {
+        addDrawingPoint(finalPos);
+        return;
       }
 
-      addDrawingPoint(finalPos);
+      // In arc mode with at least one point
+      if (polylineArcMode) {
+        const lastPoint = drawingPoints[drawingPoints.length - 1];
+
+        if (!polylineArcThroughPoint) {
+          // First click in arc mode: set the through point (point on the arc)
+          setPolylineArcThroughPoint(finalPos);
+        } else {
+          // Second click in arc mode: this is the endpoint
+          // Calculate bulge from 3 points: lastPoint -> throughPoint -> finalPos
+          const bulge = calculateBulgeFrom3Points(lastPoint, polylineArcThroughPoint, finalPos);
+          addDrawingBulge(bulge);
+          addDrawingPoint(finalPos);
+          // Clear the through point for next arc segment
+          setPolylineArcThroughPoint(null);
+        }
+      } else {
+        // Line mode: straight segment
+        addDrawingBulge(0);
+        addDrawingPoint(finalPos);
+      }
     },
-    [drawingPoints, addDrawingPoint, addDrawingBulge, polylineArcMode]
+    [drawingPoints, addDrawingPoint, addDrawingBulge, polylineArcMode, polylineArcThroughPoint, setPolylineArcThroughPoint]
   );
 
   /**
@@ -1206,6 +1229,7 @@ export function useShapeDrawing() {
 
   /**
    * Update drawing preview for polyline
+   * In arc mode with through point: shows arc preview from lastPoint through throughPoint to mouse
    */
   const updatePolylinePreview = useCallback(
     (snappedPos: Point, shiftKey: boolean) => {
@@ -1218,12 +1242,22 @@ export function useShapeDrawing() {
       }
 
       const bulges = useAppStore.getState().drawingBulges;
+      const throughPoint = useAppStore.getState().polylineArcThroughPoint;
+
+      // Calculate bulge for preview
+      let currentBulge = 0;
+      if (polylineArcMode && throughPoint) {
+        // 3-point arc: calculate bulge from lastPoint -> throughPoint -> previewPos
+        currentBulge = calculateBulgeFrom3Points(lastPoint, throughPoint, previewPos);
+      }
+
       setDrawingPreview({
         type: 'polyline',
         points: drawingPoints,
         currentPoint: previewPos,
         bulges: bulges.length > 0 ? [...bulges] : undefined,
-        currentBulge: polylineArcMode ? 0.4142 : 0,
+        currentBulge,
+        arcThroughPoint: polylineArcMode ? throughPoint ?? undefined : undefined,
       });
     },
     [drawingPoints, setDrawingPreview, lockedDistance, lockedAngle, polylineArcMode]

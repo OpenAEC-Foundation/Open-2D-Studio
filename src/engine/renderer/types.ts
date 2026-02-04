@@ -142,6 +142,7 @@ export const SNAP_COLORS: Record<SnapType, string> = {
   center: '#ff00ff',       // Magenta
   intersection: '#ffff00', // Yellow
   perpendicular: '#ff8800', // Orange
+  parallel: '#ff8800',     // Orange (same as perpendicular)
   tangent: '#88ff00',      // Lime
   nearest: '#ff88ff',      // Pink
   grid: '#8888ff',         // Light blue
@@ -154,6 +155,7 @@ export const SNAP_LABELS: Record<SnapType, string> = {
   center: 'Center',
   intersection: 'Intersection',
   perpendicular: 'Perpendicular',
+  parallel: 'Parallel',
   tangent: 'Tangent',
   nearest: 'Nearest',
   grid: 'Grid',

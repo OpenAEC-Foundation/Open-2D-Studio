@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- NEN47-1: Metselwerk Baksteen Rood (Red Brick Masonry) -->
+<svg xmlns="http://www.w3.org/2000/svg" width="20mm" height="20mm" viewBox="0 0 20 20">
+  <defs>
+    <pattern id="NEN47_brick_red" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <!-- Background fill - brick red/salmon color -->
+      <rect width="3" height="3" fill="#CD7C61"/>
+      <!-- Double vertical lines -->
+      <line x1="1" y1="0" x2="1" y2="3" stroke="black" stroke-width="0.15"/>
+      <line x1="1.5" y1="0" x2="1.5" y2="3" stroke="black" stroke-width="0.15"/>
+    </pattern>
+  </defs>
+  <rect width="20" height="20" fill="url(#NEN47_brick_red)"/>
+</svg>

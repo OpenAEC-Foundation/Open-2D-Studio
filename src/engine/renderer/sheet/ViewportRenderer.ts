@@ -28,6 +28,8 @@ export interface ViewportRenderOptions {
     userPatterns: CustomHatchPattern[];
     projectPatterns: CustomHatchPattern[];
   };
+  /** Total number of viewports on the sheet (for "whenMultiple" title visibility) */
+  totalViewportsOnSheet?: number;
 }
 
 export class ViewportRenderer extends BaseRenderer {
@@ -300,21 +302,31 @@ export class ViewportRenderer extends BaseRenderer {
       this.drawLayerOverrideIndicator(vpX + vpWidth - 36 / sheetZoom, vpY + 4 / sheetZoom, sheetZoom);
     }
 
-    // Draw viewport label (zoom-compensated)
+    // Draw viewport title in Revit style (below viewport)
     const drawingForLabel = drawings.find(d => d.id === vp.drawingId);
     if (drawingForLabel) {
-      ctx.fillStyle = '#333333';
-      ctx.font = `${10 / sheetZoom}px Arial`;
-      const scaleText = this.formatScale(vp.scale);
-      const customTitle = vp.customTitle || drawingForLabel.name;
-      const label = `${customTitle} (${scaleText})`;
-      ctx.fillText(label, vpX + 4 / sheetZoom, vpY - 4 / sheetZoom);
+      // Determine if title should be shown based on visibility setting
+      const titleVisibility = vp.titleVisibility ?? 'always';
+      const totalViewports = options?.totalViewportsOnSheet ?? 1;
+      const shouldShowTitle =
+        titleVisibility === 'always' ||
+        (titleVisibility === 'whenMultiple' && totalViewports > 1);
 
-      // Show reference number if set
-      if (vp.referenceNumber) {
-        ctx.fillStyle = '#e94560';
-        ctx.font = `bold ${12 / sheetZoom}px Arial`;
-        ctx.fillText(vp.referenceNumber, vpX + vpWidth - 16 / sheetZoom, vpY - 4 / sheetZoom);
+      if (shouldShowTitle) {
+        this.drawRevitStyleViewportTitle(
+          vpX,
+          vpY + vpHeight,
+          vpWidth,
+          vp.customTitle || drawingForLabel.name,
+          vp.scale,
+          vp.referenceNumber,
+          sheetZoom,
+          {
+            showExtensionLine: vp.showExtensionLine ?? true,
+            extensionLineLength: vp.extensionLineLength,
+            showScale: vp.showScale ?? true,
+          }
+        );
       }
     }
 
@@ -368,6 +380,99 @@ export class ViewportRenderer extends BaseRenderer {
     ctx.rect(x + padding, y + padding + (rectHeight + 1 / zoom) * 2, size - padding * 2, rectHeight);
     ctx.stroke();
     ctx.restore();
+  }
+
+  /**
+   * Draw viewport title in Revit style (below viewport with extension line)
+   * Format:
+   *   ─────────────────────────  ← Extension line (optional)
+   *   ①  View Name               ← Reference number + Title
+   *      Scale: 1:50             ← Scale (optional)
+   */
+  private drawRevitStyleViewportTitle(
+    vpX: number,
+    vpBottomY: number,
+    vpWidth: number,
+    title: string,
+    scale: number,
+    referenceNumber: string | undefined,
+    zoom: number,
+    options?: {
+      showExtensionLine?: boolean;
+      extensionLineLength?: number;
+      showScale?: boolean;
+    }
+  ): void {
+    const ctx = this.ctx;
+    const showExtensionLine = options?.showExtensionLine ?? true;
+    const showScale = options?.showScale ?? true;
+
+    // Calculate extension line length (in pixels)
+    const extensionLineLengthPx = options?.extensionLineLength
+      ? options.extensionLineLength * MM_TO_PIXELS
+      : vpWidth;
+
+    const lineY = vpBottomY + 8 / zoom;
+    const titleY = showExtensionLine ? lineY + 14 / zoom : vpBottomY + 14 / zoom;
+    const scaleY = titleY + 12 / zoom;
+    const lineStartX = vpX;
+    const lineEndX = vpX + extensionLineLengthPx;
+
+    // Draw extension line (if enabled)
+    if (showExtensionLine) {
+      ctx.strokeStyle = '#333333';
+      ctx.lineWidth = 1 / zoom;
+      ctx.beginPath();
+      ctx.moveTo(lineStartX, lineY);
+      ctx.lineTo(lineEndX, lineY);
+      ctx.stroke();
+    }
+
+    // Calculate text start position (after reference number if present)
+    let textStartX = vpX;
+
+    // Draw reference number in circle if present
+    if (referenceNumber) {
+      const circleX = vpX + 10 / zoom;
+      const circleY = titleY - 4 / zoom;
+      const circleRadius = 8 / zoom;
+
+      // Draw circle
+      ctx.strokeStyle = '#333333';
+      ctx.lineWidth = 1.5 / zoom;
+      ctx.beginPath();
+      ctx.arc(circleX, circleY, circleRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Draw reference number text centered in circle
+      ctx.fillStyle = '#333333';
+      ctx.font = `bold ${10 / zoom}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(referenceNumber, circleX, circleY);
+
+      // Move text start position to after the circle
+      textStartX = circleX + circleRadius + 8 / zoom;
+    }
+
+    // Draw title
+    ctx.fillStyle = '#333333';
+    ctx.font = `${11 / zoom}px Arial`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(title, textStartX, titleY);
+
+    // Draw scale (if enabled)
+    if (showScale) {
+      const scaleText = `Scale: ${this.formatScale(scale)}`;
+      ctx.fillStyle = '#666666';
+      ctx.font = `${9 / zoom}px Arial`;
+      ctx.fillText(scaleText, textStartX, scaleY);
+    }
+
+    // Reset text alignment
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
   }
 
   /**

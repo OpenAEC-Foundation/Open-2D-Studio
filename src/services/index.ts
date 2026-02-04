@@ -4,13 +4,34 @@
  * This module provides reusable business logic functions
  * that are independent of the UI and state management.
  *
- * Services:
- * - shapeService: Shape creation, transformation, validation
- * - drawingService: Drawing management and queries
- * - sheetService: Sheet and viewport operations
- * - selectionService: Selection and filtering logic
- * - historyService: Undo/redo state management
+ * Services organized by domain:
+ * - file/: File I/O, import/export
+ * - drawing/: Shape, drawing, sheet, selection, history operations
+ * - export/: IFC, SVG, PAT export/import
+ * - template/: Title block and sheet templates
+ * - parametric/: Parametric shape operations
+ * - integration/: External service integrations
  */
+
+// File operations
+export {
+  showOpenDialog,
+  showSaveDialog,
+  showExportDialog,
+  showExportAllFormatsDialog,
+  readProjectFile,
+  writeProjectFile,
+  exportToSVG,
+  exportToDXF,
+  exportToIFC,
+  confirmUnsavedChanges,
+  showError,
+  showInfo,
+  showImportDxfDialog,
+  parseDXF,
+} from './file/fileService';
+
+export type { ProjectFile } from './file/fileService';
 
 // Shape operations
 export {
@@ -35,9 +56,9 @@ export {
   isShapeInBounds,
   doesShapeIntersectBounds,
   getShapeBounds,
-} from './shapeService';
+} from './drawing/shapeService';
 
-export type { ShapeBounds } from './shapeService';
+export type { ShapeBounds } from './drawing/shapeService';
 
 // Drawing operations (with legacy Draft aliases)
 export {
@@ -70,7 +91,7 @@ export {
   getDrawingCenter,
   getDraftCenter,
   calculateZoomToFit,
-} from './drawingService';
+} from './drawing/drawingService';
 
 // Sheet operations
 export {
@@ -98,7 +119,7 @@ export {
   getPrintableArea,
   validateSheet,
   validateViewport,
-} from './sheetService';
+} from './drawing/sheetService';
 
 // Selection operations
 export {
@@ -124,9 +145,9 @@ export {
   selectAll,
   isSelected,
   getSelectionStats,
-} from './selectionService';
+} from './drawing/selectionService';
 
-export type { SelectionMode, SelectionBox } from './selectionService';
+export type { SelectionMode, SelectionBox } from './drawing/selectionService';
 
 // History operations
 export {
@@ -148,9 +169,9 @@ export {
   hasChangedSinceLastSnapshot,
   beginBatch,
   endBatch,
-} from './historyService';
+} from './drawing/historyService';
 
-export type { HistorySnapshot, HistoryConfig, HistoryState } from './historyService';
+export type { HistorySnapshot, HistoryConfig, HistoryState } from './drawing/historyService';
 
 // Title block operations
 export {
@@ -167,9 +188,9 @@ export {
   updateFieldValues,
   setLogo,
   removeLogo,
-} from './titleBlockService';
+} from './template/titleBlockService';
 
-export type { AutoFieldContext } from './titleBlockService';
+export type { AutoFieldContext } from './template/titleBlockService';
 
 // Sheet template operations
 export {
@@ -186,6 +207,43 @@ export {
   renumberSheets,
   getNextSheetNumber,
   createTemplateFromSheet,
-} from './sheetTemplateService';
+} from './template/sheetTemplateService';
 
-export type { SheetNumberingScheme } from './sheetTemplateService';
+export type { SheetNumberingScheme } from './template/sheetTemplateService';
+
+// Parametric operations - Note: use direct imports from ./parametric/ for full access
+// Re-exporting commonly used functions
+export {
+  PROFILE_TEMPLATES,
+  getProfileTemplate,
+  getAllProfileTemplates,
+  getDefaultParameters,
+} from './parametric/profileTemplates';
+
+export {
+  getPresetsForType,
+  getAvailableStandards,
+  getCategoriesForStandard,
+  searchPresets,
+  getPresetById,
+} from './parametric/profileLibrary';
+
+export {
+  generateProfileGeometry,
+} from './parametric/geometryGenerators';
+
+export {
+  createProfileShape,
+  updateParametricParameters,
+  updateParametricPosition,
+  updateParametricRotation,
+  updateParametricScale,
+  explodeParametricShape,
+  cloneParametricShape,
+} from './parametric/parametricService';
+
+// Export operations
+export * from './export/ifcExport';
+export * from './export/svgPatternService';
+export * from './export/svgTitleBlockService';
+export * from './export/patService';

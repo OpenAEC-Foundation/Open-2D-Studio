@@ -33,6 +33,7 @@ interface RenderOptions {
   selectedShapeIds: string[];
   hoveredShapeId?: string | null;
   viewport: Viewport;
+  drawingScale?: number;
   gridVisible: boolean;
   gridSize: number;
   drawingPreview?: DrawingPreview;
@@ -128,6 +129,7 @@ export class CADRenderer {
       selectedShapeIds: options.selectedShapeIds,
       hoveredShapeId: options.hoveredShapeId,
       viewport: options.viewport,
+      drawingScale: options.drawingScale,
       gridVisible: options.gridVisible,
       gridSize: options.gridSize,
       drawingPreview: options.drawingPreview,
@@ -203,6 +205,14 @@ export class CADRenderer {
     tolerance: number = 5
   ): ViewportHandleType | null {
     return this.handleRenderer.findViewportHandleAtPoint(point, vp, tolerance);
+  }
+
+  /**
+   * Set callback for when async images (like SVG title blocks) finish loading
+   * This allows triggering a re-render after the image is ready
+   */
+  setOnImageLoadCallback(callback: (() => void) | null): void {
+    this.sheetRenderer.setOnImageLoadCallback(callback);
   }
 
   dispose(): void {

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="15mm" height="13mm" viewBox="0 0 15 13">
+  <defs>
+    <pattern id="honeycomb" width="7.5" height="8.66" patternUnits="userSpaceOnUse">
+      <rect width="7.5" height="8.66" fill="white"/>
+      <!-- Hexagon pattern -->
+      <path d="M1.25,4.33 L2.5,0 L5,0 L6.25,4.33 L5,8.66 L2.5,8.66 Z"
+            stroke="black" stroke-width="0.25" fill="none"/>
+      <path d="M0,4.33 L1.25,4.33" stroke="black" stroke-width="0.25"/>
+      <path d="M6.25,4.33 L7.5,4.33" stroke="black" stroke-width="0.25"/>
+    </pattern>
+  </defs>
+  <rect width="15" height="13" fill="url(#honeycomb)"/>
+</svg>

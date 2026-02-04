@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" viewBox="0 0 10 10">
+  <defs>
+    <pattern id="earth_soil" width="6" height="6" patternUnits="userSpaceOnUse">
+      <rect width="6" height="6" fill="white"/>
+      <!-- Alternating vertical and horizontal lines in quadrants -->
+      <!-- Top-left: vertical -->
+      <line x1="0" y1="0" x2="0" y2="3" stroke="black" stroke-width="0.25"/>
+      <line x1="1" y1="0" x2="1" y2="3" stroke="black" stroke-width="0.25"/>
+      <line x1="2" y1="0" x2="2" y2="3" stroke="black" stroke-width="0.25"/>
+      <!-- Top-right: horizontal -->
+      <line x1="3" y1="0" x2="6" y2="0" stroke="black" stroke-width="0.25"/>
+      <line x1="3" y1="1" x2="6" y2="1" stroke="black" stroke-width="0.25"/>
+      <line x1="3" y1="2" x2="6" y2="2" stroke="black" stroke-width="0.25"/>
+      <!-- Bottom-left: horizontal -->
+      <line x1="0" y1="3" x2="3" y2="3" stroke="black" stroke-width="0.25"/>
+      <line x1="0" y1="4" x2="3" y2="4" stroke="black" stroke-width="0.25"/>
+      <line x1="0" y1="5" x2="3" y2="5" stroke="black" stroke-width="0.25"/>
+      <!-- Bottom-right: vertical -->
+      <line x1="3" y1="3" x2="3" y2="6" stroke="black" stroke-width="0.25"/>
+      <line x1="4" y1="3" x2="4" y2="6" stroke="black" stroke-width="0.25"/>
+      <line x1="5" y1="3" x2="5" y2="6" stroke="black" stroke-width="0.25"/>
+    </pattern>
+  </defs>
+  <rect width="10" height="10" fill="url(#earth_soil)"/>
+</svg>

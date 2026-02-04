@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- NEN47-12: Naaldhout (Softwood/Conifer) -->
+<svg xmlns="http://www.w3.org/2000/svg" width="20mm" height="20mm" viewBox="0 0 20 20">
+  <defs>
+    <pattern id="NEN47_softwood" width="1.5" height="1.5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <!-- Background fill - light brown/tan wood color -->
+      <rect width="1.5" height="1.5" fill="#E6BE9B"/>
+      <!-- Single vertical line -->
+      <line x1="0" y1="0" x2="0" y2="1.5" stroke="black" stroke-width="0.2"/>
+    </pattern>
+  </defs>
+  <rect width="20" height="20" fill="url(#NEN47_softwood)"/>
+</svg>

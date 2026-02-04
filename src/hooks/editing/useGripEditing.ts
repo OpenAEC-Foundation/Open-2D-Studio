@@ -11,7 +11,7 @@ import { useCallback, useRef } from 'react';
 import { useAppStore } from '../../state/appStore';
 import type { Point, Shape, EllipseShape } from '../../types/geometry';
 import type { ParametricShape } from '../../types/parametric';
-import { updateParametricPosition } from '../../services/parametricService';
+import { updateParametricPosition } from '../../services/parametric/parametricService';
 
 interface GripDragState {
   shapeId: string;

@@ -23,6 +23,7 @@ export interface DrawingRenderOptions {
   selectedShapeIds: string[];
   hoveredShapeId?: string | null;
   viewport: Viewport;
+  drawingScale?: number;
   gridVisible: boolean;
   gridSize: number;
   drawingPreview?: DrawingPreview;
@@ -96,6 +97,7 @@ export class DrawingRenderer extends BaseRenderer {
       shapes,
       selectedShapeIds,
       viewport,
+      drawingScale,
       gridVisible,
       gridSize,
       drawingPreview,
@@ -112,6 +114,11 @@ export class DrawingRenderer extends BaseRenderer {
       hideSelectionHandles,
       customPatterns,
     } = options;
+
+    // Set drawing scale for annotation text scaling
+    if (drawingScale !== undefined) {
+      this.shapeRenderer.setDrawingScale(drawingScale);
+    }
 
     const ctx = this.ctx;
 

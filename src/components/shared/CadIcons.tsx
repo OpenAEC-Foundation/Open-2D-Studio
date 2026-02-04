@@ -1034,3 +1034,159 @@ export function ExplodeIcon({ size = 24, className }: IconProps) {
     </svg>
   );
 }
+
+// ============================================================================
+// Filled Region Sketch Mode Icons (Revit-style)
+// ============================================================================
+
+/**
+ * Inscribed Polygon Icon - Polygon drawn from vertices (inside circle)
+ */
+export function InscribedPolygonIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Circle (reference) */}
+      <circle cx="12" cy="12" r="9" strokeDasharray="2 2" opacity="0.4" />
+      {/* Hexagon inscribed - vertices touch circle */}
+      <polygon points="12,3 20,7.5 20,16.5 12,21 4,16.5 4,7.5" />
+      {/* Vertex markers */}
+      <circle cx="12" cy="3" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/**
+ * Circumscribed Polygon Icon - Polygon drawn from sides (outside circle)
+ */
+export function CircumscribedPolygonIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Circle (reference) - sides touch circle */}
+      <circle cx="12" cy="12" r="6" strokeDasharray="2 2" opacity="0.4" />
+      {/* Hexagon circumscribed */}
+      <polygon points="12,2 21,7 21,17 12,22 3,17 3,7" />
+      {/* Side marker */}
+      <line x1="12" y1="2" x2="21" y2="7" strokeWidth="2.5" />
+    </svg>
+  );
+}
+
+/**
+ * Start-End-Radius Arc Icon - Arc defined by chord then bulge
+ */
+export function StartEndRadiusArcIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Arc */}
+      <path d="M4 18 Q 12 2, 20 18" strokeWidth="2" />
+      {/* Chord line (dashed) */}
+      <line x1="4" y1="18" x2="20" y2="18" strokeDasharray="2 2" opacity="0.5" />
+      {/* Start point */}
+      <circle cx="4" cy="18" r="1.5" fill="currentColor" stroke="none" />
+      {/* End point */}
+      <circle cx="20" cy="18" r="1.5" fill="currentColor" stroke="none" />
+      {/* Radius indicator point */}
+      <circle cx="12" cy="8" r="1.5" fill="none" strokeWidth="1.5" />
+      {/* Label */}
+      <text x="12" y="23" fontSize="4" fill="currentColor" stroke="none" textAnchor="middle">S-E-R</text>
+    </svg>
+  );
+}
+
+/**
+ * Center-Ends Arc Icon - Arc defined by center point then endpoints
+ */
+export function CenterEndsArcIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Arc */}
+      <path d="M6 18 A 10 10 0 0 1 18 18" strokeWidth="2" />
+      {/* Center point */}
+      <circle cx="12" cy="18" r="1.5" fill="currentColor" stroke="none" />
+      {/* Center crosshairs */}
+      <line x1="10" y1="18" x2="14" y2="18" strokeWidth="0.75" />
+      <line x1="12" y1="16" x2="12" y2="20" strokeWidth="0.75" />
+      {/* Radius lines (dashed) */}
+      <line x1="12" y1="18" x2="6" y2="18" strokeDasharray="2 2" opacity="0.4" />
+      <line x1="12" y1="18" x2="18" y2="18" strokeDasharray="2 2" opacity="0.4" />
+      {/* End points */}
+      <circle cx="6" cy="18" r="1.5" fill="none" strokeWidth="1.5" />
+      <circle cx="18" cy="18" r="1.5" fill="none" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+/**
+ * Tangent Arc Icon - Arc tangent to existing line
+ */
+export function TangentArcIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Existing line */}
+      <line x1="2" y1="18" x2="10" y2="18" strokeWidth="2" />
+      {/* Tangent arc continuing from line end */}
+      <path d="M10 18 Q 14 18, 18 10" strokeWidth="2" />
+      {/* Junction point */}
+      <circle cx="10" cy="18" r="2" fill="currentColor" stroke="none" />
+      {/* End point */}
+      <circle cx="18" cy="10" r="1.5" fill="none" strokeWidth="1.5" />
+      {/* Tangent indicator */}
+      <line x1="10" y1="16" x2="10" y2="20" strokeWidth="0.75" opacity="0.5" />
+    </svg>
+  );
+}
+
+/**
+ * Fillet Arc Icon (for sketch mode) - Rounded corner between lines
+ */
+export function FilletArcIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Two lines forming corner */}
+      <line x1="4" y1="20" x2="4" y2="10" strokeWidth="1.5" />
+      <line x1="10" y1="4" x2="20" y2="4" strokeWidth="1.5" />
+      {/* Fillet arc (highlighted) */}
+      <path d="M4 10 Q 4 4, 10 4" strokeWidth="2.5" />
+      {/* Radius indicator */}
+      <line x1="7" y1="7" x2="4" y2="10" strokeDasharray="2 2" opacity="0.5" strokeWidth="1" />
+      <text x="9" y="11" fontSize="5" fill="currentColor" stroke="none">R</text>
+    </svg>
+  );
+}
+
+/**
+ * Partial Ellipse Icon - Half ellipse
+ */
+export function PartialEllipseIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Half ellipse (top half) */}
+      <path d="M3 14 A 9 6 0 0 1 21 14" strokeWidth="2" />
+      {/* Endpoints */}
+      <circle cx="3" cy="14" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="21" cy="14" r="1.5" fill="currentColor" stroke="none" />
+      {/* Center axis (dashed) */}
+      <line x1="12" y1="14" x2="12" y2="8" strokeDasharray="2 2" opacity="0.4" />
+      {/* Major axis line (dashed) */}
+      <line x1="3" y1="14" x2="21" y2="14" strokeDasharray="2 2" opacity="0.3" />
+    </svg>
+  );
+}
+
+/**
+ * Pick Lines Icon - Mouse pointer selecting existing geometry
+ */
+export function PickLinesIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Existing lines to pick from */}
+      <line x1="14" y1="8" x2="20" y2="4" strokeWidth="1.5" opacity="0.5" />
+      <line x1="14" y1="8" x2="20" y2="14" strokeWidth="1.5" opacity="0.5" />
+      <line x1="14" y1="8" x2="14" y2="20" strokeWidth="1.5" opacity="0.5" />
+      {/* Mouse pointer */}
+      <path d="M4 4 L4 14 L7 11 L10 17 L12 16 L9 10 L13 10 Z" fill="currentColor" strokeWidth="0.5" />
+      {/* Highlight on selected line */}
+      <line x1="14" y1="8" x2="20" y2="14" strokeWidth="2.5" stroke="#3b82f6" />
+    </svg>
+  );
+}

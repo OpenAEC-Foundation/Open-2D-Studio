@@ -27,6 +27,8 @@ export interface TrackingSettings {
   polarEnabled: boolean;
   orthoEnabled: boolean;
   objectTrackingEnabled: boolean;
+  parallelTrackingEnabled: boolean;
+  perpendicularTrackingEnabled: boolean;
   polarAngleIncrement: number; // degrees (15, 30, 45, 90)
   trackingTolerance: number; // pixels
 }
@@ -36,6 +38,8 @@ export const defaultTrackingSettings: TrackingSettings = {
   polarEnabled: true,
   orthoEnabled: false,
   objectTrackingEnabled: true,
+  parallelTrackingEnabled: false,  // Respects snap settings - disabled by default
+  perpendicularTrackingEnabled: false,  // Respects snap settings - disabled by default
   polarAngleIncrement: 45,
   trackingTolerance: 10,
 };
@@ -70,7 +74,9 @@ export function findPolarTrackingLines(
 export function findObjectTrackingLines(
   basePoint: IPoint,
   shapes: Array<{ id: string; type: string; start?: IPoint; end?: IPoint }>,
-  tolerance: number = 50
+  tolerance: number = 50,
+  includeParallel: boolean = true,
+  includePerpendicular: boolean = true
 ): TrackingLine[] {
   const lines: TrackingLine[] = [];
 
@@ -80,43 +86,47 @@ export function findObjectTrackingLines(
       const dir = LineUtils.direction(line);
       const perpDir = LineUtils.perpendicularDirection(line);
 
-      // Add parallel tracking line
-      lines.push({
-        origin: basePoint,
-        direction: dir,
-        angle: Math.atan2(dir.y, dir.x),
-        type: 'parallel',
-        sourceShapeId: shape.id,
-      });
+      // Add parallel tracking lines if enabled
+      if (includeParallel) {
+        lines.push({
+          origin: basePoint,
+          direction: dir,
+          angle: Math.atan2(dir.y, dir.x),
+          type: 'parallel',
+          sourceShapeId: shape.id,
+        });
 
-      // Add opposite parallel direction
-      lines.push({
-        origin: basePoint,
-        direction: { x: -dir.x, y: -dir.y },
-        angle: Math.atan2(-dir.y, -dir.x),
-        type: 'parallel',
-        sourceShapeId: shape.id,
-      });
+        // Add opposite parallel direction
+        lines.push({
+          origin: basePoint,
+          direction: { x: -dir.x, y: -dir.y },
+          angle: Math.atan2(-dir.y, -dir.x),
+          type: 'parallel',
+          sourceShapeId: shape.id,
+        });
+      }
 
-      // Add perpendicular tracking line
-      lines.push({
-        origin: basePoint,
-        direction: perpDir,
-        angle: Math.atan2(perpDir.y, perpDir.x),
-        type: 'perpendicular',
-        sourceShapeId: shape.id,
-      });
+      // Add perpendicular tracking lines if enabled
+      if (includePerpendicular) {
+        lines.push({
+          origin: basePoint,
+          direction: perpDir,
+          angle: Math.atan2(perpDir.y, perpDir.x),
+          type: 'perpendicular',
+          sourceShapeId: shape.id,
+        });
 
-      // Add opposite perpendicular direction
-      lines.push({
-        origin: basePoint,
-        direction: { x: -perpDir.x, y: -perpDir.y },
-        angle: Math.atan2(-perpDir.y, -perpDir.x),
-        type: 'perpendicular',
-        sourceShapeId: shape.id,
-      });
+        // Add opposite perpendicular direction
+        lines.push({
+          origin: basePoint,
+          direction: { x: -perpDir.x, y: -perpDir.y },
+          angle: Math.atan2(-perpDir.y, -perpDir.x),
+          type: 'perpendicular',
+          sourceShapeId: shape.id,
+        });
+      }
 
-      // Extension tracking from endpoints
+      // Extension tracking from endpoints (always include if object tracking is on)
       const distToStart = PointUtils.distance(basePoint, shape.start);
       const distToEnd = PointUtils.distance(basePoint, shape.end);
 
@@ -269,7 +279,13 @@ export function applyTracking(
   // Add object tracking lines (parallel/perpendicular to existing shapes)
   if (settings.objectTrackingEnabled) {
     allTrackingLines.push(
-      ...findObjectTrackingLines(basePoint, shapes, settings.trackingTolerance * 5)
+      ...findObjectTrackingLines(
+        basePoint,
+        shapes,
+        settings.trackingTolerance * 5,
+        settings.parallelTrackingEnabled,
+        settings.perpendicularTrackingEnabled
+      )
     );
   }
 

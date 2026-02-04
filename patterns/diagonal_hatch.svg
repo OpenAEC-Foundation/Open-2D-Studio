@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" viewBox="0 0 10 10">
+  <defs>
+    <pattern id="diagonal_hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="4" height="4" fill="white"/>
+      <line x1="0" y1="0" x2="0" y2="4" stroke="black" stroke-width="0.25"/>
+    </pattern>
+  </defs>
+  <rect width="10" height="10" fill="url(#diagonal_hatch)"/>
+</svg>

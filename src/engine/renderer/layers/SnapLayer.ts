@@ -97,6 +97,16 @@ export class SnapLayer extends BaseRenderer {
         ctx.stroke();
         break;
 
+      case 'parallel':
+        // Two parallel lines marker
+        ctx.beginPath();
+        ctx.moveTo(point.x - size / 2, point.y - size / 4);
+        ctx.lineTo(point.x + size / 2, point.y - size / 4);
+        ctx.moveTo(point.x - size / 2, point.y + size / 4);
+        ctx.lineTo(point.x + size / 2, point.y + size / 4);
+        ctx.stroke();
+        break;
+
       default:
         // Small filled circle as fallback
         ctx.beginPath();

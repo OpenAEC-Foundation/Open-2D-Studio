@@ -21,7 +21,7 @@ import {
   updateParametricScale,
   explodeParametricShape,
   cloneParametricShape,
-} from '../../services/parametricService';
+} from '../../services/parametric/parametricService';
 
 import type { HistoryEntry } from './historySlice';
 

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="20mm" height="20mm" viewBox="0 0 20 20">
+  <defs>
+    <pattern id="wood_grain" width="20" height="20" patternUnits="userSpaceOnUse">
+      <rect width="20" height="20" fill="white"/>
+      <!-- Curved wood grain lines -->
+      <path d="M0,2 Q5,3 10,2 Q15,1 20,2" stroke="black" stroke-width="0.25" fill="none"/>
+      <path d="M0,5 Q5,6 10,5 Q15,4 20,5" stroke="black" stroke-width="0.25" fill="none"/>
+      <path d="M0,8 Q5,9.5 10,8 Q15,6.5 20,8" stroke="black" stroke-width="0.25" fill="none"/>
+      <path d="M0,11 Q5,12 10,11 Q15,10 20,11" stroke="black" stroke-width="0.25" fill="none"/>
+      <path d="M0,14 Q5,15.5 10,14 Q15,12.5 20,14" stroke="black" stroke-width="0.25" fill="none"/>
+      <path d="M0,17 Q5,18 10,17 Q15,16 20,17" stroke="black" stroke-width="0.25" fill="none"/>
+    </pattern>
+  </defs>
+  <rect width="20" height="20" fill="url(#wood_grain)"/>
+</svg>

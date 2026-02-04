@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(head:*)",
+      "Bash(inkscape --version:*)",
+      "Bash(\"C:/Program Files/Inkscape/bin/inkscape.exe\":*)",
+      "Bash(\"C:/Program Files/Inkscape/bin/inkscape.exe\" \"D:/Repos/\\(Impertio\\)/2D modeler/open-2D-studio/templates/pdf/3BM-Tekenkader-A2-Grootformaat-Renvooi.pdf\" --export-filename=\"D:/Repos/\\(Impertio\\)/2D modeler/open-2D-studio/templates/3BM-Tekenkader-A2-Grootformaat-Renvooi.svg\" --export-type=svg --export-plain-svg --pdf-poppler)",
+      "Bash(ls:*)",
+      "Bash(pdftotext:*)",
+      "Bash(for pdf in \"D:/Repos/\\(Impertio\\)/2D modeler/open-2D-studio/templates/pdf/\"*.pdf)",
+      "Bash(done)",
+      "Bash(\"C:/Program Files/Inkscape/bin/inkscape.exe\" --help)",
+      "Bash(for svg in \"D:/Repos/\\(Impertio\\)/2D modeler/open-2D-studio/templates/\"*.svg)",
+      "Bash(do)",
+      "Bash(pdffonts:*)"
+    ]
+  }
+}

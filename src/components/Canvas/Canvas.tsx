@@ -3,8 +3,8 @@ import { useAppStore } from '../../state/appStore';
 import { CADRenderer } from '../../engine/renderer/CADRenderer';
 import { useCanvasEvents } from '../../hooks/canvas/useCanvasEvents';
 import { useDrawingKeyboard } from '../../hooks/keyboard/useDrawingKeyboard';
-import { DynamicInput } from '../DynamicInput/DynamicInput';
-import { TextEditor } from '../TextEditor/TextEditor';
+import { DynamicInput } from './DynamicInput/DynamicInput';
+import { TextEditor } from '../editors/TextEditor/TextEditor';
 import type { TextShape } from '../../types/geometry';
 import { MM_TO_PIXELS } from '../../engine/renderer/types';
 
@@ -122,6 +122,10 @@ export function Canvas() {
 
     const unsub = useAppStore.subscribe(() => { dirty = true; });
 
+    // Set up callback for when async images (like SVG title blocks) finish loading
+    // This ensures the canvas re-renders after the image is ready
+    renderer.setOnImageLoadCallback(() => { dirty = true; });
+
     const tick = () => {
       if (dirty) {
         // Skip rendering if a transaction is suppressing renders
@@ -174,6 +178,7 @@ export function Canvas() {
             selectedShapeIds: s.selectedShapeIds,
             hoveredShapeId: s.hoveredShapeId,
             viewport: s.viewport,
+            drawingScale: activeDrawing?.scale,
             gridVisible: s.gridVisible,
             gridSize: s.gridSize,
             drawingPreview: s.drawingPreview,
@@ -201,7 +206,11 @@ export function Canvas() {
     };
     rafId = requestAnimationFrame(tick);
 
-    return () => { cancelAnimationFrame(rafId); unsub(); };
+    return () => {
+      cancelAnimationFrame(rafId);
+      unsub();
+      renderer.setOnImageLoadCallback(null);
+    };
   }, []);
 
   // Handle mouse events

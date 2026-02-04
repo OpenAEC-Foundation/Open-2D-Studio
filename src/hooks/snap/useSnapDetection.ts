@@ -17,8 +17,10 @@ export function useSnapDetection() {
   const {
     viewport,
     shapes,
+    activeDrawingId,
     snapEnabled,
     gridSize,
+    gridVisible,
     activeSnaps,
     snapTolerance,
     setCurrentSnapPoint,
@@ -32,6 +34,11 @@ export function useSnapDetection() {
     setTrackingPoint,
     setDirectDistanceAngle,
   } = useAppStore();
+
+  // Filter shapes to only include visible shapes in the current drawing
+  const drawingShapes = shapes.filter(
+    (s) => s.drawingId === activeDrawingId && s.visible
+  );
 
   /**
    * Find and snap to the nearest snap point (geometry or grid), with tracking support
@@ -49,12 +56,14 @@ export function useSnapDetection() {
           polarEnabled: polarTrackingEnabled || orthoMode,
           orthoEnabled: orthoMode,
           objectTrackingEnabled: objectTrackingEnabled,
+          parallelTrackingEnabled: activeSnaps.includes('parallel'), // Respect snap setting
+          perpendicularTrackingEnabled: activeSnaps.includes('perpendicular'), // Respect snap setting
           polarAngleIncrement: orthoMode ? 90 : polarAngleIncrement,
           trackingTolerance: snapTolerance,
         };
 
-        // Convert shapes to format expected by tracking
-        const trackableShapes = shapes
+        // Convert shapes to format expected by tracking (only shapes in current drawing)
+        const trackableShapes = drawingShapes
           .filter((s) => s.type === 'line')
           .map((s) => ({
             id: s.id,
@@ -100,12 +109,26 @@ export function useSnapDetection() {
       if (snapEnabled) {
         const worldTolerance = snapTolerance / viewport.zoom;
 
+        // Calculate adjusted grid size to match visual grid (same logic as GridLayer)
+        let adjustedGridSize = gridSize;
+        while (adjustedGridSize * viewport.zoom < 10) {
+          adjustedGridSize *= 5;
+        }
+        while (adjustedGridSize * viewport.zoom > 100) {
+          adjustedGridSize /= 5;
+        }
+
+        // Only include grid snap if grid is visible
+        const effectiveSnaps = gridVisible
+          ? activeSnaps
+          : activeSnaps.filter(s => s !== 'grid');
+
         const nearestSnap = findNearestSnapPoint(
           usedTracking ? resultPoint : point,
-          shapes,
-          activeSnaps,
+          drawingShapes,
+          effectiveSnaps,
           worldTolerance,
-          gridSize
+          adjustedGridSize
         );
 
         if (nearestSnap) {
@@ -120,10 +143,11 @@ export function useSnapDetection() {
     },
     [
       snapEnabled,
-      shapes,
+      drawingShapes,
       activeSnaps,
       snapTolerance,
       gridSize,
+      gridVisible,
       viewport.zoom,
       setCurrentSnapPoint,
       trackingEnabled,
