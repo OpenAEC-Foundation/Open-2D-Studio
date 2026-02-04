@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Plus, Trash2, Pencil, Check, X, ArrowRightToLine } from 'lucide-react';
 import { useAppStore } from '../../state/appStore';
-import { ScaleSelector } from '../shared/ScaleSelector';
 
 export function DrawingsTab() {
   const {
@@ -15,7 +14,6 @@ export function DrawingsTab() {
     startDrawingPlacement,
     isPlacing,
     placingDrawingId,
-    updateDrawingScale,
   } = useAppStore();
 
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -125,17 +123,6 @@ export function DrawingsTab() {
                   <span className="flex-1 text-xs text-cad-text truncate">
                     {drawing.name}
                   </span>
-
-                  {/* Scale selector */}
-                  <ScaleSelector
-                    value={drawing.scale}
-                    onChange={(scale) => {
-                      updateDrawingScale(drawing.id, scale);
-                    }}
-                    showCategories={false}
-                    allowCustom={true}
-                    className="w-16 text-[10px]"
-                  />
 
                   {/* Place on Sheet button (visible in sheet mode) */}
                   {canPlace && (

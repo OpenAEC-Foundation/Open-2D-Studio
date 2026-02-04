@@ -51,7 +51,12 @@ export interface RenderOptions {
   dpi?: number;
   /** Custom hatch patterns for rendering */
   customPatterns?: CustomHatchPattern[];
+  /** Drawing scale factor for proper text sizing (e.g., 0.01 for 1:100) */
+  drawingScale?: number;
 }
+
+// Reference scale used for text sizing (1:50)
+const REFERENCE_SCALE = 0.02;
 
 export function renderShapesToCanvas(
   ctx: CanvasRenderingContext2D,
@@ -206,7 +211,10 @@ export function renderShapesToCanvas(
         const { position, text, fontSize, fontFamily, rotation, alignment, verticalAlignment, bold, italic, underline, color, lineHeight = 1.2 } = shape;
         ctx.save();
         const textColor = transformColor(color || shape.style.strokeColor, appearance, true);
-        const scaledFontSize = fontSize * scale;
+        // Apply drawing scale factor for proper text sizing (same formula as ShapeRenderer)
+        const drawingScaleFactor = opts.drawingScale ?? REFERENCE_SCALE;
+        const adjustedFontSize = fontSize * (REFERENCE_SCALE / drawingScaleFactor);
+        const scaledFontSize = adjustedFontSize * scale;
         if (rotation !== 0) {
           ctx.translate(tx(position.x), ty(position.y));
           ctx.rotate(rotation);

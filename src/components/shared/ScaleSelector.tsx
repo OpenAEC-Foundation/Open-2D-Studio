@@ -155,7 +155,7 @@ export function ScaleSelector({
         />
         <button
           onClick={handleCustomSubmit}
-          className="px-2 py-1 text-xs bg-cad-primary text-white hover:bg-cad-primary-hover"
+          className="px-2 py-1 text-xs bg-cad-accent text-white hover:bg-cad-accent/80"
           title="Apply"
         >
           OK

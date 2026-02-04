@@ -3,7 +3,7 @@ import { svg2pdf } from 'svg2pdf.js';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { tempDir } from '@tauri-apps/api/path';
-import type { Shape, Sheet } from '../../../types/geometry';
+import type { Shape, Sheet, SheetViewport, Drawing } from '../../../types/geometry';
 import type { ParametricShape, ProfileParametricShape } from '../../../types/parametric';
 import type { CustomHatchPattern } from '../../../types/hatch';
 import type { PrintSettings } from '../../../state/slices/uiSlice';
@@ -232,6 +232,97 @@ function renderParametricShapesToPdf(
 }
 
 /**
+ * Format scale for display (e.g., "1:100" or "2:1")
+ */
+function formatScale(scale: number): string {
+  if (scale >= 1) {
+    return `${scale}:1`;
+  }
+  const inverse = Math.round(1 / scale);
+  return `1:${inverse}`;
+}
+
+/**
+ * Render viewport title to PDF
+ */
+function renderViewportTitleToPdf(
+  doc: jsPDF,
+  vp: SheetViewport,
+  drawingName: string,
+  totalViewportsOnSheet: number
+): void {
+  // Check title visibility
+  const titleVisibility = vp.titleVisibility ?? 'always';
+  const shouldShowTitle =
+    titleVisibility === 'always' ||
+    (titleVisibility === 'whenMultiple' && totalViewportsOnSheet > 1);
+
+  if (!shouldShowTitle) return;
+
+  const showExtensionLine = vp.showExtensionLine ?? true;
+  const showScale = vp.showScale ?? true;
+  const title = vp.customTitle || drawingName;
+
+  // Viewport position and dimensions in mm
+  const vpX = vp.x;
+  const vpBottomY = vp.y + vp.height;
+  const vpWidth = vp.width;
+
+  // Calculate extension line length
+  const extensionLineLength = vp.extensionLineLength ?? vpWidth;
+
+  // Vertical spacing (in mm)
+  const lineY = vpBottomY + 2;
+  const titleY = showExtensionLine ? lineY + 4 : vpBottomY + 4;
+  const scaleY = titleY + 3;
+
+  // Draw extension line (if enabled)
+  if (showExtensionLine) {
+    doc.setDrawColor(51, 51, 51); // #333333
+    doc.setLineWidth(0.2);
+    doc.line(vpX, lineY, vpX + extensionLineLength, lineY);
+  }
+
+  // Calculate text start position
+  let textStartX = vpX;
+
+  // Draw reference number in circle if present
+  if (vp.referenceNumber) {
+    const circleX = vpX + 3;
+    const circleY = titleY - 1;
+    const circleRadius = 2.5;
+
+    // Draw circle
+    doc.setDrawColor(51, 51, 51);
+    doc.setLineWidth(0.3);
+    doc.circle(circleX, circleY, circleRadius, 'S');
+
+    // Draw reference number text centered in circle
+    doc.setTextColor(51, 51, 51);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text(vp.referenceNumber, circleX, circleY, { align: 'center', baseline: 'middle' });
+
+    // Move text start position to after the circle
+    textStartX = circleX + circleRadius + 2;
+  }
+
+  // Draw title
+  doc.setTextColor(51, 51, 51);
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+  doc.text(title, textStartX, titleY);
+
+  // Draw scale (if enabled)
+  if (showScale) {
+    const scaleText = `Scale: ${formatScale(vp.scale)}`;
+    doc.setTextColor(102, 102, 102); // #666666
+    doc.setFontSize(7);
+    doc.text(scaleText, textStartX, scaleY);
+  }
+}
+
+/**
  * Render a sheet to PDF using vector primitives (with title block and viewports)
  */
 async function renderSheetPageVector(
@@ -241,6 +332,7 @@ async function renderSheetPageVector(
   allParametricShapes: ParametricShape[],
   settings: PrintSettings,
   customPatterns?: CustomHatchPattern[],
+  drawings?: Drawing[],
 ): Promise<void> {
   const sheetPaper = PAPER_SIZES[sheet.paperSize];
   if (!sheetPaper) throw new Error(`Unknown paper size: ${sheet.paperSize}`);
@@ -271,9 +363,16 @@ async function renderSheetPageVector(
     }
   }
 
+  // Count visible viewports for "whenMultiple" title visibility
+  const visibleViewports = sheet.viewports.filter(v => v.visible);
+  const totalViewportsOnSheet = visibleViewports.length;
+
   // Render viewports using vector graphics
   for (const vp of sheet.viewports) {
     if (!vp.visible) continue;
+
+    // Get the drawing for this viewport (needed for scale and name)
+    const drawing = drawings?.find(d => d.id === vp.drawingId);
 
     // Get shapes for this viewport
     const vpShapes = allShapes.filter(s => s.drawingId === vp.drawingId && s.visible);
@@ -303,6 +402,7 @@ async function renderSheetPageVector(
         plotLineweights: settings.plotLineweights,
         minLineWidthMM: 0.1,
         customPatterns,
+        drawingScale: drawing?.scale, // Pass drawing scale for proper text sizing
       };
 
       renderShapesToPdf(doc, vpShapes, renderOpts);
@@ -317,6 +417,10 @@ async function renderSheetPageVector(
 
       doc.restoreGraphicsState();
     }
+
+    // Render viewport title (respects titleVisibility, showScale, showExtensionLine properties)
+    const drawingName = drawing?.name || 'Untitled';
+    renderViewportTitleToPdf(doc, vp, drawingName, totalViewportsOnSheet);
   }
 }
 
@@ -369,12 +473,13 @@ export async function exportToPDF(options: {
   sheets?: Sheet[];
   allShapes?: Shape[];
   allParametricShapes?: ParametricShape[];
+  drawings?: Drawing[];
   settings: PrintSettings;
   projectName: string;
   activeSheet?: Sheet | null;
   customPatterns?: CustomHatchPattern[];
 }): Promise<string | null> {
-  const { shapes, sheets, allShapes, allParametricShapes = [], settings, projectName, activeSheet, customPatterns } = options;
+  const { shapes, sheets, allShapes, allParametricShapes = [], drawings, settings, projectName, activeSheet, customPatterns } = options;
 
   const paper = PAPER_SIZES[settings.paperSize];
   if (!paper) throw new Error(`Unknown paper size: ${settings.paperSize}`);
@@ -408,7 +513,7 @@ export async function exportToPDF(options: {
       firstPage = false;
 
       // Use vector rendering for sheet content
-      await renderSheetPageVector(doc, sheet, allShapes, allParametricShapes, settings, customPatterns);
+      await renderSheetPageVector(doc, sheet, allShapes, allParametricShapes, settings, customPatterns, drawings);
     }
   } else if (activeSheet && allShapes) {
     // Export current active sheet using vector rendering
@@ -422,7 +527,7 @@ export async function exportToPDF(options: {
     doc.internal.pageSize.height = sheetHeightMM;
 
     // Use vector rendering for sheet content
-    await renderSheetPageVector(doc, activeSheet, allShapes, allParametricShapes, settings, customPatterns);
+    await renderSheetPageVector(doc, activeSheet, allShapes, allParametricShapes, settings, customPatterns, drawings);
   } else {
     // Export drawing shapes only (no sheet) using vector rendering
     renderPageVector(doc, shapes, settings, paperWidthMM, paperHeightMM, customPatterns);
@@ -450,12 +555,13 @@ export async function generatePDFForPrint(options: {
   sheets?: Sheet[];
   allShapes?: Shape[];
   allParametricShapes?: ParametricShape[];
+  drawings?: Drawing[];
   settings: PrintSettings;
   projectName: string;
   activeSheet?: Sheet | null;
   customPatterns?: CustomHatchPattern[];
 }): Promise<string> {
-  const { shapes, sheets, allShapes, allParametricShapes = [], settings, projectName, activeSheet, customPatterns } = options;
+  const { shapes, sheets, allShapes, allParametricShapes = [], drawings, settings, projectName, activeSheet, customPatterns } = options;
 
   const paper = PAPER_SIZES[settings.paperSize];
   if (!paper) throw new Error(`Unknown paper size: ${settings.paperSize}`);
@@ -489,7 +595,7 @@ export async function generatePDFForPrint(options: {
       firstPage = false;
 
       // Use vector rendering for sheet content
-      await renderSheetPageVector(doc, sheet, allShapes, allParametricShapes, settings, customPatterns);
+      await renderSheetPageVector(doc, sheet, allShapes, allParametricShapes, settings, customPatterns, drawings);
     }
   } else if (activeSheet && allShapes) {
     // Export current active sheet using vector rendering
@@ -503,7 +609,7 @@ export async function generatePDFForPrint(options: {
     doc.internal.pageSize.height = sheetHeightMM;
 
     // Use vector rendering for sheet content
-    await renderSheetPageVector(doc, activeSheet, allShapes, allParametricShapes, settings, customPatterns);
+    await renderSheetPageVector(doc, activeSheet, allShapes, allParametricShapes, settings, customPatterns, drawings);
   } else {
     // Export drawing shapes only (no sheet) using vector rendering
     renderPageVector(doc, shapes, settings, paperWidthMM, paperHeightMM, customPatterns);

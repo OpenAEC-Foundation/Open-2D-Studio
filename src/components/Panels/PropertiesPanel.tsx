@@ -224,6 +224,211 @@ function ParametricShapeProperties({ shape }: { shape: ParametricShape }) {
   );
 }
 
+// Component for editing common properties when multiple shapes of the same type are selected
+function MultiSelectShapeProperties({
+  shapes,
+  updateShape
+}: {
+  shapes: Shape[];
+  updateShape: (id: string, updates: Partial<Shape>) => void;
+}) {
+  const updateAll = (updates: Record<string, unknown>) => {
+    shapes.forEach(shape => updateShape(shape.id, updates as Partial<Shape>));
+  };
+
+  const shapeType = shapes[0]?.type;
+  if (!shapeType) return null;
+
+  // Get common value or return undefined if values differ
+  const getCommonValue = <T,>(getter: (shape: Shape) => T): T | undefined => {
+    const firstValue = getter(shapes[0]);
+    const allSame = shapes.every(s => getter(s) === firstValue);
+    return allSame ? firstValue : undefined;
+  };
+
+  switch (shapeType) {
+    case 'text': {
+      const textShapes = shapes as Extract<Shape, { type: 'text' }>[];
+      const commonFontFamily = getCommonValue(s => (s as typeof textShapes[0]).fontFamily);
+      const commonFontSize = getCommonValue(s => (s as typeof textShapes[0]).fontSize);
+      const commonLineHeight = getCommonValue(s => (s as typeof textShapes[0]).lineHeight);
+      const commonBold = getCommonValue(s => (s as typeof textShapes[0]).bold);
+      const commonItalic = getCommonValue(s => (s as typeof textShapes[0]).italic);
+      const commonUnderline = getCommonValue(s => (s as typeof textShapes[0]).underline);
+      const commonColor = getCommonValue(s => (s as typeof textShapes[0]).color);
+      const commonAlignment = getCommonValue(s => (s as typeof textShapes[0]).alignment);
+      const commonVerticalAlignment = getCommonValue(s => (s as typeof textShapes[0]).verticalAlignment);
+
+      return (
+        <>
+          <TextField
+            label="Font Family"
+            value={commonFontFamily ?? ''}
+            onChange={(v) => updateAll({ fontFamily: v })}
+          />
+          <NumberField
+            label="Font Size"
+            value={commonFontSize ?? textShapes[0].fontSize}
+            onChange={(v) => updateAll({ fontSize: v })}
+            step={1}
+            min={1}
+          />
+          <NumberField
+            label="Line Height"
+            value={commonLineHeight ?? textShapes[0].lineHeight}
+            onChange={(v) => updateAll({ lineHeight: v })}
+            step={0.1}
+            min={0.5}
+          />
+          <div className="mb-2 flex items-center gap-3">
+            <CheckboxField
+              label="Bold"
+              value={commonBold ?? false}
+              onChange={(v) => updateAll({ bold: v })}
+            />
+            <CheckboxField
+              label="Italic"
+              value={commonItalic ?? false}
+              onChange={(v) => updateAll({ italic: v })}
+            />
+            <CheckboxField
+              label="Underline"
+              value={commonUnderline ?? false}
+              onChange={(v) => updateAll({ underline: v })}
+            />
+          </div>
+          <ColorPalette
+            label="Text Color"
+            value={commonColor ?? textShapes[0].color}
+            onChange={(v) => updateAll({ color: v })}
+          />
+          <SelectField
+            label="Alignment"
+            value={commonAlignment ?? 'left'}
+            options={[
+              { value: 'left', label: 'Left' },
+              { value: 'center', label: 'Center' },
+              { value: 'right', label: 'Right' }
+            ] as { value: TextAlignment; label: string }[]}
+            onChange={(v) => updateAll({ alignment: v })}
+          />
+          <SelectField
+            label="Vertical Alignment"
+            value={commonVerticalAlignment ?? 'top'}
+            options={[
+              { value: 'top', label: 'Top' },
+              { value: 'middle', label: 'Middle' },
+              { value: 'bottom', label: 'Bottom' }
+            ] as { value: TextVerticalAlignment; label: string }[]}
+            onChange={(v) => updateAll({ verticalAlignment: v })}
+          />
+        </>
+      );
+    }
+
+    case 'circle': {
+      const circleShapes = shapes as Extract<Shape, { type: 'circle' }>[];
+      const commonRadius = getCommonValue(s => (s as typeof circleShapes[0]).radius);
+      return (
+        <>
+          <NumberField
+            label="Radius"
+            value={commonRadius ?? circleShapes[0].radius}
+            onChange={(v) => updateAll({ radius: v })}
+            step={0.1}
+            min={0.1}
+          />
+        </>
+      );
+    }
+
+    case 'rectangle': {
+      const rectShapes = shapes as Extract<Shape, { type: 'rectangle' }>[];
+      const commonWidth = getCommonValue(s => (s as typeof rectShapes[0]).width);
+      const commonHeight = getCommonValue(s => (s as typeof rectShapes[0]).height);
+      const commonRotation = getCommonValue(s => (s as typeof rectShapes[0]).rotation);
+      return (
+        <>
+          <NumberField
+            label="Width"
+            value={commonWidth ?? rectShapes[0].width}
+            onChange={(v) => updateAll({ width: v })}
+            step={0.1}
+            min={0.1}
+          />
+          <NumberField
+            label="Height"
+            value={commonHeight ?? rectShapes[0].height}
+            onChange={(v) => updateAll({ height: v })}
+            step={0.1}
+            min={0.1}
+          />
+          <NumberField
+            label="Rotation (deg)"
+            value={(commonRotation ?? rectShapes[0].rotation) * RAD2DEG}
+            onChange={(v) => updateAll({ rotation: v * DEG2RAD })}
+            step={1}
+          />
+        </>
+      );
+    }
+
+    case 'hatch': {
+      const hatchShapes = shapes as Extract<Shape, { type: 'hatch' }>[];
+      const commonPatternType = getCommonValue(s => (s as typeof hatchShapes[0]).patternType);
+      const commonPatternAngle = getCommonValue(s => (s as typeof hatchShapes[0]).patternAngle);
+      const commonPatternScale = getCommonValue(s => (s as typeof hatchShapes[0]).patternScale);
+      const commonFillColor = getCommonValue(s => (s as typeof hatchShapes[0]).fillColor);
+      const commonBackgroundColor = getCommonValue(s => (s as typeof hatchShapes[0]).backgroundColor);
+      return (
+        <>
+          <SelectField
+            label="Pattern Type"
+            value={commonPatternType ?? 'solid'}
+            options={[
+              { value: 'solid', label: 'Solid' },
+              { value: 'hatch', label: 'Hatch' },
+              { value: 'crosshatch', label: 'Crosshatch' },
+              { value: 'dots', label: 'Dots' },
+              { value: 'custom', label: 'Custom' },
+            ] as { value: HatchPatternType; label: string }[]}
+            onChange={(v) => updateAll({ patternType: v })}
+          />
+          <NumberField
+            label="Pattern Angle (deg)"
+            value={commonPatternAngle ?? 0}
+            onChange={(v) => updateAll({ patternAngle: v })}
+            step={15}
+          />
+          <NumberField
+            label="Pattern Scale"
+            value={commonPatternScale ?? 1}
+            onChange={(v) => updateAll({ patternScale: v })}
+            step={0.1}
+            min={0.1}
+          />
+          <ColorPalette
+            label="Fill Color"
+            value={commonFillColor ?? hatchShapes[0].fillColor}
+            onChange={(v) => updateAll({ fillColor: v })}
+          />
+          {commonPatternType !== 'solid' && (
+            <ColorPalette
+              label="Background Color"
+              value={commonBackgroundColor ?? 'transparent'}
+              onChange={(v) => updateAll({ backgroundColor: v })}
+            />
+          )}
+        </>
+      );
+    }
+
+    // For other shape types, no additional common properties to edit
+    default:
+      return null;
+  }
+}
+
 function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (id: string, updates: Partial<Shape>) => void }) {
   const update = (updates: Record<string, unknown>) => updateShape(shape.id, updates as Partial<Shape>);
 
@@ -525,7 +730,7 @@ export const PropertiesPanel = memo(function PropertiesPanel() {
           </select>
         </div>
 
-        {/* Shape-specific properties */}
+        {/* Shape-specific properties - single selection */}
         {selectedShapes.length === 1 && selectedParametricShapes.length === 0 && (
           <div className="mt-4 pt-4 border-t border-cad-border">
             <h4 className="text-xs font-semibold text-cad-text mb-2">
@@ -536,6 +741,23 @@ export const PropertiesPanel = memo(function PropertiesPanel() {
             <ShapeProperties shape={selectedShapes[0]} updateShape={updateShape} />
           </div>
         )}
+
+        {/* Shape-specific properties - multi-selection of same type */}
+        {selectedShapes.length > 1 && selectedParametricShapes.length === 0 && (() => {
+          const firstType = selectedShapes[0].type;
+          const allSameType = selectedShapes.every(s => s.type === firstType);
+          if (!allSameType) return null;
+
+          return (
+            <div className="mt-4 pt-4 border-t border-cad-border">
+              <h4 className="text-xs font-semibold text-cad-text mb-2">
+                {firstType.charAt(0).toUpperCase() + firstType.slice(1)} Properties
+                <span className="font-normal text-cad-text-dim ml-1">({selectedShapes.length} selected)</span>
+              </h4>
+              <MultiSelectShapeProperties shapes={selectedShapes} updateShape={updateShape} />
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

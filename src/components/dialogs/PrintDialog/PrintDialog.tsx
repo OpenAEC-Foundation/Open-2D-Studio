@@ -39,6 +39,7 @@ export function PrintDialog({ isOpen, onClose }: PrintDialogProps) {
   const viewport = useAppStore(s => s.viewport);
   const canvasSize = useAppStore(s => s.canvasSize);
   const sheets = useAppStore(s => s.sheets);
+  const drawings = useAppStore(s => s.drawings);
   const activeDrawingId = useAppStore(s => s.activeDrawingId);
   const activeSheetId = useAppStore(s => s.activeSheetId);
   const editorMode = useAppStore(s => s.editorMode);
@@ -385,6 +386,10 @@ export function PrintDialog({ isOpen, onClose }: PrintDialogProps) {
     // Draw viewports
     for (const vp of sheet.viewports) {
       if (!vp.visible) continue;
+
+      // Get the drawing for this viewport (needed for scale)
+      const vpDrawing = drawings.find(d => d.id === vp.drawingId);
+
       const vpX = vp.x * MM;
       const vpY = vp.y * MM;
       const vpW = vp.width * MM;
@@ -415,6 +420,7 @@ export function PrintDialog({ isOpen, onClose }: PrintDialogProps) {
           appearance: settings.appearance,
           plotLineweights: settings.plotLineweights,
           customPatterns: [...userPatterns, ...projectPatterns],
+          drawingScale: vpDrawing?.scale, // Pass drawing scale for proper text sizing
         });
 
         // Render parametric shapes
@@ -590,7 +596,7 @@ export function PrintDialog({ isOpen, onClose }: PrintDialogProps) {
       }
       }
     }
-  }, [shapes, parametricShapes, settings.appearance, settings.plotLineweights, userPatterns, projectPatterns]);
+  }, [shapes, parametricShapes, drawings, settings.appearance, settings.plotLineweights, userPatterns, projectPatterns]);
 
   // Helper to render SVG template to canvas (returns Promise for async loading)
   const renderSvgToCanvas = useCallback((
@@ -644,6 +650,7 @@ export function PrintDialog({ isOpen, onClose }: PrintDialogProps) {
         sheets: settings.printRange === 'selectedSheets' ? sheets : undefined,
         allShapes: shapes,
         allParametricShapes: parametricShapes,
+        drawings,
         settings,
         projectName,
         activeSheet: isSheetMode ? activeSheet : null,
@@ -678,6 +685,7 @@ export function PrintDialog({ isOpen, onClose }: PrintDialogProps) {
         sheets: settings.printRange === 'selectedSheets' ? sheets : undefined,
         allShapes: shapes,
         allParametricShapes: parametricShapes,
+        drawings,
         settings,
         projectName,
         activeSheet: isSheetMode ? activeSheet : null,

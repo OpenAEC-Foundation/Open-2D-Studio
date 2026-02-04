@@ -90,7 +90,7 @@ export function SheetPropertiesPanel() {
           <h4 className="font-medium text-cad-text">Viewports</h4>
           <button
             onClick={() => setIsAddingViewport(true)}
-            className="px-2 py-1 text-xs bg-cad-primary hover:bg-cad-primary-hover text-white"
+            className="px-2 py-1 text-xs bg-cad-accent hover:bg-cad-accent/80 text-white"
             title="Add Viewport"
           >
             + Add
@@ -114,7 +114,7 @@ export function SheetPropertiesPanel() {
               <button
                 onClick={handleAddViewport}
                 disabled={!newViewportDrawingId}
-                className="flex-1 px-2 py-1 text-xs bg-cad-primary hover:bg-cad-primary-hover disabled:bg-cad-input disabled:text-cad-text-dim text-white"
+                className="flex-1 px-2 py-1 text-xs bg-cad-accent hover:bg-cad-accent/80 disabled:bg-cad-input disabled:text-cad-text-dim text-white"
               >
                 Create
               </button>
@@ -142,7 +142,7 @@ export function SheetPropertiesPanel() {
                   onClick={() => selectViewport(isSelected ? null : vp.id)}
                   className={`flex items-center justify-between px-2 py-1 cursor-pointer ${
                     isSelected
-                      ? 'bg-cad-primary text-white'
+                      ? 'bg-cad-accent text-white'
                       : 'bg-cad-input hover:bg-cad-hover text-cad-text'
                   }`}
                 >
@@ -169,7 +169,7 @@ export function SheetPropertiesPanel() {
         <div className="p-3 border-b border-cad-border">
           <div className="flex items-center justify-between mb-2">
             <h4 className="font-medium text-cad-text">Viewport Properties</h4>
-            <span className="text-xs px-1.5 py-0.5 bg-cad-primary/20 text-cad-primary border border-cad-primary/30">
+            <span className="text-xs px-1.5 py-0.5 bg-cad-accent/20 text-cad-accent border border-cad-accent/30">
               Selected
             </span>
           </div>
@@ -398,7 +398,7 @@ function CropRegionSection({
           {isEditing ? (
             <button
               onClick={onEndEdit}
-              className="flex-1 px-2 py-1.5 text-xs bg-cad-primary text-white"
+              className="flex-1 px-2 py-1.5 text-xs bg-cad-accent text-white"
             >
               Done Editing
             </button>

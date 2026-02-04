@@ -492,7 +492,7 @@ export function TerminalPanel({ isOpen, onClose, height, onHeightChange }: Termi
 
   return (
     <div
-      className="flex flex-col bg-[#1e1e1e] border-t border-cad-border"
+      className="flex flex-col bg-cad-bg border-t border-cad-border"
       style={{ height: panelHeight }}
     >
       {/* Resize handle */}

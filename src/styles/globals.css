@@ -2,19 +2,154 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
+/* ============================================================================
+   Theme CSS Variables
+   ============================================================================ */
+
+:root,
+[data-theme="dark"] {
+  /* Dark theme (default) */
+  --theme-bg: #1a1a2e;
+  --theme-surface: #16213e;
+  --theme-surface-elevated: #1e293b;
+  --theme-border: #0f3460;
+  --theme-border-light: #334155;
+  --theme-accent: #e94560;
+  --theme-accent-hover: #d63d56;
+  --theme-text: #eaeaea;
+  --theme-text-dim: #8b8b8b;
+  --theme-text-muted: #64748b;
+  --theme-grid: #2a2a4a;
+  --theme-grid-major: #3a3a5a;
+  --theme-input-bg: #0f172a;
+  --theme-hover: #334155;
+  --theme-active: #3b82f6;
+  --theme-active-border: #60a5fa;
+  --theme-dropdown-bg: #1e293b;
+  --theme-scrollbar-track: #16213e;
+  --theme-scrollbar-thumb: #0f3460;
+  --theme-ribbon-bg: linear-gradient(to bottom, #1e293b 0%, #172033 100%);
+  --theme-ribbon-tab-bg: linear-gradient(to bottom, #1e293b 0%, #1a2436 100%);
+  --theme-ribbon-content-bg: #172033;
+  --theme-file-tab-bg: #a82d6e;
+  --theme-file-tab-hover: #922560;
+
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-
   color-scheme: dark;
-  color: #eaeaea;
-  background-color: #1a1a2e;
+  color: var(--theme-text);
+  background-color: var(--theme-bg);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+[data-theme="light"] {
+  /* Light theme */
+  --theme-bg: #f5f5f5;
+  --theme-surface: #ffffff;
+  --theme-surface-elevated: #fafafa;
+  --theme-border: #d1d5db;
+  --theme-border-light: #e5e7eb;
+  --theme-accent: #e94560;
+  --theme-accent-hover: #d63d56;
+  --theme-text: #1f2937;
+  --theme-text-dim: #6b7280;
+  --theme-text-muted: #9ca3af;
+  --theme-grid: #e0e0e0;
+  --theme-grid-major: #c0c0c0;
+  --theme-input-bg: #ffffff;
+  --theme-hover: #e5e7eb;
+  --theme-active: #3b82f6;
+  --theme-active-border: #2563eb;
+  --theme-dropdown-bg: #ffffff;
+  --theme-scrollbar-track: #f3f4f6;
+  --theme-scrollbar-thumb: #9ca3af;
+  --theme-ribbon-bg: linear-gradient(to bottom, #ffffff 0%, #f5f5f5 100%);
+  --theme-ribbon-tab-bg: linear-gradient(to bottom, #f5f5f5 0%, #eeeeee 100%);
+  --theme-ribbon-content-bg: #ffffff;
+  --theme-file-tab-bg: #a82d6e;
+  --theme-file-tab-hover: #922560;
+
+  color-scheme: light;
+  color: var(--theme-text);
+  background-color: var(--theme-bg);
+}
+
+[data-theme="blue"] {
+  /* Blue theme (DevExpress-like) */
+  --theme-bg: #0d1b2a;
+  --theme-surface: #1b263b;
+  --theme-surface-elevated: #253a52;
+  --theme-border: #2c4a6b;
+  --theme-border-light: #3d5a80;
+  --theme-accent: #00b4d8;
+  --theme-accent-hover: #0096c7;
+  --theme-text: #e0e1dd;
+  --theme-text-dim: #98c1d9;
+  --theme-text-muted: #778da9;
+  --theme-grid: #1b3a4a;
+  --theme-grid-major: #2b4a5a;
+  --theme-input-bg: #0d1b2a;
+  --theme-hover: #3d5a80;
+  --theme-active: #0077b6;
+  --theme-active-border: #00b4d8;
+  --theme-dropdown-bg: #1b263b;
+  --theme-scrollbar-track: #1b263b;
+  --theme-scrollbar-thumb: #3d5a80;
+  --theme-ribbon-bg: linear-gradient(to bottom, #253a52 0%, #1b263b 100%);
+  --theme-ribbon-tab-bg: linear-gradient(to bottom, #253a52 0%, #1f3044 100%);
+  --theme-ribbon-content-bg: #1b263b;
+  --theme-file-tab-bg: #0077b6;
+  --theme-file-tab-hover: #005f8a;
+
+  color-scheme: dark;
+  color: var(--theme-text);
+  background-color: var(--theme-bg);
+}
+
+[data-theme="highContrast"] {
+  /* High Contrast theme */
+  --theme-bg: #000000;
+  --theme-surface: #0a0a0a;
+  --theme-surface-elevated: #141414;
+  --theme-border: #ffffff;
+  --theme-border-light: #cccccc;
+  --theme-accent: #ffff00;
+  --theme-accent-hover: #ffcc00;
+  --theme-text: #ffffff;
+  --theme-text-dim: #cccccc;
+  --theme-text-muted: #999999;
+  --theme-grid: #333333;
+  --theme-grid-major: #555555;
+  --theme-input-bg: #000000;
+  --theme-hover: #333333;
+  --theme-active: #ffff00;
+  --theme-active-border: #ffff00;
+  --theme-dropdown-bg: #0a0a0a;
+  --theme-scrollbar-track: #0a0a0a;
+  --theme-scrollbar-thumb: #ffffff;
+  --theme-ribbon-bg: linear-gradient(to bottom, #141414 0%, #0a0a0a 100%);
+  --theme-ribbon-tab-bg: linear-gradient(to bottom, #141414 0%, #0d0d0d 100%);
+  --theme-ribbon-content-bg: #0a0a0a;
+  --theme-file-tab-bg: #ffff00;
+  --theme-file-tab-hover: #ffcc00;
+
+  color-scheme: dark;
+  color: var(--theme-text);
+  background-color: var(--theme-bg);
+}
+
+/* High Contrast special styles */
+[data-theme="highContrast"] .ribbon-tab.file {
+  color: #000000;
+}
+
+[data-theme="highContrast"] .ribbon-btn.active {
+  color: #000000;
 }
 
 * {
@@ -37,23 +172,23 @@ body,
   -webkit-user-select: none;
 }
 
-/* Custom scrollbar for dark theme */
+/* Custom scrollbar - theme-aware */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #16213e;
+  background: var(--theme-scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #0f3460;
+  background: var(--theme-scrollbar-thumb);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #e94560;
+  background: var(--theme-accent);
 }
 
 /* Canvas cursor styles */

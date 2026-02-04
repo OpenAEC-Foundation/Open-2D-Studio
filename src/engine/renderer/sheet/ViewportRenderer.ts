@@ -257,6 +257,11 @@ export class ViewportRenderer extends BaseRenderer {
       ctx.clip();
     }
 
+    // Set drawing scale for proper text sizing (must match DrawingRenderer behavior)
+    if (drawing?.scale) {
+      this.shapeRenderer.setDrawingScale(drawing.scale);
+    }
+
     // Draw shapes (invertColors=true to convert white strokes to black on white paper)
     for (const shape of drawingShapes) {
       this.shapeRenderer.drawShapeSimple(shape, true);
@@ -302,7 +307,7 @@ export class ViewportRenderer extends BaseRenderer {
       this.drawLayerOverrideIndicator(vpX + vpWidth - 36 / sheetZoom, vpY + 4 / sheetZoom, sheetZoom);
     }
 
-    // Draw viewport title in Revit style (below viewport)
+    // Draw viewport title (below viewport with extension line)
     const drawingForLabel = drawings.find(d => d.id === vp.drawingId);
     if (drawingForLabel) {
       // Determine if title should be shown based on visibility setting
@@ -313,7 +318,7 @@ export class ViewportRenderer extends BaseRenderer {
         (titleVisibility === 'whenMultiple' && totalViewports > 1);
 
       if (shouldShowTitle) {
-        this.drawRevitStyleViewportTitle(
+        this.drawViewportTitle(
           vpX,
           vpY + vpHeight,
           vpWidth,
@@ -383,13 +388,13 @@ export class ViewportRenderer extends BaseRenderer {
   }
 
   /**
-   * Draw viewport title in Revit style (below viewport with extension line)
+   * Draw viewport title (below viewport with extension line)
    * Format:
    *   ─────────────────────────  ← Extension line (optional)
    *   ①  View Name               ← Reference number + Title
    *      Scale: 1:50             ← Scale (optional)
    */
-  private drawRevitStyleViewportTitle(
+  private drawViewportTitle(
     vpX: number,
     vpBottomY: number,
     vpWidth: number,

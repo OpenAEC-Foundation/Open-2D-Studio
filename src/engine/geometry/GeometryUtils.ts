@@ -58,8 +58,9 @@ export function isPointNearHatch(point: Point, shape: HatchShape, tolerance: num
 
 /**
  * Check if a point is near a shape (for hit testing)
+ * @param drawingScale - Optional drawing scale for text annotation scaling
  */
-export function isPointNearShape(point: Point, shape: Shape, tolerance: number = 5): boolean {
+export function isPointNearShape(point: Point, shape: Shape, tolerance: number = 5, drawingScale?: number): boolean {
   switch (shape.type) {
     case 'line':
       return isPointNearLine(point, shape.start, shape.end, tolerance);
@@ -76,7 +77,7 @@ export function isPointNearShape(point: Point, shape: Shape, tolerance: number =
     case 'ellipse':
       return isPointNearEllipse(point, shape, tolerance);
     case 'text':
-      return isPointNearText(point, shape, tolerance);
+      return isPointNearText(point, shape, tolerance, drawingScale);
     case 'dimension':
       return isPointNearDimension(point, shape, tolerance);
     case 'hatch':
@@ -447,22 +448,33 @@ function getMeasureCtx(): OffscreenCanvasRenderingContext2D {
   return _measureCtx;
 }
 
+// Reference scale for annotation text (1:50) - must match ShapeRenderer.REFERENCE_SCALE
+const TEXT_REFERENCE_SCALE = 0.02;
+
 /**
  * Get accurate bounding box of a text shape using canvas measurement
+ * @param shape - The text shape
+ * @param drawingScale - Optional drawing scale (for annotation text scaling)
  */
-export function getTextBounds(shape: TextShape): ShapeBounds | null {
-  const { position, text, fontSize, fontFamily = 'Arial', alignment, verticalAlignment, bold, italic, lineHeight = 1.2 } = shape;
+export function getTextBounds(shape: TextShape, drawingScale?: number): ShapeBounds | null {
+  const { position, text, fontSize, fontFamily = 'Arial', alignment, verticalAlignment, bold, italic, lineHeight = 1.2, isModelText = false } = shape;
 
   if (!text) return null;
 
+  // Calculate effective font size (same logic as ShapeRenderer.drawText)
+  // Annotation text scales relative to reference scale; model text uses fontSize directly
+  const effectiveFontSize = isModelText || !drawingScale
+    ? fontSize
+    : fontSize * (TEXT_REFERENCE_SCALE / drawingScale);
+
   const ctx = getMeasureCtx();
   const fontStyle = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}`;
-  ctx.font = `${fontStyle}${fontSize}px ${fontFamily}`;
+  ctx.font = `${fontStyle}${effectiveFontSize}px ${fontFamily}`;
   ctx.textBaseline = verticalAlignment === 'middle' ? 'middle' :
                      verticalAlignment === 'bottom' ? 'bottom' : 'top';
 
   const lines = text.split('\n');
-  const actualLineHeight = fontSize * lineHeight;
+  const actualLineHeight = effectiveFontSize * lineHeight;
 
   // Measure width and vertical extents using actual font metrics
   let maxWidth = 0;
@@ -492,9 +504,10 @@ export function getTextBounds(shape: TextShape): ShapeBounds | null {
 
 /**
  * Check if a point is near a text shape (within bounding box)
+ * @param drawingScale - Optional drawing scale for annotation text scaling
  */
-export function isPointNearText(point: Point, shape: TextShape, tolerance: number = 5): boolean {
-  const bounds = getTextBounds(shape);
+export function isPointNearText(point: Point, shape: TextShape, tolerance: number = 5, drawingScale?: number): boolean {
+  const bounds = getTextBounds(shape, drawingScale);
   if (!bounds) return false;
 
   return (
@@ -840,8 +853,9 @@ export function isPointNearParametricShape(
 
 /**
  * Get bounding box of a shape
+ * @param drawingScale - Optional drawing scale for text annotation scaling
  */
-export function getShapeBounds(shape: Shape): ShapeBounds | null {
+export function getShapeBounds(shape: Shape, drawingScale?: number): ShapeBounds | null {
   switch (shape.type) {
     case 'line':
       return {
@@ -995,7 +1009,7 @@ export function getShapeBounds(shape: Shape): ShapeBounds | null {
       };
     }
     case 'text':
-      return getTextBounds(shape);
+      return getTextBounds(shape, drawingScale);
     case 'point':
       return {
         minX: shape.position.x,

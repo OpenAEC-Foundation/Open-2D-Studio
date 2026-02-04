@@ -7,13 +7,13 @@ import { StatusBar } from './components/layout/StatusBar/StatusBar';
 import { FileTabBar } from './components/layout/FileTabBar/FileTabBar';
 
 // Canvas components
-import { Canvas } from './components/canvas/Canvas';
-import { OptionsBar } from './components/canvas/OptionsBar/OptionsBar';
+import { Canvas } from './components/Canvas/Canvas';
+import { OptionsBar } from './components/Canvas/OptionsBar/OptionsBar';
 
 // Panel components
-import { NavigationPanel } from './components/panels/NavigationPanel';
-import { SheetPropertiesPanel } from './components/panels/SheetPropertiesPanel';
-import { RightPanelLayout } from './components/panels/RightPanelLayout';
+import { NavigationPanel } from './components/Panels/NavigationPanel';
+import { SheetPropertiesPanel } from './components/Panels/SheetPropertiesPanel';
+import { RightPanelLayout } from './components/Panels/RightPanelLayout';
 
 // Dialog components
 import { PrintDialog } from './components/dialogs/PrintDialog/PrintDialog';
@@ -36,6 +36,12 @@ function App() {
   // Initialize keyboard shortcuts
   useKeyboardShortcuts();
   useGlobalKeyboard();
+
+  // Apply theme on mount
+  const uiTheme = useAppStore(s => s.uiTheme);
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', uiTheme);
+  }, [uiTheme]);
 
   // Backstage view
   const [backstageOpen, setBackstageOpen] = useState(false);

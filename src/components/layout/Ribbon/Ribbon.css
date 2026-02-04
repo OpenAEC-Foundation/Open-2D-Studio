@@ -1,16 +1,16 @@
-/* Ribbon Container - Dark VS Code-inspired theme */
+/* Ribbon Container - Theme-aware */
 .ribbon-container {
-  background: linear-gradient(to bottom, #1e293b 0%, #172033 100%);
-  border-bottom: 1px solid #334155;
+  background: var(--theme-ribbon-bg);
+  border-bottom: 1px solid var(--theme-border-light);
   flex-shrink: 0;
   user-select: none;
   cursor: default;
 }
 
-/* Ribbon Tabs - Dark navy theme */
+/* Ribbon Tabs */
 .ribbon-tabs {
-  background: linear-gradient(to bottom, #1e293b 0%, #1a2436 100%);
-  border-bottom: 1px solid #334155;
+  background: var(--theme-ribbon-tab-bg);
+  border-bottom: 1px solid var(--theme-border-light);
   display: flex;
   padding: 0 8px;
   gap: 2px;
@@ -23,7 +23,7 @@
   font-size: 12px;
   background: transparent;
   border: none;
-  color: #94a3b8;
+  color: var(--theme-text-dim);
   font-weight: 500;
   border-radius: 4px 4px 0 0;
   transition: all 0.15s ease;
@@ -34,13 +34,13 @@
 }
 
 .ribbon-tab.file {
-  background: #a82d6e;
+  background: var(--theme-file-tab-bg);
   color: #ffffff;
   font-weight: 600;
 }
 
 .ribbon-tab.file:hover {
-  background: #922560;
+  background: var(--theme-file-tab-hover);
   color: #ffffff;
 }
 
@@ -49,15 +49,15 @@
 }
 
 .ribbon-tab:hover {
-  background: #334155;
-  color: #ffffff;
+  background: var(--theme-hover);
+  color: var(--theme-text);
 }
 
 .ribbon-tab.active {
-  background: #172033;
-  color: #ffffff;
-  border-color: #334155;
-  border-bottom: 1px solid #172033;
+  background: var(--theme-ribbon-content-bg);
+  color: var(--theme-text);
+  border-color: var(--theme-border-light);
+  border-bottom: 1px solid var(--theme-ribbon-content-bg);
   margin-bottom: -1px;
 }
 
@@ -67,9 +67,9 @@
   height: 94px;
 }
 
-/* Ribbon Content - Dark navy theme */
+/* Ribbon Content */
 .ribbon-content {
-  background: #172033;
+  background: var(--theme-ribbon-content-bg);
   padding: 4px 8px 0 8px;
   display: none;
   height: 94px;
@@ -95,7 +95,7 @@
   display: flex;
   flex-direction: column;
   padding: 0 4px;
-  border-right: 1px solid #334155;
+  border-right: 1px solid var(--theme-border-light);
   min-width: 50px;
   height: 100%;
   margin-right: 4px;
@@ -108,7 +108,7 @@
 
 .ribbon-group-label {
   font-size: 9px;
-  color: #64748b;
+  color: var(--theme-text-muted);
   text-align: center;
   font-weight: 500;
   padding: 2px 0;
@@ -135,7 +135,7 @@
   justify-content: flex-start;
 }
 
-/* Ribbon Buttons - Default (Large) - Dark theme */
+/* Ribbon Buttons - Default (Large) */
 .ribbon-btn {
   display: flex;
   flex-direction: column;
@@ -157,13 +157,13 @@
 }
 
 .ribbon-btn:hover {
-  background: #334155;
-  border-color: #475569;
+  background: var(--theme-hover);
+  border-color: var(--theme-border-light);
 }
 
 .ribbon-btn.active {
-  background: #3b82f6;
-  border-color: #60a5fa;
+  background: var(--theme-active);
+  border-color: var(--theme-active-border);
 }
 
 .ribbon-btn.disabled {
@@ -183,11 +183,11 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: #94a3b8;
+  color: var(--theme-text-dim);
 }
 
 .ribbon-btn:hover .ribbon-btn-icon {
-  color: #ffffff;
+  color: var(--theme-text);
 }
 
 .ribbon-btn.active .ribbon-btn-icon {
@@ -196,7 +196,7 @@
 
 .ribbon-btn-label {
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--theme-text-dim);
   text-align: center;
   line-height: 1.15;
   max-width: 58px;
@@ -208,7 +208,7 @@
 }
 
 .ribbon-btn:hover .ribbon-btn-label {
-  color: #ffffff;
+  color: var(--theme-text);
 }
 
 .ribbon-btn.active .ribbon-btn-label {
@@ -265,7 +265,7 @@
   border-radius: 0 0 4px 4px;
   cursor: default;
   transition: all 0.15s ease;
-  color: #94a3b8;
+  color: var(--theme-text-dim);
 }
 
 .ribbon-dropdown-trigger:focus {
@@ -273,14 +273,14 @@
 }
 
 .ribbon-dropdown-trigger:hover {
-  background: #334155;
-  border-color: #475569;
-  color: #ffffff;
+  background: var(--theme-hover);
+  border-color: var(--theme-border-light);
+  color: var(--theme-text);
 }
 
 .ribbon-dropdown-trigger.active {
-  background: #2563eb;
-  border-color: #3b82f6;
+  background: var(--theme-active);
+  border-color: var(--theme-active-border);
   color: #ffffff;
 }
 
@@ -289,8 +289,8 @@
   top: 100%;
   left: 0;
   min-width: 140px;
-  background: #1e293b;
-  border: 1px solid #334155;
+  background: var(--theme-dropdown-bg);
+  border: 1px solid var(--theme-border-light);
   border-radius: 4px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   z-index: 1000;
@@ -305,7 +305,7 @@
   padding: 6px 12px;
   background: transparent;
   border: none;
-  color: #94a3b8;
+  color: var(--theme-text-dim);
   font-size: 11px;
   text-align: left;
   cursor: default;
@@ -314,12 +314,12 @@
 }
 
 .ribbon-dropdown-item:hover {
-  background: #334155;
-  color: #ffffff;
+  background: var(--theme-hover);
+  color: var(--theme-text);
 }
 
 .ribbon-dropdown-item.selected {
-  color: #3b82f6;
+  color: var(--theme-accent);
 }
 
 .ribbon-dropdown-item .checkmark {
@@ -417,8 +417,8 @@
 
 /* Custom Tooltip */
 .ribbon-tooltip {
-  background: #1e293b;
-  border: 1px solid #475569;
+  background: var(--theme-dropdown-bg);
+  border: 1px solid var(--theme-border-light);
   padding: 6px 10px;
   display: flex;
   align-items: center;
@@ -430,16 +430,16 @@
 .ribbon-tooltip-label {
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   font-size: 12px;
-  color: #e2e8f0;
+  color: var(--theme-text);
   font-weight: 400;
 }
 
 .ribbon-tooltip-shortcut {
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   font-size: 11px;
-  color: #94a3b8;
-  background: #0f172a;
-  border: 1px solid #334155;
+  color: var(--theme-text-dim);
+  background: var(--theme-input-bg);
+  border: 1px solid var(--theme-border-light);
   padding: 1px 5px;
   font-weight: 600;
   letter-spacing: 1px;
@@ -542,7 +542,130 @@
 }
 
 .ribbon-draw-btn.active {
-  background: #3b82f6;
-  border-color: #60a5fa;
+  background: var(--theme-active);
+  border-color: var(--theme-active-border);
   color: #ffffff;
+}
+
+/* ============================================================================
+   Theme Selector (DevExpress-style dropdown)
+   ============================================================================ */
+
+.ribbon-theme-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px;
+}
+
+.ribbon-theme-label {
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.ribbon-theme-dropdown {
+  position: relative;
+  min-width: 100px;
+}
+
+.ribbon-theme-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 4px 8px;
+  background: var(--theme-input-bg);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 3px;
+  color: var(--theme-text);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  gap: 8px;
+}
+
+.ribbon-theme-button:hover {
+  border-color: var(--theme-accent);
+}
+
+.ribbon-theme-button:focus {
+  outline: none;
+  border-color: var(--theme-accent);
+}
+
+.ribbon-theme-button-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ribbon-theme-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  border: 1px solid var(--theme-border-light);
+}
+
+.ribbon-theme-swatch.dark {
+  background: linear-gradient(135deg, #1a1a2e 50%, #16213e 50%);
+}
+
+.ribbon-theme-swatch.light {
+  background: linear-gradient(135deg, #f5f5f5 50%, #ffffff 50%);
+}
+
+.ribbon-theme-swatch.blue {
+  background: linear-gradient(135deg, #0d1b2a 50%, #1b263b 50%);
+}
+
+.ribbon-theme-swatch.highContrast {
+  background: linear-gradient(135deg, #000000 50%, #ffff00 50%);
+}
+
+.ribbon-theme-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 2px;
+  background: var(--theme-dropdown-bg);
+  border: 1px solid var(--theme-border-light);
+  border-radius: 3px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  padding: 4px 0;
+}
+
+.ribbon-theme-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  color: var(--theme-text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  gap: 8px;
+}
+
+.ribbon-theme-option:hover {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+}
+
+.ribbon-theme-option.selected {
+  color: var(--theme-accent);
+}
+
+.ribbon-theme-option .checkmark {
+  width: 14px;
+  color: var(--theme-accent);
+}
+
+.ribbon-theme-option .no-check {
+  width: 14px;
 }

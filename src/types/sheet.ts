@@ -420,7 +420,7 @@ export interface SVGTitleBlockTemplate {
   fieldMappings: SVGFieldMapping[];
   /** Whether this is a built-in template */
   isBuiltIn: boolean;
-  /** Whether this is a full-page template (covers entire sheet like Revit) */
+  /** Whether this is a full-page template (covers entire sheet) */
   isFullPage?: boolean;
   /** Creation timestamp */
   createdAt: string;

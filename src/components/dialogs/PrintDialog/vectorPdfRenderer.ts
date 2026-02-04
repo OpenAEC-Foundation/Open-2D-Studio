@@ -218,7 +218,12 @@ export interface VectorRenderOptions {
   plotLineweights: boolean;
   minLineWidthMM?: number;
   customPatterns?: CustomHatchPattern[];
+  /** Drawing scale factor for proper text sizing (e.g., 0.01 for 1:100) */
+  drawingScale?: number;
 }
+
+// Reference scale used for text sizing (1:50)
+const REFERENCE_SCALE = 0.02;
 
 // ============================================================================
 // Style Setup
@@ -607,7 +612,10 @@ function renderText(doc: jsPDF, shape: Shape & { type: 'text' }, opts: VectorRen
   const textColor = transformColor(color || shape.style.strokeColor, opts.appearance, true);
   doc.setTextColor(textColor.r, textColor.g, textColor.b);
 
-  const scaledFontSize = fontSize * opts.scale;
+  // Apply drawing scale factor for proper text sizing (same formula as ShapeRenderer)
+  const drawingScale = opts.drawingScale ?? REFERENCE_SCALE;
+  const adjustedFontSize = fontSize * (REFERENCE_SCALE / drawingScale);
+  const scaledFontSize = adjustedFontSize * opts.scale;
 
   // Set font style
   let fontStyle = 'normal';

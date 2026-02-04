@@ -24,7 +24,10 @@ import {
   Sun,
   X,
   Check,
+  Palette,
 } from 'lucide-react';
+import type { UITheme } from '../../../state/slices/snapSlice';
+import { UI_THEMES } from '../../../state/slices/snapSlice';
 import { useAppStore } from '../../../state/appStore';
 import {
   LineIcon,
@@ -67,24 +70,71 @@ import './Ribbon.css';
  * Custom tooltip component - renders below the hovered element
  */
 function RibbonTooltip({ label, shortcut, parentRef }: { label: string; shortcut?: string; parentRef: React.RefObject<HTMLElement> }) {
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const [pos, setPos] = useState<{ x: number; y: number; align: 'center' | 'left' | 'right' } | null>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (parentRef.current) {
       const rect = parentRef.current.getBoundingClientRect();
-      setPos({ x: rect.left + rect.width / 2, y: rect.bottom + 4 });
+      const centerX = rect.left + rect.width / 2;
+      const viewportWidth = window.innerWidth;
+
+      // Estimate tooltip width (will be adjusted after render if needed)
+      const estimatedTooltipWidth = 150;
+      const margin = 8;
+
+      let align: 'center' | 'left' | 'right' = 'center';
+      let x = centerX;
+
+      // Check if tooltip would go outside left edge
+      if (centerX - estimatedTooltipWidth / 2 < margin) {
+        align = 'left';
+        x = margin;
+      }
+      // Check if tooltip would go outside right edge
+      else if (centerX + estimatedTooltipWidth / 2 > viewportWidth - margin) {
+        align = 'right';
+        x = viewportWidth - margin;
+      }
+
+      setPos({ x, y: rect.bottom + 4, align });
     }
   }, [parentRef]);
 
+  // Adjust position after tooltip renders to ensure it stays in viewport
+  useEffect(() => {
+    if (tooltipRef.current && pos) {
+      const tooltipRect = tooltipRef.current.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const margin = 8;
+
+      // Re-check with actual tooltip width
+      if (pos.align === 'center') {
+        if (tooltipRect.left < margin) {
+          setPos({ ...pos, x: margin, align: 'left' });
+        } else if (tooltipRect.right > viewportWidth - margin) {
+          setPos({ ...pos, x: viewportWidth - margin, align: 'right' });
+        }
+      }
+    }
+  }, [pos]);
+
   if (!pos) return null;
+
+  const transformStyle = pos.align === 'center'
+    ? 'translateX(-50%)'
+    : pos.align === 'right'
+      ? 'translateX(-100%)'
+      : 'none';
 
   return (
     <div
+      ref={tooltipRef}
       style={{
         position: 'fixed',
         left: pos.x,
         top: pos.y,
-        transform: 'translateX(-50%)',
+        transform: transformStyle,
         zIndex: 9999,
         pointerEvents: 'none',
       }}
@@ -283,6 +333,74 @@ function RibbonButtonStack({ children }: { children: React.ReactNode }) {
   return <div className="ribbon-btn-stack">{children}</div>;
 }
 
+/**
+ * Theme Selector - DevExpress-style dropdown for selecting UI theme
+ */
+interface ThemeSelectorProps {
+  currentTheme: UITheme;
+  onThemeChange: (theme: UITheme) => void;
+}
+
+function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  const currentThemeLabel = UI_THEMES.find(t => t.id === currentTheme)?.label || 'Dark';
+
+  return (
+    <div className="ribbon-theme-selector" ref={dropdownRef}>
+      <span className="ribbon-theme-label">Theme</span>
+      <div className="ribbon-theme-dropdown">
+        <button
+          className="ribbon-theme-button"
+          onClick={() => setIsOpen(!isOpen)}
+        >
+          <span className="ribbon-theme-button-content">
+            <span className={`ribbon-theme-swatch ${currentTheme}`} />
+            <span>{currentThemeLabel}</span>
+          </span>
+          <ChevronDown size={12} />
+        </button>
+        {isOpen && (
+          <div className="ribbon-theme-menu">
+            {UI_THEMES.map((theme) => (
+              <button
+                key={theme.id}
+                className={`ribbon-theme-option ${currentTheme === theme.id ? 'selected' : ''}`}
+                onClick={() => {
+                  onThemeChange(theme.id);
+                  setIsOpen(false);
+                }}
+              >
+                {currentTheme === theme.id ? (
+                  <Check size={12} className="checkmark" />
+                ) : (
+                  <span className="no-check" />
+                )}
+                <span className={`ribbon-theme-swatch ${theme.id}`} />
+                <span>{theme.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface RibbonProps {
   onOpenBackstage: () => void;
 }
@@ -326,6 +444,10 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
     finishFilledRegion,
     setFilledRegionDrawTool,
     polylineArcMode,
+
+    // Theme
+    uiTheme,
+    setUITheme,
   } = useAppStore();
 
   const circleOptions: DropdownOption[] = [
@@ -875,6 +997,7 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 onClick={openSectionDialog}
                 disabled={editorMode !== 'drawing'}
                 tooltip="Insert structural profile section"
+                shortcut="SE"
               />
             </RibbonGroup>
           </div>
@@ -922,6 +1045,19 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 label="White Background"
                 onClick={toggleWhiteBackground}
                 active={whiteBackground}
+              />
+            </RibbonGroup>
+
+            <RibbonGroup label="Appearance">
+              <RibbonButton
+                icon={<Palette size={24} />}
+                label="Theme"
+                onClick={() => {}}
+                tooltip="Change UI theme"
+              />
+              <ThemeSelector
+                currentTheme={uiTheme}
+                onThemeChange={setUITheme}
               />
             </RibbonGroup>
           </div>

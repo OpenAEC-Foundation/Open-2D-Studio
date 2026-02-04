@@ -177,7 +177,7 @@ export const createViewportEditSlice = (
       const dx = sheetPos.x - dragStart.x;
       const dy = sheetPos.y - dragStart.y;
 
-      // Only allow moving (center handle) - size is derived from boundary × scale (Revit-style)
+      // Only allow moving (center handle) - size is derived from boundary × scale 
       if (activeHandle === 'center') {
         viewport.x = originalViewport.x + dx;
         viewport.y = originalViewport.y + dy;

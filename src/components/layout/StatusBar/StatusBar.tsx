@@ -369,6 +369,33 @@ export const StatusBar = memo(function StatusBar() {
   const setSnapSettingsOpen = useAppStore(s => s.setSnapSettingsOpen);
   const terminalOpen = useAppStore(s => s.terminalOpen);
   const toggleTerminal = useAppStore(s => s.toggleTerminal);
+  const drawings = useAppStore(s => s.drawings);
+  const activeDrawingId = useAppStore(s => s.activeDrawingId);
+  const editorMode = useAppStore(s => s.editorMode);
+  const updateDrawingScale = useAppStore(s => s.updateDrawingScale);
+  const sheets = useAppStore(s => s.sheets);
+  const activeSheetId = useAppStore(s => s.activeSheetId);
+  const selectedViewportId = useAppStore(s => s.viewportEditState.selectedViewportId);
+
+  // Get active drawing's scale (either from active drawing in drawing mode, or from selected viewport in sheet mode)
+  let targetDrawingId: string | null = null;
+  let drawingScale: number | undefined;
+
+  if (editorMode === 'drawing') {
+    // In drawing mode, use the active drawing
+    targetDrawingId = activeDrawingId;
+    const activeDrawing = drawings.find(d => d.id === activeDrawingId);
+    drawingScale = activeDrawing?.scale;
+  } else if (editorMode === 'sheet' && selectedViewportId && activeSheetId) {
+    // In sheet mode with a selected viewport, use that viewport's drawing
+    const activeSheet = sheets.find(s => s.id === activeSheetId);
+    const selectedViewport = activeSheet?.viewports.find(vp => vp.id === selectedViewportId);
+    if (selectedViewport) {
+      targetDrawingId = selectedViewport.drawingId;
+      const viewportDrawing = drawings.find(d => d.id === selectedViewport.drawingId);
+      drawingScale = viewportDrawing?.scale;
+    }
+  }
 
   // Convert screen position to world position
   const worldX = (mousePosition.x - viewport.offsetX) / viewport.zoom;
@@ -395,6 +422,33 @@ export const StatusBar = memo(function StatusBar() {
         <span>Grid:</span>
         <span className="text-cad-text font-mono">{gridSize}</span>
       </div>
+
+      {/* Drawing Scale (show in drawing mode OR when viewport selected in sheet mode) */}
+      {drawingScale && targetDrawingId && (
+        <div className="flex items-center gap-2">
+          <span>Scale:</span>
+          <select
+            value={drawingScale}
+            onChange={(e) => updateDrawingScale(targetDrawingId!, parseFloat(e.target.value))}
+            className="bg-cad-bg border border-cad-border text-cad-text text-xs px-1 py-0 h-[18px] outline-none focus:border-cad-accent"
+          >
+            <option value={10}>10:1</option>
+            <option value={5}>5:1</option>
+            <option value={2}>2:1</option>
+            <option value={1}>1:1</option>
+            <option value={0.5}>1:2</option>
+            <option value={0.2}>1:5</option>
+            <option value={0.1}>1:10</option>
+            <option value={0.05}>1:20</option>
+            <option value={0.04}>1:25</option>
+            <option value={0.02}>1:50</option>
+            <option value={0.01}>1:100</option>
+            <option value={0.005}>1:200</option>
+            <option value={0.002}>1:500</option>
+            <option value={0.001}>1:1000</option>
+          </select>
+        </div>
+      )}
 
       {/* Layer selector */}
       <LayerSelector />

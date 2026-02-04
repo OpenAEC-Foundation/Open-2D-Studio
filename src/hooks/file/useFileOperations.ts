@@ -48,6 +48,7 @@ export function useFileOperations() {
 
     try {
       const project = await readProjectFile(filePath);
+      const fileName = filePath.split(/[/\\]/).pop()?.replace('.o2d', '') || 'Untitled';
       loadProject(
         {
           shapes: project.shapes,
@@ -62,7 +63,7 @@ export function useFileOperations() {
           sheetViewports: project.sheetViewports,
         },
         filePath,
-        project.name
+        fileName
       );
     } catch (err) {
       await showError(`Failed to open file: ${err}`);

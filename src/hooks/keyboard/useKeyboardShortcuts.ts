@@ -40,6 +40,7 @@ const TWO_KEY_SHORTCUTS: Record<string, string> = {
   'da': 'dimension-angular',
   'dr': 'dimension-radius',
   'dd': 'dimension-diameter',
+  'se': 'section',  // Structural section
 };
 
 const TWO_KEY_TIMEOUT = 750; // ms to wait for second key
@@ -77,6 +78,8 @@ export function useKeyboardShortcuts() {
     switchDocument,
     activeDocumentId,
     documentOrder,
+    // Dialogs
+    openSectionDialog,
   } = useAppStore();
 
   useEffect(() => {
@@ -157,6 +160,11 @@ export function useKeyboardShortcuts() {
               const mode = tool.replace('dimension-', '') as any;
               setDimensionMode(mode);
               setActiveTool('dimension');
+            } else if (tool === 'section') {
+              // Section opens a dialog, not a tool
+              if (editorMode === 'drawing') {
+                openSectionDialog();
+              }
             } else {
               setActiveTool(tool as any);
             }
@@ -324,5 +332,6 @@ export function useKeyboardShortcuts() {
     switchDocument,
     activeDocumentId,
     documentOrder,
+    openSectionDialog,
   ]);
 }

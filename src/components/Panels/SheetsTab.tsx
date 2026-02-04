@@ -117,7 +117,7 @@ export function SheetsTab() {
 
       {/* New Sheet Dialog */}
       {showNewSheetDialog && (
-        <div className="p-2 border-b border-cad-border bg-cad-bg-light">
+        <div className="p-2 border-b border-cad-border bg-cad-surface-elevated">
           <div className="space-y-2">
             <input
               type="text"
@@ -177,7 +177,7 @@ export function SheetsTab() {
 
       {/* Renumber Sheets Dialog */}
       {showRenumberDialog && (
-        <div className="p-2 border-b border-cad-border bg-cad-bg-light">
+        <div className="p-2 border-b border-cad-border bg-cad-surface-elevated">
           <div className="space-y-2">
             <label className="block text-xs text-cad-text-dim">Discipline Prefix:</label>
             <select

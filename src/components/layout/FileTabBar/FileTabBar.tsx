@@ -6,6 +6,7 @@
 import { useCallback } from 'react';
 import { useAppStore } from '../../../state/appStore';
 import { getDocumentStoreIfExists } from '../../../state/documentStore';
+import { confirmUnsavedChanges } from '../../../services/file/fileService';
 
 /** Get tab display info — for active doc reads from appStore, for inactive reads from doc store */
 function useTabInfo(docId: string, isActive: boolean) {
@@ -43,25 +44,28 @@ function TabItem({ docId, index, total }: { docId: string; index: number; total:
   const { name, isModified } = useTabInfo(docId, isActive);
   const isLast = index === total - 1;
 
-  const bg = isActive ? '#1e1e1e' : '#2b2b2b';
-  const barBg = '#2b2b2b';
+  // Use CSS variables for theme-aware colors
+  const bg = isActive ? 'var(--theme-bg)' : 'var(--theme-surface)';
+  const barBg = 'var(--theme-surface)';
   const nextDocId = !isLast ? documentOrder[index + 1] : null;
-  const nextBg = nextDocId === activeDocumentId ? '#1e1e1e' : barBg;
+  const nextBg = nextDocId === activeDocumentId ? 'var(--theme-bg)' : barBg;
 
-  const handleMiddleClick = useCallback((e: React.MouseEvent) => {
+  const handleMiddleClick = useCallback(async (e: React.MouseEvent) => {
     if (e.button === 1) {
       e.preventDefault();
       if (isDocModified(docId, activeDocumentId, useAppStore.getState())) {
-        if (!confirm('This document has unsaved changes. Close anyway?')) return;
+        const proceed = await confirmUnsavedChanges();
+        if (!proceed) return;
       }
       closeDocument(docId);
     }
   }, [closeDocument, docId, activeDocumentId]);
 
-  const handleClose = useCallback((e: React.MouseEvent) => {
+  const handleClose = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isDocModified(docId, activeDocumentId, useAppStore.getState())) {
-      if (!confirm('This document has unsaved changes. Close anyway?')) return;
+      const proceed = await confirmUnsavedChanges();
+      if (!proceed) return;
     }
     closeDocument(docId);
   }, [closeDocument, docId, activeDocumentId]);
@@ -73,13 +77,25 @@ function TabItem({ docId, index, total }: { docId: string; index: number; total:
     menu.style.left = `${e.clientX}px`;
     menu.style.top = `${e.clientY}px`;
 
+    const closeWithCheck = async (id: string) => {
+      if (isDocModified(id, activeDocumentId, useAppStore.getState())) {
+        const proceed = await confirmUnsavedChanges();
+        if (!proceed) return;
+      }
+      closeDocument(id);
+    };
+
     const items = [
-      { label: 'Close', action: () => closeDocument(docId) },
-      { label: 'Close Others', action: () => {
-        documentOrder.forEach(id => { if (id !== docId) closeDocument(id); });
+      { label: 'Close', action: () => closeWithCheck(docId) },
+      { label: 'Close Others', action: async () => {
+        for (const id of documentOrder) {
+          if (id !== docId) await closeWithCheck(id);
+        }
       }},
-      { label: 'Close All', action: () => {
-        documentOrder.forEach(id => closeDocument(id));
+      { label: 'Close All', action: async () => {
+        for (const id of documentOrder) {
+          await closeWithCheck(id);
+        }
       }},
     ];
 
@@ -94,7 +110,7 @@ function TabItem({ docId, index, total }: { docId: string; index: number; total:
     document.body.appendChild(menu);
     const cleanup = () => { menu.remove(); document.removeEventListener('mousedown', cleanup); };
     setTimeout(() => document.addEventListener('mousedown', cleanup), 0);
-  }, [closeDocument, documentOrder, docId]);
+  }, [closeDocument, documentOrder, docId, activeDocumentId]);
 
   return (
     <div
@@ -108,17 +124,20 @@ function TabItem({ docId, index, total }: { docId: string; index: number; total:
         style={{ backgroundColor: bg }}
       >
         <span
-          className={`
-            px-3 text-xs select-none
-            ${isActive ? 'text-white font-semibold' : 'text-[#888] hover:text-[#bbb]'}
-          `}
+          className="px-3 text-xs select-none"
+          style={{
+            color: isActive ? 'var(--theme-text)' : 'var(--theme-text-dim)',
+            fontWeight: isActive ? 600 : 400,
+          }}
         >
           {name}{isModified ? ' *' : ''}
         </span>
         <button
-          className="w-4 h-4 flex items-center justify-center text-[12px] leading-none opacity-0 group-hover:opacity-100 hover:text-white text-[#888] -mr-1"
-          style={{ borderRadius: 0 }}
+          className="w-4 h-4 flex items-center justify-center text-[12px] leading-none opacity-0 group-hover:opacity-100 -mr-1"
+          style={{ borderRadius: 0, color: 'var(--theme-text-dim)' }}
           onClick={handleClose}
+          onMouseEnter={(e) => e.currentTarget.style.color = 'var(--theme-text)'}
+          onMouseLeave={(e) => e.currentTarget.style.color = 'var(--theme-text-dim)'}
           title="Close"
         >
           ×
@@ -139,8 +158,8 @@ export function FileTabBar() {
 
   return (
     <div
-      className="flex items-stretch bg-[#2b2b2b] border-b border-[#1e1e1e] h-[30px] min-h-[30px] overflow-x-auto"
-      style={{ scrollbarWidth: 'none' }}
+      className="flex items-stretch h-[30px] min-h-[30px] overflow-x-auto"
+      style={{ scrollbarWidth: 'none', backgroundColor: 'var(--theme-surface)', borderBottom: '1px solid var(--theme-border)' }}
     >
       {documentOrder.map((docId, index) => (
         <TabItem key={docId} docId={docId} index={index} total={documentOrder.length} />
@@ -148,9 +167,11 @@ export function FileTabBar() {
 
       {/* New tab button */}
       <button
-        className="flex items-center justify-center w-7 h-full text-[#888] hover:text-white text-sm flex-shrink-0"
-        style={{ borderRadius: 0 }}
+        className="flex items-center justify-center w-7 h-full text-sm flex-shrink-0"
+        style={{ borderRadius: 0, color: 'var(--theme-text-dim)' }}
         onClick={() => createNewDocument()}
+        onMouseEnter={(e) => e.currentTarget.style.color = 'var(--theme-text)'}
+        onMouseLeave={(e) => e.currentTarget.style.color = 'var(--theme-text-dim)'}
         title="New Document (Ctrl+N)"
       >
         +

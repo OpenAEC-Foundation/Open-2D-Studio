@@ -5,6 +5,19 @@
 import type { SnapType, SnapPoint, Point, TrackingLine } from './types';
 
 // ============================================================================
+// Theme Types
+// ============================================================================
+
+export type UITheme = 'dark' | 'light' | 'blue' | 'highContrast';
+
+export const UI_THEMES: { id: UITheme; label: string }[] = [
+  { id: 'dark', label: 'Dark' },
+  { id: 'light', label: 'Light' },
+  { id: 'blue', label: 'Blue' },
+  { id: 'highContrast', label: 'High Contrast' },
+];
+
+// ============================================================================
 // State Interface
 // ============================================================================
 
@@ -35,6 +48,7 @@ export interface SnapState {
   // Display settings
   whiteBackground: boolean;
   boundaryVisible: boolean;
+  uiTheme: UITheme;
 }
 
 // ============================================================================
@@ -60,6 +74,7 @@ export interface SnapActions {
   setDirectDistanceAngle: (angle: number | null) => void;
   toggleWhiteBackground: () => void;
   toggleBoundaryVisible: () => void;
+  setUITheme: (theme: UITheme) => void;
 }
 
 export type SnapSlice = SnapState & SnapActions;
@@ -86,6 +101,7 @@ export const initialSnapState: SnapState = {
   directDistanceAngle: null,
   whiteBackground: false,
   boundaryVisible: true,
+  uiTheme: 'dark',
 };
 
 // ============================================================================
@@ -193,5 +209,12 @@ export const createSnapSlice = (
   toggleBoundaryVisible: () =>
     set((state) => {
       state.boundaryVisible = !state.boundaryVisible;
+    }),
+
+  setUITheme: (theme) =>
+    set((state) => {
+      state.uiTheme = theme;
+      // Apply theme to document root for CSS variables
+      document.documentElement.setAttribute('data-theme', theme);
     }),
 });

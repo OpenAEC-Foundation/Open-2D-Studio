@@ -730,7 +730,7 @@ export function createDocumentStoreInstance(initial?: Partial<DocumentState>): S
             drawing.modifiedAt = new Date().toISOString();
             state.isModified = true;
 
-            // Update all viewports showing this drawing (Revit-style: viewport resizes with boundary)
+            // Update all viewports showing this drawing (viewport resizes with boundary)
             for (const sheet of state.sheets) {
               for (const viewport of sheet.viewports) {
                 if (viewport.drawingId === id) {

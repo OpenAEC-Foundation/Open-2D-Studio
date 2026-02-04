@@ -59,7 +59,11 @@ export const createSelectionSlice = (
   selectShape: (id, addToSelection = false) =>
     set((state) => {
       if (addToSelection) {
-        if (!state.selectedShapeIds.includes(id)) {
+        // Toggle selection: remove if already selected, add if not
+        const index = state.selectedShapeIds.indexOf(id);
+        if (index >= 0) {
+          state.selectedShapeIds.splice(index, 1);
+        } else {
           state.selectedShapeIds.push(id);
         }
       } else {

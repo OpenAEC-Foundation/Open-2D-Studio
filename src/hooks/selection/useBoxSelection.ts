@@ -2,7 +2,7 @@
  * useBoxSelection - Handles window/crossing box selection
  */
 
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useMemo } from 'react';
 import { useAppStore, type SelectionBox } from '../../state/appStore';
 import type { Point, Shape } from '../../types/geometry';
 import { getShapeBounds } from '../../engine/geometry/GeometryUtils';
@@ -164,8 +164,8 @@ function getShapeEdges(shape: Shape): Edge[] {
  * Test if a shape's actual geometry intersects or is contained in a rectangle (for crossing selection).
  * Falls back to bounding box overlap for shapes where edge decomposition isn't available.
  */
-function shapeCrossesRect(shape: Shape, minX: number, minY: number, maxX: number, maxY: number): boolean {
-  const bounds = getShapeBounds(shape);
+function shapeCrossesRect(shape: Shape, minX: number, minY: number, maxX: number, maxY: number, drawingScale?: number): boolean {
+  const bounds = getShapeBounds(shape, drawingScale);
   if (!bounds) return false;
 
   // Quick reject: if bounding boxes don't overlap at all, no intersection possible
@@ -211,7 +211,14 @@ export function useBoxSelection() {
     setSelectionBox,
     editorMode,
     activeDrawingId,
+    drawings,
   } = useAppStore();
+
+  // Get the active drawing's scale for text hit detection
+  const activeDrawingScale = useMemo(() => {
+    const drawing = drawings.find(d => d.id === activeDrawingId);
+    return drawing?.scale ?? 0.02; // Default to 1:50
+  }, [drawings, activeDrawingId]);
 
   /**
    * Start box selection
@@ -279,7 +286,7 @@ export function useBoxSelection() {
         if (!shape.visible || shape.locked) continue;
         if (shape.drawingId !== activeDrawingId) continue;  // Only select shapes in active drawing
 
-        const bounds = getShapeBounds(shape);
+        const bounds = getShapeBounds(shape, activeDrawingScale);
         if (!bounds) continue;
 
         if (box.mode === 'window') {
@@ -306,7 +313,7 @@ export function useBoxSelection() {
         } else {
           // Crossing selection: shape can be inside or crossing
           // Use precise geometry test to avoid false positives from bounding box overlap
-          if (shapeCrossesRect(shape, minX, minY, maxX, maxY)) {
+          if (shapeCrossesRect(shape, minX, minY, maxX, maxY, activeDrawingScale)) {
             selectedIds.push(shape.id);
           }
         }
@@ -339,14 +346,15 @@ export function useBoxSelection() {
 
       return selectedIds;
     },
-    [viewport, shapes, parametricShapes, activeDrawingId]
+    [viewport, shapes, parametricShapes, activeDrawingId, activeDrawingScale]
   );
 
   /**
    * End box selection
+   * @param addToSelection - if true (Ctrl or Shift held), add to existing selection
    */
   const endBoxSelection = useCallback(
-    (screenPos: Point, shiftKey: boolean): boolean => {
+    (screenPos: Point, addToSelection: boolean): boolean => {
       if (!selectionState.current.isSelecting) return false;
 
       const startPoint = selectionState.current.startPoint;
@@ -367,11 +375,14 @@ export function useBoxSelection() {
 
         const selectedIds = getShapesInSelectionBox(box);
 
-        if (shiftKey) {
-          // Add to current selection
+        if (addToSelection) {
+          // Toggle selection (Ctrl or Shift held)
+          // - Objects in box that are already selected → remove them
+          // - Objects in box that are not selected → add them
           const currentSelection = useAppStore.getState().selectedShapeIds;
-          const newSelection = [...new Set([...currentSelection, ...selectedIds])];
-          selectShapes(newSelection);
+          const newSelection = currentSelection.filter(id => !selectedIds.includes(id));
+          const toAdd = selectedIds.filter(id => !currentSelection.includes(id));
+          selectShapes([...newSelection, ...toAdd]);
         } else {
           // Replace selection
           selectShapes(selectedIds);

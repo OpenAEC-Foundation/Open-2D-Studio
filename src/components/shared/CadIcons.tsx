@@ -1036,7 +1036,7 @@ export function ExplodeIcon({ size = 24, className }: IconProps) {
 }
 
 // ============================================================================
-// Filled Region Sketch Mode Icons (Revit-style)
+// Filled Region Sketch Mode Icons (filled region style)
 // ============================================================================
 
 /**

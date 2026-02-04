@@ -47,10 +47,10 @@ export function useViewportEditing() {
 
   /**
    * Get viewport handle positions
-   * Note: Only center handle for moving - size is derived from boundary × scale (Revit-style)
+   * Note: Only center handle for moving - size is derived from boundary × scale 
    */
   const getViewportHandles = useCallback((vp: SheetViewport): { type: ViewportHandleType; x: number; y: number }[] => {
-    // Only center handle for moving - no resize handles (Revit-style: size = boundary × scale)
+    // Only center handle for moving - no resize handles (size = boundary × scale)
     return [
       { type: 'center', x: vp.x + vp.width / 2, y: vp.y + vp.height / 2 },
     ];

@@ -4,15 +4,21 @@ export default {
   theme: {
     extend: {
       colors: {
-        // CAD-style dark theme colors
-        'cad-bg': '#1a1a2e',
-        'cad-surface': '#16213e',
-        'cad-border': '#0f3460',
-        'cad-accent': '#e94560',
-        'cad-text': '#eaeaea',
-        'cad-text-dim': '#8b8b8b',
-        'cad-grid': '#2a2a4a',
-        'cad-grid-major': '#3a3a5a',
+        // Theme-aware CAD colors using CSS variables
+        'cad-bg': 'var(--theme-bg)',
+        'cad-surface': 'var(--theme-surface)',
+        'cad-surface-elevated': 'var(--theme-surface-elevated)',
+        'cad-border': 'var(--theme-border)',
+        'cad-border-light': 'var(--theme-border-light)',
+        'cad-accent': 'var(--theme-accent)',
+        'cad-text': 'var(--theme-text)',
+        'cad-text-dim': 'var(--theme-text-dim)',
+        'cad-text-muted': 'var(--theme-text-muted)',
+        'cad-grid': 'var(--theme-grid)',
+        'cad-grid-major': 'var(--theme-grid-major)',
+        'cad-hover': 'var(--theme-hover)',
+        'cad-input': 'var(--theme-input-bg)',
+        'cad-dropdown': 'var(--theme-dropdown-bg)',
       },
     },
   },

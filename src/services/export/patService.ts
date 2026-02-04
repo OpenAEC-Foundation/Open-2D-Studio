@@ -1,5 +1,5 @@
 /**
- * PAT File Service - Import/Export for AutoCAD-style hatch pattern files
+ * PAT File Service - Import/Export for industry-standard hatch pattern files
  *
  * PAT file format:
  * - Lines starting with ; or // are comments

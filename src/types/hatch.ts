@@ -28,7 +28,7 @@ export type HatchPatternFormat = 'pat' | 'svg';
 /**
  * Line family definition - defines a set of parallel lines in a hatch pattern
  *
- * Based on AutoCAD/Revit PAT format:
+ * Based on industry-standard PAT format:
  * angle, x-origin, y-origin, delta-x, delta-y, [dash, gap, dash, gap...]
  */
 export interface LineFamily {

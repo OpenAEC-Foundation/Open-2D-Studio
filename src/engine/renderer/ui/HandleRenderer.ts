@@ -202,7 +202,7 @@ export class HandleRenderer extends BaseRenderer {
   }
 
   /**
-   * Draw viewport move handle (center only - Revit-style: size is derived from boundary × scale)
+   * Draw viewport move handle (center only - size is derived from boundary × scale)
    * @param x - X position in pixels (already scaled)
    * @param y - Y position in pixels (already scaled)
    * @param width - Width in pixels (already scaled)
@@ -218,7 +218,7 @@ export class HandleRenderer extends BaseRenderer {
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = lineWidth;
 
-    // Only draw center handle for moving (Revit-style: no resize, size = boundary × scale)
+    // Only draw center handle for moving (no resize, size = boundary × scale)
     ctx.fillStyle = '#4a90d9';
     const centerX = x + width / 2;
     const centerY = y + height / 2;

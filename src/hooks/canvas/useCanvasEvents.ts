@@ -62,7 +62,14 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
     explodeParametricShapes,
     addShapes,
     selectedShapeIds,
+    drawings,
   } = useAppStore();
+
+  // Get the active drawing's scale for text hit detection
+  const activeDrawingScale = useMemo(() => {
+    const drawing = drawings.find(d => d.id === activeDrawingId);
+    return drawing?.scale ?? 0.02; // Default to 1:50
+  }, [drawings, activeDrawingId]);
 
   // Build spatial index for efficient shape lookup
   const quadTree = useMemo(() => {
@@ -102,13 +109,13 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       // Iterate in reverse to match z-order (last inserted = on top)
       for (let i = candidates.length - 1; i >= 0; i--) {
         const shape = shapes.find(s => s.id === candidates[i].id);
-        if (shape && isPointNearShape(worldPoint, shape)) {
+        if (shape && isPointNearShape(worldPoint, shape, tolerance, activeDrawingScale)) {
           return shape.id;
         }
       }
       return null;
     },
-    [quadTree, shapes, parametricShapes, activeDrawingId, viewport.zoom]
+    [quadTree, shapes, parametricShapes, activeDrawingId, viewport.zoom, activeDrawingScale]
   );
 
   /**
@@ -226,10 +233,14 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
           const shapeId = findShapeAtPoint(worldPos);
           if (shapeId) {
             boundaryEditing.deselectBoundary();
-            selectShape(shapeId, e.shiftKey);
+            // Ctrl or Shift for additive/toggle selection
+            selectShape(shapeId, e.ctrlKey || e.shiftKey);
           } else {
             boundaryEditing.deselectBoundary();
-            deselectAll();
+            // Only deselect all if not holding Ctrl/Shift
+            if (!e.ctrlKey && !e.shiftKey) {
+              deselectAll();
+            }
           }
           break;
         }
@@ -451,7 +462,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       // Box selection end
       if (boxSelection.isSelecting()) {
         const screenPos = panZoom.getMousePos(e);
-        boxSelection.endBoxSelection(screenPos, e.shiftKey);
+        boxSelection.endBoxSelection(screenPos, e.ctrlKey || e.shiftKey);
       }
     },
     [panZoom, annotationEditing, viewportEditing, boundaryEditing, gripEditing, boxSelection]
@@ -761,7 +772,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       if (refs.boxSelection.isSelecting() && refs.canvasRef.current) {
         const rect = refs.canvasRef.current.getBoundingClientRect();
         const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-        refs.boxSelection.endBoxSelection(screenPos, e.shiftKey);
+        refs.boxSelection.endBoxSelection(screenPos, e.ctrlKey || e.shiftKey);
       }
     };
 

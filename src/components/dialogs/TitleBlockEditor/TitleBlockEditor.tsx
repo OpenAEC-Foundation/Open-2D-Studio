@@ -481,7 +481,7 @@ function RevisionsTab({
             <button
               onClick={handleAddRevision}
               disabled={!newRevisionDesc.trim()}
-              className="self-end px-4 py-1.5 text-sm bg-cad-primary text-white hover:bg-cad-primary-hover disabled:bg-cad-input disabled:text-cad-text-dim"
+              className="self-end px-4 py-1.5 text-sm bg-cad-accent text-white hover:bg-cad-accent/80 disabled:bg-cad-input disabled:text-cad-text-dim"
             >
               <Plus size={14} className="inline mr-1" />
               Add

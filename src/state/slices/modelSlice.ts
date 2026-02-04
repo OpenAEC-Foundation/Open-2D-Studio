@@ -547,7 +547,7 @@ export const createModelSlice = (
       drawing.scale = clampedScale;
       drawing.modifiedAt = new Date().toISOString();
 
-      // Update all viewports showing this drawing (Revit-style: viewport uses drawing's scale)
+      // Update all viewports showing this drawing (viewport uses drawing's scale)
       for (const sheet of state.sheets) {
         for (const viewport of sheet.viewports) {
           if (viewport.drawingId === id) {
@@ -853,7 +853,7 @@ export const createModelSlice = (
       // Clamp scale to reasonable values
       const clampedScale = Math.max(0.001, Math.min(1, scale));
 
-      // Calculate new size from drawing boundary × scale (Revit-style)
+      // Calculate new size from drawing boundary × scale 
       const newWidth = drawing.boundary.width * clampedScale;
       const newHeight = drawing.boundary.height * clampedScale;
 

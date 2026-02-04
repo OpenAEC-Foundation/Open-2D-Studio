@@ -278,19 +278,28 @@ export function NewSheetDialog({ isOpen, onClose }: NewSheetDialogProps) {
                   if (!selectedTitleBlock) return null;
                   return (
                     <>
-                      <div className="p-3 border-b border-cad-border">
-                        <h3 className="text-sm font-medium text-cad-text mb-2">{selectedTitleBlock.name}</h3>
-                        <p className="text-xs text-cad-text-dim mb-3">{selectedTitleBlock.description || 'Custom title block template'}</p>
-                        <div className="bg-white border border-gray-300 p-2 flex items-center justify-center" style={{ minHeight: 100 }}>
+                      <div className="p-2 border-b border-cad-border">
+                        <h3 className="text-sm font-medium text-cad-text mb-1">{selectedTitleBlock.name}</h3>
+                        <p className="text-xs text-cad-text-dim mb-2">{selectedTitleBlock.description || 'Custom title block template'}</p>
+                        {/* Preview container with dark background */}
+                        <div className="bg-gray-600 p-2 flex items-center justify-center" style={{ height: 150 }}>
+                          {/* White sheet */}
                           <div
-                            style={{ maxWidth: '100%', maxHeight: 80 }}
-                            dangerouslySetInnerHTML={{ __html: selectedTitleBlock.svgContent }}
+                            className="bg-white border border-gray-400 overflow-hidden shadow-md"
+                            style={{ width: '100%', height: '100%', maxWidth: 200 }}
+                            dangerouslySetInnerHTML={{
+                              __html: makeScalableSvg(
+                                selectedTitleBlock.svgContent,
+                                selectedTitleBlock.width,
+                                selectedTitleBlock.height
+                              )
+                            }}
                           />
                         </div>
                       </div>
 
                       {/* Sheet Name */}
-                      <div className="p-3 border-b border-cad-border">
+                      <div className="p-2 border-b border-cad-border">
                         <label className="block text-xs text-cad-text-dim mb-1">Sheet Name:</label>
                         <input
                           type="text"
@@ -302,16 +311,16 @@ export function NewSheetDialog({ isOpen, onClose }: NewSheetDialogProps) {
                       </div>
 
                       {/* Info */}
-                      <div className="flex-1 p-3">
-                        <div className="p-3 bg-cad-input rounded text-xs text-cad-text-dim">
-                          <p className="mb-2">
+                      <div className="flex-1 p-2 overflow-hidden">
+                        <div className="p-2 bg-cad-input rounded text-xs text-cad-text-dim">
+                          <p className="mb-1">
                             <strong className="text-cad-text">Fields:</strong> {selectedTitleBlock.fieldMappings.length} editable field(s)
                           </p>
-                          <p className="mb-2">
+                          <p className="mb-1">
                             <strong className="text-cad-text">Size:</strong> {Math.round(selectedTitleBlock.width)} x {Math.round(selectedTitleBlock.height)} mm
                           </p>
-                          <p>
-                            A blank {selectedPaperSize} sheet will be created with this title block. You can add viewports after creation.
+                          <p className="text-[11px]">
+                            A blank {selectedPaperSize} sheet will be created with this title block.
                           </p>
                         </div>
                       </div>
@@ -541,6 +550,36 @@ function TemplatePreview({ template }: TemplatePreviewProps) {
       />
     </div>
   );
+}
+
+// Helper to make SVG scalable by removing explicit dimensions and ensuring viewBox exists
+function makeScalableSvg(svgContent: string, width: number, height: number): string {
+  // Parse the SVG to modify its attributes
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgContent, 'image/svg+xml');
+  const svgElement = doc.querySelector('svg');
+
+  if (!svgElement) return svgContent;
+
+  // Ensure viewBox exists
+  if (!svgElement.getAttribute('viewBox')) {
+    svgElement.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  }
+
+  // Remove explicit width/height to allow CSS scaling
+  svgElement.removeAttribute('width');
+  svgElement.removeAttribute('height');
+
+  // Set preserveAspectRatio for proper scaling
+  svgElement.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+
+  // Add inline styles to ensure it fills container
+  svgElement.style.width = '100%';
+  svgElement.style.height = '100%';
+  svgElement.style.maxWidth = '100%';
+  svgElement.style.maxHeight = '100%';
+
+  return svgElement.outerHTML;
 }
 
 // Helper to get paper dimensions
