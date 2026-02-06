@@ -60,6 +60,8 @@ interface RenderOptions {
     userPatterns: CustomHatchPattern[];
     projectPatterns: CustomHatchPattern[];
   };
+  /** Live preview: temporarily apply this pattern to selected hatches on hover */
+  previewPatternId?: string | null;
 }
 
 // Interface for sheet mode rendering (supports both new and legacy property names)
@@ -146,6 +148,7 @@ export class CADRenderer {
       sectionPlacementPreview: options.sectionPlacementPreview,
       pendingSection: options.pendingSection,
       customPatterns: options.customPatterns,
+      previewPatternId: options.previewPatternId,
     };
 
     this.drawingRenderer.render(drawingOptions);

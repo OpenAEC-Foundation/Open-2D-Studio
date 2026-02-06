@@ -22,10 +22,13 @@ import {
   CheckSquare,
   XSquare,
   Sun,
-  X,
   Check,
   Palette,
   Search,
+  ArrowUpToLine,
+  ArrowUp,
+  ArrowDown,
+  ArrowDownToLine,
 } from 'lucide-react';
 import type { UITheme } from '../../../state/slices/snapSlice';
 import { UI_THEMES } from '../../../state/slices/snapSlice';
@@ -445,14 +448,11 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
     openBeamDialog,
     setPatternManagerOpen,
 
-    // Filled Region mode
-    filledRegionMode,
-    filledRegionDrawTool,
-    startFilledRegionMode,
-    cancelFilledRegionMode,
-    finishFilledRegion,
-    setFilledRegionDrawTool,
-    polylineArcMode,
+    // Draw order
+    bringToFront,
+    bringForward,
+    sendBackward,
+    sendToBack,
 
     // Theme
     uiTheme,
@@ -493,110 +493,18 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
         {tabs.map((tab) => (
           <button
             key={tab.id}
-            className={`ribbon-tab ${activeTab === tab.id && !filledRegionMode ? 'active' : ''}`}
+            className={`ribbon-tab ${activeTab === tab.id ? 'active' : ''}`}
             onClick={() => setActiveTab(tab.id)}
           >
             {tab.label}
           </button>
         ))}
-        {/* Contextual Tab for Filled Region */}
-        {filledRegionMode && (
-          <button className="ribbon-tab contextual active">
-            Modify | Filled Region
-          </button>
-        )}
       </div>
 
       {/* Ribbon Content */}
       <div className="ribbon-content-container">
-        {/* Filled Region Contextual Ribbon */}
-        {filledRegionMode && (
-          <div className="ribbon-content active">
-            <div className="ribbon-groups">
-              {/* Mode Group */}
-              <RibbonGroup label="Mode">
-                <div className="ribbon-mode-buttons">
-                  <button
-                    className="ribbon-mode-btn cancel"
-                    onClick={cancelFilledRegionMode}
-                    title="Cancel (Esc)"
-                  >
-                    <X size={18} strokeWidth={2.5} />
-                  </button>
-                  <button
-                    className="ribbon-mode-btn finish"
-                    onClick={finishFilledRegion}
-                    title="Finish"
-                  >
-                    <Check size={18} strokeWidth={2.5} />
-                  </button>
-                </div>
-              </RibbonGroup>
-
-              {/* Draw Group */}
-              <RibbonGroup label="Draw">
-                <div className="ribbon-draw-tools">
-                  <div className="ribbon-draw-row">
-                    <button
-                      className={`ribbon-draw-btn ${(filledRegionDrawTool === 'line' || filledRegionDrawTool === 'arc') && !polylineArcMode ? 'active' : ''}`}
-                      onClick={() => setFilledRegionDrawTool('line')}
-                      title="Line (L) - Draw straight segments"
-                    >
-                      <LineIcon size={14} />
-                    </button>
-                    <button
-                      className={`ribbon-draw-btn ${(filledRegionDrawTool === 'line' || filledRegionDrawTool === 'arc') && polylineArcMode ? 'active' : ''}`}
-                      onClick={() => setFilledRegionDrawTool('arc')}
-                      title="Arc (A) - Draw arc segments"
-                    >
-                      <ArcIcon size={14} />
-                    </button>
-                    <button
-                      className={`ribbon-draw-btn ${filledRegionDrawTool === 'rectangle' ? 'active' : ''}`}
-                      onClick={() => setFilledRegionDrawTool('rectangle')}
-                      title="Rectangle"
-                    >
-                      <Square size={14} />
-                    </button>
-                    <button
-                      className={`ribbon-draw-btn ${filledRegionDrawTool === 'circle' ? 'active' : ''}`}
-                      onClick={() => setFilledRegionDrawTool('circle')}
-                      title="Circle"
-                    >
-                      <Circle size={14} />
-                    </button>
-                  </div>
-                  <div className="ribbon-draw-row">
-                    <button
-                      className={`ribbon-draw-btn ${filledRegionDrawTool === 'polygon' ? 'active' : ''}`}
-                      onClick={() => setFilledRegionDrawTool('polygon')}
-                      title="Polygon"
-                    >
-                      <PolylineIcon size={14} />
-                    </button>
-                    <button
-                      className={`ribbon-draw-btn ${filledRegionDrawTool === 'spline' ? 'active' : ''}`}
-                      onClick={() => setFilledRegionDrawTool('spline')}
-                      title="Spline"
-                    >
-                      <SplineIcon size={14} />
-                    </button>
-                    <button
-                      className={`ribbon-draw-btn ${filledRegionDrawTool === 'pickLines' ? 'active' : ''}`}
-                      onClick={() => setFilledRegionDrawTool('pickLines')}
-                      title="Pick Lines"
-                    >
-                      <MousePointer2 size={14} />
-                    </button>
-                  </div>
-                </div>
-              </RibbonGroup>
-            </div>
-          </div>
-        )}
-
         {/* Home Tab */}
-        <div className={`ribbon-content ${activeTab === 'home' && !filledRegionMode ? 'active' : ''}`}>
+        <div className={`ribbon-content ${activeTab === 'home' ? 'active' : ''}`}>
           <div className="ribbon-groups">
             {/* Clipboard Group */}
             <RibbonGroup label="Clipboard">
@@ -730,8 +638,8 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 <RibbonSmallButton
                   icon={<FilledRegionIcon size={14} />}
                   label="Filled Region"
-                  onClick={startFilledRegionMode}
-                  active={filledRegionMode}
+                  onClick={() => switchToDrawingTool('hatch')}
+                  active={activeTool === 'hatch'}
                 />
                 <RibbonSmallButton
                   icon={<DivideIcon size={14} />}
@@ -965,18 +873,50 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 disabled={true}
               />
             </RibbonGroup>
+
+            {/* Draw Order Group */}
+            <RibbonGroup label="Draw Order">
+              <RibbonButtonStack>
+                <RibbonSmallButton
+                  icon={<ArrowUpToLine size={14} />}
+                  label="Bring Front"
+                  onClick={bringToFront}
+                  disabled={selectedShapeIds.length === 0}
+                />
+                <RibbonSmallButton
+                  icon={<ArrowUp size={14} />}
+                  label="Bring Fwd"
+                  onClick={bringForward}
+                  disabled={selectedShapeIds.length === 0}
+                />
+              </RibbonButtonStack>
+              <RibbonButtonStack>
+                <RibbonSmallButton
+                  icon={<ArrowDown size={14} />}
+                  label="Send Bwd"
+                  onClick={sendBackward}
+                  disabled={selectedShapeIds.length === 0}
+                />
+                <RibbonSmallButton
+                  icon={<ArrowDownToLine size={14} />}
+                  label="Send Back"
+                  onClick={sendToBack}
+                  disabled={selectedShapeIds.length === 0}
+                />
+              </RibbonButtonStack>
+            </RibbonGroup>
           </div>
         </div>
 
         {/* Modify Tab */}
-        <div className={`ribbon-content ${activeTab === 'modify' && !filledRegionMode ? 'active' : ''}`}>
+        <div className={`ribbon-content ${activeTab === 'modify' ? 'active' : ''}`}>
           <div className="ribbon-groups">
             <RibbonGroup label="Region">
               <RibbonButton
                 icon={<FilledRegionIcon size={24} />}
                 label="Filled Region"
-                onClick={startFilledRegionMode}
-                active={filledRegionMode}
+                onClick={() => switchToDrawingTool('hatch')}
+                active={activeTool === 'hatch'}
               />
               <RibbonButton
                 icon={<HatchIcon size={24} />}
@@ -1010,7 +950,7 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
         </div>
 
         {/* Structural Tab */}
-        <div className={`ribbon-content ${activeTab === 'structural' && !filledRegionMode ? 'active' : ''}`}>
+        <div className={`ribbon-content ${activeTab === 'structural' ? 'active' : ''}`}>
           <div className="ribbon-groups">
             <RibbonGroup label="Section">
               <RibbonButton
@@ -1037,7 +977,7 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
         </div>
 
         {/* View Tab */}
-        <div className={`ribbon-content ${activeTab === 'view' && !filledRegionMode ? 'active' : ''}`}>
+        <div className={`ribbon-content ${activeTab === 'view' ? 'active' : ''}`}>
           <div className="ribbon-groups">
             <RibbonGroup label="Navigate">
               <RibbonButton
@@ -1097,7 +1037,7 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
         </div>
 
         {/* Tools Tab */}
-        <div className={`ribbon-content ${activeTab === 'tools' && !filledRegionMode ? 'active' : ''}`}>
+        <div className={`ribbon-content ${activeTab === 'tools' ? 'active' : ''}`}>
           <div className="ribbon-groups">
             <RibbonGroup label="Settings">
               <RibbonButton

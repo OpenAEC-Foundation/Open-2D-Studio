@@ -93,6 +93,8 @@ export interface ProjectFileV2 {
   };
   // Print presets (optional)
   savedPrintPresets?: Record<string, import('../../state/slices/uiSlice').PrintSettings>;
+  // Filled region types (optional, backward compatible)
+  filledRegionTypes?: import('../../types/filledRegion').FilledRegionType[];
 }
 
 // Current project file type

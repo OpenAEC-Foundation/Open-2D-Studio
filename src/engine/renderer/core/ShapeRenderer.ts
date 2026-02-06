@@ -3,7 +3,7 @@
  */
 
 import type { Shape, DrawingPreview, CurrentStyle, Viewport } from '../types';
-import type { HatchShape, BeamShape } from '../../../types/geometry';
+import type { HatchShape, HatchPatternType, BeamShape } from '../../../types/geometry';
 import type { CustomHatchPattern, LineFamily, SvgHatchPattern } from '../../../types/hatch';
 import { BUILTIN_PATTERNS, isSvgHatchPattern } from '../../../types/hatch';
 import { BaseRenderer } from './BaseRenderer';
@@ -25,6 +25,9 @@ export class ShapeRenderer extends BaseRenderer {
   private drawingScale: number = 0.02;
   // Reference scale - text looks the same as before at this scale
   private static readonly REFERENCE_SCALE = 0.02; // 1:50
+  // Live preview: temporarily override pattern for selected hatch shapes
+  private previewPatternId: string | null = null;
+  private previewSelectedIds: Set<string> = new Set();
 
   constructor(ctx: CanvasRenderingContext2D, width: number = 0, height: number = 0, dpr?: number) {
     super(ctx, width, height, dpr);
@@ -39,6 +42,14 @@ export class ShapeRenderer extends BaseRenderer {
   setDrawingScale(scale: number): void {
     this.drawingScale = scale;
     this.dimensionRenderer.setDrawingScale(scale);
+  }
+
+  /**
+   * Set live preview state for pattern hovering
+   */
+  setPreviewPattern(patternId: string | null, selectedIds: string[]): void {
+    this.previewPatternId = patternId;
+    this.previewSelectedIds = new Set(selectedIds);
   }
 
   /**
@@ -1910,13 +1921,30 @@ export class ShapeRenderer extends BaseRenderer {
 
   private drawHatch(shape: HatchShape, invertColors: boolean = false): void {
     const ctx = this.ctx;
-    const { points, bulge, patternType, patternAngle, patternScale, fillColor, backgroundColor, customPatternId } = shape;
+
+    // Apply live preview override if this shape is selected and a preview pattern is active
+    let effectiveShape = shape;
+    if (this.previewPatternId && this.previewSelectedIds.has(shape.id)) {
+      const previewPattern = BUILTIN_PATTERNS.find(p => p.id === this.previewPatternId)
+        || this.customPatterns.find(p => p.id === this.previewPatternId);
+      if (previewPattern) {
+        const isBuiltin = BUILTIN_PATTERNS.some(p => p.id === previewPattern.id);
+        effectiveShape = {
+          ...shape,
+          patternType: isBuiltin ? previewPattern.id as HatchPatternType : 'custom',
+          customPatternId: isBuiltin ? undefined : previewPattern.id,
+        };
+      }
+    }
+
+    const { points, bulge, patternType, patternAngle, patternScale, fillColor, backgroundColor, customPatternId } = effectiveShape;
+    const boundaryVisible = effectiveShape.boundaryVisible ?? true;
+    const innerLoops = effectiveShape.innerLoops;
 
     if (points.length < 3) return;
 
-    // Build boundary path (supports bulge/arc segments like polyline)
-    const buildPath = () => {
-      ctx.beginPath();
+    // Build outer boundary path (supports bulge/arc segments like polyline)
+    const buildOuterPath = () => {
       ctx.moveTo(points[0].x, points[0].y);
 
       for (let i = 0; i < points.length - 1; i++) {
@@ -1939,11 +1967,29 @@ export class ShapeRenderer extends BaseRenderer {
       }
     };
 
-    // Fill background if set
+    // Build full path with inner loops (holes) using evenodd winding rule
+    const buildPath = () => {
+      ctx.beginPath();
+      buildOuterPath();
+
+      // Add inner loops (drawn in reverse winding for evenodd cutout)
+      if (innerLoops && innerLoops.length > 0) {
+        for (const loop of innerLoops) {
+          if (loop.length < 3) continue;
+          ctx.moveTo(loop[0].x, loop[0].y);
+          for (let i = 1; i < loop.length; i++) {
+            ctx.lineTo(loop[i].x, loop[i].y);
+          }
+          ctx.closePath();
+        }
+      }
+    };
+
+    // Step 1: Fill solid background if masking is on or backgroundColor is set
     if (backgroundColor) {
       buildPath();
       ctx.fillStyle = backgroundColor;
-      ctx.fill();
+      ctx.fill('evenodd');
     }
 
     // Get bounding box
@@ -1955,6 +2001,27 @@ export class ShapeRenderer extends BaseRenderer {
       if (p.y > maxY) maxY = p.y;
     }
 
+    // Step 2: Render background pattern layer (if set)
+    if (shape.bgPatternType) {
+      const bgScale = shape.bgPatternScale ?? 1;
+      const bgAngle = shape.bgPatternAngle ?? 0;
+      let bgColor = shape.bgFillColor ?? '#808080';
+      if (invertColors && bgColor === '#ffffff') bgColor = '#000000';
+
+      ctx.save();
+      buildPath();
+      ctx.clip('evenodd');
+
+      this.renderPatternLayer(
+        shape.bgPatternType, bgAngle, bgScale, bgColor,
+        shape.bgCustomPatternId, shape.style.strokeWidth,
+        minX, minY, maxX, maxY
+      );
+
+      ctx.restore();
+    }
+
+    // Step 3: Render foreground pattern layer
     let patternColor = fillColor;
     if (invertColors && patternColor === '#ffffff') {
       patternColor = '#000000';
@@ -1962,31 +2029,71 @@ export class ShapeRenderer extends BaseRenderer {
 
     ctx.save();
     buildPath();
-    ctx.clip();
+    ctx.clip('evenodd');
 
-    // Handle custom patterns
-    if (patternType === 'custom' && customPatternId) {
-      const customPattern = this.getPatternById(customPatternId);
+    this.renderPatternLayer(
+      patternType, patternAngle, patternScale, patternColor,
+      customPatternId, shape.style.strokeWidth,
+      minX, minY, maxX, maxY
+    );
+
+    ctx.restore();
+
+    // Step 4: Stroke boundary (only if visible)
+    if (boundaryVisible) {
+      ctx.beginPath();
+      buildOuterPath();
+      ctx.stroke();
+
+      // Also stroke inner loops
+      if (innerLoops && innerLoops.length > 0) {
+        for (const loop of innerLoops) {
+          if (loop.length < 3) continue;
+          ctx.beginPath();
+          ctx.moveTo(loop[0].x, loop[0].y);
+          for (let i = 1; i < loop.length; i++) {
+            ctx.lineTo(loop[i].x, loop[i].y);
+          }
+          ctx.closePath();
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  /**
+   * Render a single pattern layer within the current clip region
+   */
+  private renderPatternLayer(
+    pType: HatchPatternType,
+    pAngle: number,
+    pScale: number,
+    pColor: string,
+    pCustomId: string | undefined,
+    strokeWidth: number,
+    minX: number, minY: number, maxX: number, maxY: number
+  ): void {
+    const ctx = this.ctx;
+
+    if (pType === 'custom' && pCustomId) {
+      const customPattern = this.getPatternById(pCustomId);
       if (customPattern) {
-        // Check if it's an SVG pattern
         if (isSvgHatchPattern(customPattern)) {
-          this.drawSvgPattern(customPattern, minX, minY, maxX, maxY, patternScale, patternAngle);
+          this.drawSvgPattern(customPattern, minX, minY, maxX, maxY, pScale, pAngle);
         } else if (customPattern.lineFamilies.length > 0) {
-          // Line-based pattern
-          this.drawCustomPatternLines(customPattern.lineFamilies, minX, minY, maxX, maxY, patternScale, patternAngle, patternColor, shape.style.strokeWidth);
+          this.drawCustomPatternLines(customPattern.lineFamilies, minX, minY, maxX, maxY, pScale, pAngle, pColor, strokeWidth);
         } else {
-          // Empty line families = solid fill
-          ctx.fillStyle = patternColor;
+          ctx.fillStyle = pColor;
           ctx.fill();
         }
       }
-    } else if (patternType === 'solid') {
-      ctx.fillStyle = patternColor;
+    } else if (pType === 'solid') {
+      ctx.fillStyle = pColor;
       ctx.fill();
-    } else if (patternType === 'dots') {
-      const spacing = 10 * patternScale;
-      const dotRadius = 1 * patternScale;
-      ctx.fillStyle = patternColor;
+    } else if (pType === 'dots') {
+      const spacing = 10 * pScale;
+      const dotRadius = 1 * pScale;
+      ctx.fillStyle = pColor;
       for (let x = minX; x <= maxX; x += spacing) {
         for (let y = minY; y <= maxY; y += spacing) {
           ctx.beginPath();
@@ -1995,11 +2102,10 @@ export class ShapeRenderer extends BaseRenderer {
         }
       }
     } else {
-      // Built-in line patterns
-      const spacing = 10 * patternScale;
+      const spacing = 10 * pScale;
       const angles: number[] = [];
 
-      switch (patternType) {
+      switch (pType) {
         case 'horizontal':
           angles.push(0);
           break;
@@ -2007,28 +2113,22 @@ export class ShapeRenderer extends BaseRenderer {
           angles.push(90);
           break;
         case 'diagonal':
-          angles.push(patternAngle);
+          angles.push(pAngle);
           break;
         case 'crosshatch':
-          angles.push(patternAngle);
-          angles.push(patternAngle + 90);
+          angles.push(pAngle);
+          angles.push(pAngle + 90);
           break;
       }
 
-      ctx.strokeStyle = patternColor;
-      ctx.lineWidth = shape.style.strokeWidth * 0.5;
+      ctx.strokeStyle = pColor;
+      ctx.lineWidth = strokeWidth * 0.5;
       ctx.setLineDash([]);
 
       for (const angleDeg of angles) {
         this.drawLineFamilySimple(angleDeg, spacing, minX, minY, maxX, maxY);
       }
     }
-
-    ctx.restore();
-
-    // Stroke boundary
-    buildPath();
-    ctx.stroke();
   }
 
   /**

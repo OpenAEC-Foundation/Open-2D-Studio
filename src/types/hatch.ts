@@ -21,6 +21,11 @@ export type HatchPatternScaleType = 'model' | 'drafting';
 export type HatchPatternSource = 'builtin' | 'user' | 'project' | 'imported';
 
 /**
+ * Pattern category for organizing patterns in the picker
+ */
+export type PatternCategory = 'basic' | 'hatching' | 'material' | 'geometric' | 'custom';
+
+/**
  * Original format if pattern was imported
  */
 export type HatchPatternFormat = 'pat' | 'svg';
@@ -109,6 +114,9 @@ export interface CustomHatchPattern {
 
   /** Last modified timestamp */
   modifiedAt?: string;
+
+  /** Category for organizing in the pattern picker */
+  category?: PatternCategory;
 }
 
 /**
@@ -140,7 +148,18 @@ export function isSvgHatchPattern(pattern: CustomHatchPattern): pattern is SvgHa
 /**
  * Built-in pattern IDs (for backward compatibility)
  */
-export type BuiltinPatternId = 'solid' | 'diagonal' | 'crosshatch' | 'horizontal' | 'vertical' | 'dots';
+export type BuiltinPatternId =
+  | 'solid' | 'diagonal' | 'crosshatch' | 'horizontal' | 'vertical' | 'dots'
+  // Material
+  | 'concrete' | 'brick-running' | 'brick-stack' | 'insulation' | 'earth' | 'sand' | 'gravel' | 'water' | 'clay'
+  // Wood
+  | 'wood-grain' | 'plywood' | 'timber-section'
+  // Metal
+  | 'steel-section' | 'aluminum'
+  // Masonry
+  | 'stone-block' | 'cut-stone'
+  // Geometric
+  | 'diamonds' | 'herringbone' | 'basket-weave' | 'zigzag';
 
 /**
  * Built-in patterns converted to CustomHatchPattern format
@@ -152,6 +171,7 @@ export const BUILTIN_PATTERNS: CustomHatchPattern[] = [
     description: 'Solid fill with no pattern lines',
     scaleType: 'drafting',
     source: 'builtin',
+    category: 'basic',
     lineFamilies: [], // Empty = solid fill
   },
   {
@@ -160,6 +180,7 @@ export const BUILTIN_PATTERNS: CustomHatchPattern[] = [
     description: 'Diagonal lines at 45 degrees',
     scaleType: 'drafting',
     source: 'builtin',
+    category: 'hatching',
     lineFamilies: [
       { angle: 45, originX: 0, originY: 0, deltaX: 0, deltaY: 10 },
     ],
@@ -170,6 +191,7 @@ export const BUILTIN_PATTERNS: CustomHatchPattern[] = [
     description: 'Two sets of diagonal lines forming a cross pattern',
     scaleType: 'drafting',
     source: 'builtin',
+    category: 'hatching',
     lineFamilies: [
       { angle: 45, originX: 0, originY: 0, deltaX: 0, deltaY: 10 },
       { angle: -45, originX: 0, originY: 0, deltaX: 0, deltaY: 10 },
@@ -181,6 +203,7 @@ export const BUILTIN_PATTERNS: CustomHatchPattern[] = [
     description: 'Horizontal parallel lines',
     scaleType: 'drafting',
     source: 'builtin',
+    category: 'basic',
     lineFamilies: [
       { angle: 0, originX: 0, originY: 0, deltaX: 0, deltaY: 10 },
     ],
@@ -191,6 +214,7 @@ export const BUILTIN_PATTERNS: CustomHatchPattern[] = [
     description: 'Vertical parallel lines',
     scaleType: 'drafting',
     source: 'builtin',
+    category: 'basic',
     lineFamilies: [
       { angle: 90, originX: 0, originY: 0, deltaX: 0, deltaY: 10 },
     ],
@@ -201,9 +225,272 @@ export const BUILTIN_PATTERNS: CustomHatchPattern[] = [
     description: 'Regular grid of dots',
     scaleType: 'drafting',
     source: 'builtin',
+    category: 'hatching',
     lineFamilies: [
-      // Dots are represented as very short dashes (essentially points)
       { angle: 0, originX: 0, originY: 0, deltaX: 10, deltaY: 10, dashPattern: [0] },
+    ],
+  },
+
+  // =========================================================================
+  // Material Patterns
+  // =========================================================================
+  {
+    id: 'concrete',
+    name: 'Concrete',
+    description: 'Concrete section - random dots and short dashes',
+    scaleType: 'drafting',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 37, originX: 0, originY: 0, deltaX: 3, deltaY: 8, dashPattern: [0] },
+      { angle: 127, originX: 5, originY: 3, deltaX: 5, deltaY: 12, dashPattern: [0] },
+      { angle: 70, originX: 2, originY: 7, deltaX: 7, deltaY: 10, dashPattern: [0] },
+    ],
+  },
+  {
+    id: 'brick-running',
+    name: 'Brick Running Bond',
+    description: 'Brick pattern with staggered rows',
+    scaleType: 'model',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 0, originX: 0, originY: 0, deltaX: 0, deltaY: 10 },
+      { angle: 90, originX: 0, originY: 0, deltaX: 20, deltaY: 20, dashPattern: [10, -10] },
+    ],
+  },
+  {
+    id: 'brick-stack',
+    name: 'Brick Stack Bond',
+    description: 'Brick pattern with aligned vertical joints',
+    scaleType: 'model',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 0, originX: 0, originY: 0, deltaX: 0, deltaY: 10 },
+      { angle: 90, originX: 0, originY: 0, deltaX: 0, deltaY: 20, dashPattern: [10, -10] },
+    ],
+  },
+  {
+    id: 'insulation',
+    name: 'Insulation',
+    description: 'Insulation batt pattern with wavy lines',
+    scaleType: 'drafting',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 45, originX: 0, originY: 0, deltaX: 0, deltaY: 6 },
+      { angle: -45, originX: 0, originY: 0, deltaX: 0, deltaY: 6 },
+    ],
+  },
+  {
+    id: 'earth',
+    name: 'Earth',
+    description: 'Earth/soil section pattern',
+    scaleType: 'drafting',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 45, originX: 0, originY: 0, deltaX: 0, deltaY: 12, dashPattern: [6, -3, 2, -3] },
+      { angle: 0, originX: 0, originY: 0, deltaX: 6, deltaY: 10, dashPattern: [0] },
+    ],
+  },
+  {
+    id: 'sand',
+    name: 'Sand',
+    description: 'Sand pattern - scattered dots',
+    scaleType: 'drafting',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 0, originX: 0, originY: 0, deltaX: 6, deltaY: 6, dashPattern: [0] },
+      { angle: 60, originX: 3, originY: 2, deltaX: 6, deltaY: 8, dashPattern: [0] },
+      { angle: 120, originX: 1, originY: 4, deltaX: 8, deltaY: 7, dashPattern: [0] },
+    ],
+  },
+  {
+    id: 'gravel',
+    name: 'Gravel',
+    description: 'Gravel/aggregate pattern',
+    scaleType: 'drafting',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 30, originX: 0, originY: 0, deltaX: 4, deltaY: 12, dashPattern: [3, -5] },
+      { angle: -30, originX: 6, originY: 0, deltaX: 4, deltaY: 12, dashPattern: [2, -6] },
+      { angle: 80, originX: 2, originY: 4, deltaX: 6, deltaY: 10, dashPattern: [0] },
+    ],
+  },
+  {
+    id: 'water',
+    name: 'Water',
+    description: 'Water section - horizontal wavy lines',
+    scaleType: 'drafting',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 0, originX: 0, originY: 0, deltaX: 0, deltaY: 8 },
+      { angle: 0, originX: 0, originY: 4, deltaX: 0, deltaY: 16, dashPattern: [8, -4] },
+    ],
+  },
+  {
+    id: 'clay',
+    name: 'Clay',
+    description: 'Clay section pattern',
+    scaleType: 'drafting',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 0, originX: 0, originY: 0, deltaX: 0, deltaY: 6, dashPattern: [12, -4] },
+      { angle: 0, originX: 8, originY: 3, deltaX: 0, deltaY: 6, dashPattern: [6, -10] },
+    ],
+  },
+
+  // =========================================================================
+  // Wood Patterns
+  // =========================================================================
+  {
+    id: 'wood-grain',
+    name: 'Wood Grain',
+    description: 'Wood grain lines at varying spacing',
+    scaleType: 'model',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 0, originX: 0, originY: 0, deltaX: 0, deltaY: 5 },
+      { angle: 0, originX: 0, originY: 2, deltaX: 0, deltaY: 12, dashPattern: [15, -8] },
+    ],
+  },
+  {
+    id: 'plywood',
+    name: 'Plywood',
+    description: 'Plywood cross-section with alternating grain',
+    scaleType: 'model',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 0, originX: 0, originY: 0, deltaX: 0, deltaY: 4 },
+      { angle: 90, originX: 0, originY: 0, deltaX: 0, deltaY: 15, dashPattern: [4, -8] },
+    ],
+  },
+  {
+    id: 'timber-section',
+    name: 'Timber Section',
+    description: 'Timber cross-section with diagonal lines',
+    scaleType: 'model',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 45, originX: 0, originY: 0, deltaX: 0, deltaY: 5 },
+      { angle: -45, originX: 0, originY: 0, deltaX: 0, deltaY: 10, dashPattern: [3, -7] },
+    ],
+  },
+
+  // =========================================================================
+  // Metal Patterns
+  // =========================================================================
+  {
+    id: 'steel-section',
+    name: 'Steel Section',
+    description: 'Steel cross-section with dense diagonal lines',
+    scaleType: 'drafting',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 45, originX: 0, originY: 0, deltaX: 0, deltaY: 3 },
+    ],
+  },
+  {
+    id: 'aluminum',
+    name: 'Aluminum',
+    description: 'Aluminum section pattern',
+    scaleType: 'drafting',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 45, originX: 0, originY: 0, deltaX: 0, deltaY: 3 },
+      { angle: 45, originX: 0, originY: 1.5, deltaX: 0, deltaY: 6, dashPattern: [4, -4] },
+    ],
+  },
+
+  // =========================================================================
+  // Masonry Patterns
+  // =========================================================================
+  {
+    id: 'stone-block',
+    name: 'Stone Block',
+    description: 'Rough stone block pattern',
+    scaleType: 'model',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 0, originX: 0, originY: 0, deltaX: 0, deltaY: 20 },
+      { angle: 90, originX: 0, originY: 0, deltaX: 30, deltaY: 40, dashPattern: [20, -20] },
+      { angle: 45, originX: 5, originY: 5, deltaX: 10, deltaY: 20, dashPattern: [3, -17] },
+    ],
+  },
+  {
+    id: 'cut-stone',
+    name: 'Cut Stone',
+    description: 'Dressed/cut stone pattern',
+    scaleType: 'model',
+    source: 'builtin',
+    category: 'material',
+    lineFamilies: [
+      { angle: 0, originX: 0, originY: 0, deltaX: 0, deltaY: 15 },
+      { angle: 90, originX: 0, originY: 0, deltaX: 25, deltaY: 30, dashPattern: [15, -15] },
+    ],
+  },
+
+  // =========================================================================
+  // Geometric Patterns
+  // =========================================================================
+  {
+    id: 'diamonds',
+    name: 'Diamonds',
+    description: 'Diamond/rhombus grid pattern',
+    scaleType: 'drafting',
+    source: 'builtin',
+    category: 'geometric',
+    lineFamilies: [
+      { angle: 60, originX: 0, originY: 0, deltaX: 0, deltaY: 10 },
+      { angle: -60, originX: 0, originY: 0, deltaX: 0, deltaY: 10 },
+    ],
+  },
+  {
+    id: 'herringbone',
+    name: 'Herringbone',
+    description: 'Herringbone / chevron pattern',
+    scaleType: 'drafting',
+    source: 'builtin',
+    category: 'geometric',
+    lineFamilies: [
+      { angle: 45, originX: 0, originY: 0, deltaX: 10, deltaY: 10, dashPattern: [10, -10] },
+      { angle: -45, originX: 0, originY: 0, deltaX: 10, deltaY: 10, dashPattern: [10, -10] },
+    ],
+  },
+  {
+    id: 'basket-weave',
+    name: 'Basket Weave',
+    description: 'Alternating horizontal and vertical segments',
+    scaleType: 'drafting',
+    source: 'builtin',
+    category: 'geometric',
+    lineFamilies: [
+      { angle: 0, originX: 0, originY: 0, deltaX: 20, deltaY: 10, dashPattern: [10, -10] },
+      { angle: 90, originX: 10, originY: 0, deltaX: 10, deltaY: 20, dashPattern: [10, -10] },
+    ],
+  },
+  {
+    id: 'zigzag',
+    name: 'Zigzag',
+    description: 'Zigzag / sawtooth pattern',
+    scaleType: 'drafting',
+    source: 'builtin',
+    category: 'geometric',
+    lineFamilies: [
+      { angle: 60, originX: 0, originY: 0, deltaX: 10, deltaY: 12, dashPattern: [7, -5] },
+      { angle: -60, originX: 5, originY: 0, deltaX: 10, deltaY: 12, dashPattern: [7, -5] },
     ],
   },
 ];

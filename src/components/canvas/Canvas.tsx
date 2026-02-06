@@ -202,6 +202,7 @@ export function Canvas() {
               userPatterns: s.userPatterns,
               projectPatterns: s.projectPatterns,
             },
+            previewPatternId: s.previewPatternId,
           });
         }
       }

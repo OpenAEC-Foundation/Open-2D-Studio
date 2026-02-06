@@ -297,6 +297,15 @@ function createHatchInternal(
     fillColor: (params.fillColor as string) || '#ffffff',
     backgroundColor: params.backgroundColor as string | undefined,
     customPatternId: params.customPatternId as string | undefined,
+    bgPatternType: params.bgPatternType as string | undefined,
+    bgPatternAngle: params.bgPatternAngle as number | undefined,
+    bgPatternScale: params.bgPatternScale as number | undefined,
+    bgFillColor: params.bgFillColor as string | undefined,
+    bgCustomPatternId: params.bgCustomPatternId as string | undefined,
+    masking: params.masking as boolean | undefined,
+    filledRegionTypeId: params.filledRegionTypeId as string | undefined,
+    boundaryVisible: params.boundaryVisible as boolean | undefined,
+    innerLoops: params.innerLoops as Point[][] | undefined,
   } as Shape;
 }
 

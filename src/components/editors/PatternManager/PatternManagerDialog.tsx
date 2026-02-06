@@ -15,6 +15,7 @@ import {
   ChevronRight,
   AlertCircle,
   CheckCircle,
+  Star,
 } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
 import { DraggableModal, ModalButton } from '../../shared/DraggableModal';
@@ -44,7 +45,7 @@ interface PatternManagerDialogProps {
   onSelectPattern?: (patternId: string) => void;
 }
 
-type PatternCategory = 'builtin' | 'user' | 'project';
+type PatternCategory = 'favorites' | 'builtin' | 'user' | 'project';
 
 export function PatternManagerDialog({
   isOpen,
@@ -58,10 +59,13 @@ export function PatternManagerDialog({
     deleteProjectPattern,
     duplicateUserPattern,
     duplicateProjectPattern,
+    favoritePatternIds,
+    toggleFavoritePattern,
   } = useAppStore();
 
   const [selectedPatternId, setSelectedPatternId] = useState<string | null>(null);
   const [expandedCategories, setExpandedCategories] = useState<Record<PatternCategory, boolean>>({
+    favorites: true,
     builtin: true,
     user: true,
     project: true,
@@ -76,12 +80,26 @@ export function PatternManagerDialog({
   // Import/export status
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Resolve favorite patterns (only those that still exist)
+  const allPatternsFlat = useMemo(() => [
+    ...BUILTIN_PATTERNS,
+    ...userPatterns,
+    ...projectPatterns,
+  ], [userPatterns, projectPatterns]);
+
+  const favoritePatterns = useMemo(() => {
+    return favoritePatternIds
+      .map(id => allPatternsFlat.find(p => p.id === id))
+      .filter((p): p is CustomHatchPattern => p !== undefined);
+  }, [favoritePatternIds, allPatternsFlat]);
+
   // Get all patterns organized by category
   const allPatterns = useMemo(() => ({
+    favorites: favoritePatterns,
     builtin: BUILTIN_PATTERNS,
     user: userPatterns,
     project: projectPatterns,
-  }), [userPatterns, projectPatterns]);
+  }), [userPatterns, projectPatterns, favoritePatterns]);
 
   // Find the selected pattern
   const selectedPattern = useMemo(() => {
@@ -94,7 +112,7 @@ export function PatternManagerDialog({
     );
   }, [selectedPatternId, userPatterns, projectPatterns]);
 
-  // Determine which category the selected pattern belongs to
+  // Determine which category the selected pattern belongs to (actual source, not favorites virtual category)
   const selectedCategory = useMemo((): PatternCategory | null => {
     if (!selectedPatternId) return null;
     if (BUILTIN_PATTERNS.some(p => p.id === selectedPatternId)) return 'builtin';
@@ -102,6 +120,8 @@ export function PatternManagerDialog({
     if (projectPatterns.some(p => p.id === selectedPatternId)) return 'project';
     return null;
   }, [selectedPatternId, userPatterns, projectPatterns]);
+
+  const isFavorite = (id: string) => favoritePatternIds.includes(id);
 
   const toggleCategory = (category: PatternCategory) => {
     setExpandedCategories(prev => ({
@@ -383,7 +403,7 @@ export function PatternManagerDialog({
     if (patterns.length === 0) {
       return (
         <div className="pl-6 py-2 text-xs text-cad-text-dim italic">
-          No patterns
+          {category === 'favorites' ? 'No favorite patterns yet' : 'No patterns'}
         </div>
       );
     }
@@ -392,8 +412,8 @@ export function PatternManagerDialog({
       <div className="pl-2">
         {patterns.map(pattern => (
           <div
-            key={pattern.id}
-            className={`flex items-center gap-2 px-2 py-1.5 cursor-pointer rounded transition-colors ${
+            key={`${category}-${pattern.id}`}
+            className={`flex items-center gap-1.5 px-2 py-1.5 cursor-pointer rounded transition-colors group ${
               selectedPatternId === pattern.id
                 ? 'bg-cad-accent text-white'
                 : 'hover:bg-cad-hover'
@@ -408,7 +428,22 @@ export function PatternManagerDialog({
               scale={0.5}
             />
             <span className="text-xs truncate flex-1">{pattern.name}</span>
-            {category !== 'builtin' && (
+            {/* Star icon for toggling favorite */}
+            <button
+              className={`p-0.5 transition-opacity ${
+                isFavorite(pattern.id)
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-60'
+              }`}
+              onClick={(e) => { e.stopPropagation(); toggleFavoritePattern(pattern.id); }}
+              title={isFavorite(pattern.id) ? 'Remove from favorites' : 'Add to favorites'}
+            >
+              <Star
+                size={11}
+                className={isFavorite(pattern.id) ? 'fill-yellow-400 text-yellow-400' : 'text-cad-text-dim'}
+              />
+            </button>
+            {category !== 'builtin' && category !== 'favorites' && (
               <span className="text-[10px] text-cad-text-dim opacity-60">
                 {category === 'user' ? 'User' : 'Project'}
               </span>
@@ -420,12 +455,14 @@ export function PatternManagerDialog({
   };
 
   const categoryLabels: Record<PatternCategory, string> = {
+    favorites: 'Favorites',
     builtin: 'Built-in Patterns',
     user: 'User Patterns',
     project: 'Project Patterns',
   };
 
   const categoryIcons: Record<PatternCategory, JSX.Element> = {
+    favorites: <Star size={12} className="fill-yellow-400 text-yellow-400" />,
     builtin: <FolderOpen size={12} />,
     user: <FolderOpen size={12} />,
     project: <FolderOpen size={12} />,
@@ -549,7 +586,7 @@ export function PatternManagerDialog({
 
           {/* Pattern tree */}
           <div className="flex-1 overflow-y-auto p-1">
-            {(['builtin', 'user', 'project'] as PatternCategory[]).map(category => (
+            {(['favorites', 'builtin', 'user', 'project'] as PatternCategory[]).map(category => (
               <div key={category} className="mb-1">
                 <button
                   onClick={() => toggleCategory(category)}

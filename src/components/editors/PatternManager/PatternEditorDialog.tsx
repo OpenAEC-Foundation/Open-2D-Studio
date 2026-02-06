@@ -7,7 +7,8 @@ import { Plus } from 'lucide-react';
 import { DraggableModal, ModalButton } from '../../shared/DraggableModal';
 import { PatternPreview } from './PatternPreview';
 import { LineFamilyEditor, createDefaultLineFamily } from './LineFamilyEditor';
-import type { CustomHatchPattern, LineFamily, HatchPatternScaleType } from '../../../types/hatch';
+import type { CustomHatchPattern, LineFamily, HatchPatternScaleType, PatternCategory } from '../../../types/hatch';
+import { BUILTIN_PATTERNS } from '../../../types/hatch';
 
 interface PatternEditorDialogProps {
   isOpen: boolean;
@@ -32,9 +33,11 @@ export function PatternEditorDialog({
   const [description, setDescription] = useState('');
   const [scaleType, setScaleType] = useState<HatchPatternScaleType>('drafting');
   const [lineFamilies, setLineFamilies] = useState<LineFamily[]>([]);
+  const [category, setCategory] = useState<PatternCategory>('custom');
 
-  // Preview scale
+  // Preview state
   const [previewScale, setPreviewScale] = useState(1);
+  const [previewBg, setPreviewBg] = useState<'dark' | 'light' | 'transparent'>('dark');
 
   // Initialize form when pattern changes or dialog opens
   useEffect(() => {
@@ -44,14 +47,17 @@ export function PatternEditorDialog({
         setDescription(pattern.description || '');
         setScaleType(pattern.scaleType);
         setLineFamilies([...pattern.lineFamilies]);
+        setCategory(pattern.category || 'custom');
       } else {
         // New pattern defaults
         setName('New Pattern');
         setDescription('');
         setScaleType('drafting');
         setLineFamilies([createDefaultLineFamily()]);
+        setCategory('custom');
       }
       setPreviewScale(1);
+      setPreviewBg('dark');
     }
   }, [isOpen, pattern]);
 
@@ -113,44 +119,43 @@ export function PatternEditorDialog({
       description: description.trim() || undefined,
       scaleType,
       lineFamilies,
+      category,
     });
     onClose();
   };
 
-  // Preset patterns
-  const applyPreset = (preset: 'diagonal' | 'crosshatch' | 'horizontal' | 'vertical' | 'brick') => {
-    switch (preset) {
-      case 'diagonal':
-        setLineFamilies([{ angle: 45, originX: 0, originY: 0, deltaX: 0, deltaY: 10 }]);
-        break;
-      case 'crosshatch':
-        setLineFamilies([
-          { angle: 45, originX: 0, originY: 0, deltaX: 0, deltaY: 10 },
-          { angle: -45, originX: 0, originY: 0, deltaX: 0, deltaY: 10 },
-        ]);
-        break;
-      case 'horizontal':
-        setLineFamilies([{ angle: 0, originX: 0, originY: 0, deltaX: 0, deltaY: 10 }]);
-        break;
-      case 'vertical':
-        setLineFamilies([{ angle: 90, originX: 0, originY: 0, deltaX: 0, deltaY: 10 }]);
-        break;
-      case 'brick':
-        setLineFamilies([
-          { angle: 0, originX: 0, originY: 0, deltaX: 0, deltaY: 20 },
-          { angle: 90, originX: 0, originY: 0, deltaX: 20, deltaY: 40 },
-        ]);
-        break;
+  // Template gallery: use built-in patterns as starting points
+  const templatePatterns = useMemo(() => {
+    // Pick representative patterns from each category as templates
+    const templateIds = [
+      'diagonal', 'crosshatch', 'horizontal', 'vertical',
+      'brick-running', 'concrete', 'insulation', 'steel-section',
+      'herringbone', 'diamonds', 'basket-weave', 'earth',
+    ];
+    return templateIds
+      .map(id => BUILTIN_PATTERNS.find(p => p.id === id))
+      .filter((p): p is CustomHatchPattern => !!p);
+  }, []);
+
+  const applyTemplate = (template: CustomHatchPattern) => {
+    setLineFamilies([...template.lineFamilies]);
+    if (!pattern) {
+      // Only update name/category when creating new pattern
+      setName(template.name + ' (Custom)');
+      if (template.category) setCategory(template.category);
     }
   };
+
+  const previewBgColor = previewBg === 'dark' ? '#1a1a2e' : previewBg === 'light' ? '#ffffff' : undefined;
+  const previewLineColor = previewBg === 'light' ? '#333333' : '#ffffff';
 
   return (
     <DraggableModal
       isOpen={isOpen}
       onClose={onClose}
       title={title || (pattern ? 'Edit Pattern' : 'New Pattern')}
-      width={700}
-      height={550}
+      width={800}
+      height={620}
       footer={
         <>
           <ModalButton onClick={onClose} variant="secondary">
@@ -167,17 +172,35 @@ export function PatternEditorDialog({
         <div className="flex-1 p-4 overflow-y-auto border-r border-cad-border">
           {/* Basic info */}
           <div className="space-y-3 mb-4 pb-4 border-b border-cad-border">
-            <div>
-              <label className="text-[10px] text-cad-text-dim uppercase tracking-wide block mb-1">
-                Pattern Name *
-              </label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full px-2 py-1.5 text-sm bg-cad-input border border-cad-border rounded focus:outline-none focus:border-cad-accent"
-                placeholder="Enter pattern name"
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] text-cad-text-dim uppercase tracking-wide block mb-1">
+                  Pattern Name *
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-2 py-1.5 text-sm bg-cad-input border border-cad-border rounded focus:outline-none focus:border-cad-accent"
+                  placeholder="Enter pattern name"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-cad-text-dim uppercase tracking-wide block mb-1">
+                  Category
+                </label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value as PatternCategory)}
+                  className="w-full px-2 py-1.5 text-sm bg-cad-input border border-cad-border rounded focus:outline-none focus:border-cad-accent"
+                >
+                  <option value="basic">Basic</option>
+                  <option value="hatching">Hatching</option>
+                  <option value="material">Material</option>
+                  <option value="geometric">Geometric</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </div>
             </div>
 
             <div>
@@ -227,19 +250,23 @@ export function PatternEditorDialog({
             </div>
           </div>
 
-          {/* Presets */}
+          {/* Template Gallery */}
           <div className="mb-4 pb-4 border-b border-cad-border">
             <label className="text-[10px] text-cad-text-dim uppercase tracking-wide block mb-2">
-              Start from Preset
+              Start from Template
             </label>
-            <div className="flex flex-wrap gap-1">
-              {(['diagonal', 'crosshatch', 'horizontal', 'vertical', 'brick'] as const).map(preset => (
+            <div className="grid grid-cols-6 gap-1">
+              {templatePatterns.map(tmpl => (
                 <button
-                  key={preset}
-                  onClick={() => applyPreset(preset)}
-                  className="px-2 py-1 text-[10px] bg-cad-input border border-cad-border rounded hover:border-cad-text-dim capitalize"
+                  key={tmpl.id}
+                  onClick={() => applyTemplate(tmpl)}
+                  className="flex flex-col items-center p-1 rounded border border-cad-border hover:border-cad-accent hover:bg-cad-hover transition-colors group"
+                  title={tmpl.name}
                 >
-                  {preset}
+                  <PatternPreview pattern={tmpl} width={36} height={28} />
+                  <span className="text-[8px] text-cad-text-dim group-hover:text-cad-accent mt-0.5 truncate w-full text-center">
+                    {tmpl.name}
+                  </span>
                 </button>
               ))}
             </div>
@@ -287,18 +314,55 @@ export function PatternEditorDialog({
         </div>
 
         {/* Right side - Preview */}
-        <div className="w-56 p-4 flex flex-col">
+        <div className="w-72 p-4 flex flex-col">
           <label className="text-[10px] text-cad-text-dim uppercase tracking-wide block mb-2">
             Live Preview
           </label>
 
-          <div className="flex-1 flex items-center justify-center bg-cad-bg rounded border border-cad-border mb-3">
+          <div
+            className="flex items-center justify-center rounded border border-cad-border mb-3"
+            style={{
+              backgroundColor: previewBgColor,
+              backgroundImage: previewBg === 'transparent'
+                ? 'repeating-conic-gradient(#808080 0% 25%, transparent 0% 50%)'
+                : undefined,
+              backgroundSize: previewBg === 'transparent' ? '8px 8px' : undefined,
+            }}
+          >
             <PatternPreview
               pattern={previewPattern}
-              width={180}
-              height={180}
+              width={240}
+              height={240}
               scale={previewScale}
+              lineColor={previewLineColor}
+              backgroundColor="transparent"
             />
+          </div>
+
+          {/* Preview background toggle */}
+          <div className="mb-3">
+            <label className="text-[10px] text-cad-text-dim uppercase tracking-wide block mb-1">
+              Preview Background
+            </label>
+            <div className="flex gap-1">
+              {([
+                { key: 'dark', label: 'Dark', color: '#1a1a2e' },
+                { key: 'light', label: 'Light', color: '#ffffff' },
+                { key: 'transparent', label: 'None', color: undefined },
+              ] as const).map(opt => (
+                <button
+                  key={opt.key}
+                  onClick={() => setPreviewBg(opt.key)}
+                  className={`flex-1 px-2 py-0.5 text-[10px] rounded border transition-colors ${
+                    previewBg === opt.key
+                      ? 'bg-cad-accent border-cad-accent text-white'
+                      : 'bg-cad-input border-cad-border hover:border-cad-text-dim'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div>
@@ -318,7 +382,7 @@ export function PatternEditorDialog({
 
           {/* Pattern info */}
           <div className="mt-4 pt-4 border-t border-cad-border text-[10px] text-cad-text-dim space-y-1">
-            <div>Lines: {lineFamilies.length}</div>
+            <div>Lines: {lineFamilies.length} | Category: {category}</div>
             {lineFamilies.map((f, i) => (
               <div key={i} className="font-mono">
                 #{i + 1}: {f.angle}°, sp={f.deltaY}

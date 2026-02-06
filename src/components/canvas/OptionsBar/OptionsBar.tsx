@@ -1,7 +1,9 @@
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useState, useRef, useEffect } from 'react';
 import { useAppStore } from '../../../state/appStore';
 import type { DimensionType } from '../../../types/dimension';
 import type { HatchPatternType } from '../../../types/geometry';
+import { BUILTIN_PATTERNS } from '../../../types/hatch';
+import { PatternPreview } from '../../editors/PatternManager/PatternPreview';
 
 /**
  * Small reusable select dropdown for the options bar
@@ -682,6 +684,52 @@ function ArrayOptions() {
 /**
  * Hatch tool options
  */
+function HatchPatternDropdown({ value, onChange }: { value: HatchPatternType; onChange: (v: HatchPatternType) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const selected = BUILTIN_PATTERNS.find(p => p.id === value) ?? BUILTIN_PATTERNS[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 bg-cad-bg border border-cad-border text-cad-text px-1.5 py-0 text-xs h-5 cursor-pointer hover:border-cad-accent"
+      >
+        <PatternPreview pattern={selected} width={24} height={14} scale={0.4} />
+        <span>{selected.name}</span>
+        <span className="text-cad-text-dim text-[9px]">&#9662;</span>
+      </button>
+      {open && (
+        <div className="absolute z-50 top-full left-0 mt-1 bg-cad-surface border border-cad-border rounded shadow-lg min-w-[140px]">
+          {BUILTIN_PATTERNS.map(p => (
+            <button
+              key={p.id}
+              type="button"
+              className={`w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-cad-hover ${
+                p.id === value ? 'bg-cad-accent/20' : ''
+              }`}
+              onClick={() => { onChange(p.id as HatchPatternType); setOpen(false); }}
+            >
+              <PatternPreview pattern={p} width={28} height={16} scale={0.4} />
+              <span>{p.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HatchOptions() {
   const hatchPatternType = useAppStore((s) => s.hatchPatternType);
   const setHatchPatternType = useAppStore((s) => s.setHatchPatternType);
@@ -696,19 +744,10 @@ function HatchOptions() {
 
   return (
     <>
-      <OptionSelect
-        label="Pattern"
-        value={hatchPatternType}
-        options={[
-          { value: 'solid', label: 'Solid' },
-          { value: 'diagonal', label: 'Diagonal' },
-          { value: 'crosshatch', label: 'Crosshatch' },
-          { value: 'horizontal', label: 'Horizontal' },
-          { value: 'vertical', label: 'Vertical' },
-          { value: 'dots', label: 'Dots' },
-        ] as { value: HatchPatternType; label: string }[]}
-        onChange={(v) => setHatchPatternType(v as HatchPatternType)}
-      />
+      <label className="flex items-center gap-1">
+        <span className="text-cad-text-dim">Pattern:</span>
+        <HatchPatternDropdown value={hatchPatternType} onChange={(v) => setHatchPatternType(v)} />
+      </label>
       <Separator />
       <OptionNumberInput
         label="Angle"

@@ -49,6 +49,8 @@ export interface DrawingRenderOptions {
     userPatterns: CustomHatchPattern[];
     projectPatterns: CustomHatchPattern[];
   };
+  /** Live preview: temporarily apply this pattern to selected hatches on hover */
+  previewPatternId?: string | null;
 }
 
 // Legacy alias
@@ -126,6 +128,9 @@ export class DrawingRenderer extends BaseRenderer {
     if (customPatterns) {
       this.shapeRenderer.setCustomPatterns(customPatterns.userPatterns, customPatterns.projectPatterns);
     }
+
+    // Set live preview pattern
+    this.shapeRenderer.setPreviewPattern(options.previewPatternId || null, selectedShapeIds);
 
     // Clear canvas
     ctx.save();

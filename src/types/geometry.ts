@@ -51,12 +51,35 @@ export interface HatchShape extends BaseShape {
   type: 'hatch';
   points: Point[];          // Boundary polygon vertices (always closed)
   bulge?: number[];         // Arc bulge values for each segment (like polyline)
+
+  // Foreground pattern
   patternType: HatchPatternType;
   patternAngle: number;     // Rotation in degrees
   patternScale: number;     // Spacing multiplier (1 = default)
   fillColor: string;        // Pattern line/fill color
-  backgroundColor?: string; // Optional background (undefined = transparent)
   customPatternId?: string; // ID of custom pattern (when patternType is 'custom')
+
+  // Background pattern layer (optional second layer rendered behind foreground)
+  bgPatternType?: HatchPatternType;   // Background pattern (undefined = none)
+  bgPatternAngle?: number;            // Background pattern rotation in degrees
+  bgPatternScale?: number;            // Background pattern spacing multiplier
+  bgFillColor?: string;               // Background pattern line/fill color
+  bgCustomPatternId?: string;         // Background custom pattern ref
+
+  // Background solid color (fills behind all patterns)
+  backgroundColor?: string; // Optional solid background (undefined = transparent)
+
+  // Masking: when true (default), region is opaque and hides elements behind it
+  masking?: boolean;
+
+  // Filled Region Type reference (when set, shape derives pattern properties from the type)
+  filledRegionTypeId?: string;
+
+  // Boundary display
+  boundaryVisible?: boolean;  // Whether to stroke the boundary outline (default: true)
+
+  // Inner loops / cutouts (holes in the filled region)
+  innerLoops?: Point[][];     // Array of closed polygons that define holes
 }
 
 // Beam justification - how beam aligns relative to centerline

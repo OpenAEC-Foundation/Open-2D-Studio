@@ -161,6 +161,15 @@ export class EntitiesApi {
           fillColor: hatchParams.fillColor || '#ffffff',
           backgroundColor: hatchParams.backgroundColor,
           customPatternId: hatchParams.customPatternId,
+          bgPatternType: hatchParams.bgPatternType,
+          bgPatternAngle: hatchParams.bgPatternAngle,
+          bgPatternScale: hatchParams.bgPatternScale,
+          bgFillColor: hatchParams.bgFillColor,
+          bgCustomPatternId: hatchParams.bgCustomPatternId,
+          masking: hatchParams.masking,
+          filledRegionTypeId: hatchParams.filledRegionTypeId,
+          boundaryVisible: hatchParams.boundaryVisible,
+          innerLoops: hatchParams.innerLoops,
         } as any;
       }
       default:

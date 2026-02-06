@@ -65,6 +65,10 @@ export function useFileOperations() {
         filePath,
         fileName
       );
+      // Restore project-level filled region types (backward compatible)
+      if (project.filledRegionTypes && project.filledRegionTypes.length > 0) {
+        useAppStore.getState().setProjectFilledRegionTypes(project.filledRegionTypes);
+      }
     } catch (err) {
       await showError(`Failed to open file: ${err}`);
     }
@@ -80,6 +84,8 @@ export function useFileOperations() {
     }
 
     try {
+      // Collect non-built-in filled region types for saving with project
+      const customRegionTypes = s.filledRegionTypes.filter(t => !t.isBuiltIn);
       const project: ProjectFile = {
         version: 2,
         name: s.projectName,
@@ -100,6 +106,7 @@ export function useFileOperations() {
           snapEnabled: s.snapEnabled,
         },
         savedPrintPresets: Object.keys(s.savedPrintPresets).length > 0 ? s.savedPrintPresets : undefined,
+        filledRegionTypes: customRegionTypes.length > 0 ? customRegionTypes : undefined,
       };
 
       await writeProjectFile(filePath, project);
@@ -119,6 +126,7 @@ export function useFileOperations() {
     if (!filePath) return;
 
     try {
+      const customRegionTypes = s.filledRegionTypes.filter(t => !t.isBuiltIn);
       const project: ProjectFile = {
         version: 2,
         name: s.projectName,
@@ -139,6 +147,7 @@ export function useFileOperations() {
           snapEnabled: s.snapEnabled,
         },
         savedPrintPresets: Object.keys(s.savedPrintPresets).length > 0 ? s.savedPrintPresets : undefined,
+        filledRegionTypes: customRegionTypes.length > 0 ? customRegionTypes : undefined,
       };
 
       await writeProjectFile(filePath, project);

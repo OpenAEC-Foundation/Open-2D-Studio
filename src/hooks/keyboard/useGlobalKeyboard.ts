@@ -64,9 +64,6 @@ export function useGlobalKeyboard() {
     deselectAll,
     // Terminal
     toggleTerminal,
-    // Filled Region mode
-    filledRegionMode,
-    cancelFilledRegionMode,
   } = useAppStore();
 
   const handleNew = useCallback(async () => {
@@ -238,13 +235,6 @@ export function useGlobalKeyboard() {
 
       // Escape key - cancel drag or deselect
       if (e.key === 'Escape') {
-        // Filled Region mode: cancel and exit
-        if (filledRegionMode) {
-          e.preventDefault();
-          cancelFilledRegionMode();
-          return;
-        }
-
         // Sheet mode: viewport editing
         if (editorMode === 'sheet') {
           if (viewportEditState.isDragging) {
@@ -279,5 +269,5 @@ export function useGlobalKeyboard() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleNew, handleOpen, handleSave, handleSaveAs, undo, redo, deleteSelectedShapes, selectedShapeIds, boundaryEditState, cancelBoundaryDrag, deselectBoundary, editorMode, viewportEditState, cancelViewportDrag, selectViewport, deselectAll, toggleTerminal, filledRegionMode, cancelFilledRegionMode]);
+  }, [handleNew, handleOpen, handleSave, handleSaveAs, undo, redo, deleteSelectedShapes, selectedShapeIds, boundaryEditState, cancelBoundaryDrag, deselectBoundary, editorMode, viewportEditState, cancelViewportDrag, selectViewport, deselectAll, toggleTerminal]);
 }

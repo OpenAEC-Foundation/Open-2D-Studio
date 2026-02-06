@@ -200,6 +200,8 @@ export interface ModelActions {
 
   // Z-order actions
   bringToFront: () => void;
+  bringForward: () => void;
+  sendBackward: () => void;
   sendToBack: () => void;
 
   // Group actions
@@ -566,6 +568,48 @@ export const createModelSlice = (
         // Add them at the end (front)
         for (const shape of selectedShapes) {
           draft.push(shape);
+        }
+      });
+      state.isModified = true;
+    });
+  },
+
+  bringForward: () => {
+    const store = get();
+    if (store.selectedShapeIds.length === 0) return;
+
+    set((state) => {
+      const selectedIds = new Set(store.selectedShapeIds);
+      withHistory(state, (draft) => {
+        // Move selected shapes one position toward the end (forward)
+        // Iterate from end to avoid double-moving
+        for (let i = draft.length - 2; i >= 0; i--) {
+          if (selectedIds.has(draft[i].id) && !selectedIds.has(draft[i + 1].id)) {
+            const temp = draft[i];
+            draft[i] = draft[i + 1];
+            draft[i + 1] = temp;
+          }
+        }
+      });
+      state.isModified = true;
+    });
+  },
+
+  sendBackward: () => {
+    const store = get();
+    if (store.selectedShapeIds.length === 0) return;
+
+    set((state) => {
+      const selectedIds = new Set(store.selectedShapeIds);
+      withHistory(state, (draft) => {
+        // Move selected shapes one position toward the beginning (backward)
+        // Iterate from start to avoid double-moving
+        for (let i = 1; i < draft.length; i++) {
+          if (selectedIds.has(draft[i].id) && !selectedIds.has(draft[i - 1].id)) {
+            const temp = draft[i];
+            draft[i] = draft[i - 1];
+            draft[i - 1] = temp;
+          }
         }
       });
       state.isModified = true;

@@ -28,6 +28,7 @@ import { FindReplaceDialog } from './components/dialogs/FindReplaceDialog';
 
 // Editor components
 import { PatternManagerDialog } from './components/editors/PatternManager';
+import { FilledRegionTypeManager } from './components/editors/FilledRegionTypeManager';
 import { TerminalPanel } from './components/editors/TerminalPanel';
 import { useKeyboardShortcuts } from './hooks/keyboard/useKeyboardShortcuts';
 import { useGlobalKeyboard } from './hooks/keyboard/useGlobalKeyboard';
@@ -177,6 +178,8 @@ function App() {
     setActiveTool,
     patternManagerOpen,
     setPatternManagerOpen,
+    regionTypeManagerOpen,
+    setRegionTypeManagerOpen,
     findReplaceDialogOpen,
     setFindReplaceDialogOpen,
   } = useAppStore();
@@ -320,6 +323,12 @@ function App() {
       <PatternManagerDialog
         isOpen={patternManagerOpen}
         onClose={() => setPatternManagerOpen(false)}
+      />
+
+      {/* Filled Region Type Manager Dialog */}
+      <FilledRegionTypeManager
+        isOpen={regionTypeManagerOpen}
+        onClose={() => setRegionTypeManagerOpen(false)}
       />
 
       {/* Find & Replace Dialog */}
