@@ -11,6 +11,7 @@ import type { LineShape, PolylineShape, SplineShape, HatchShape } from '../../ty
  * - F8: Toggle Ortho mode
  * - F10: Toggle Polar tracking
  * - F11: Toggle Object tracking
+ * - F12: Toggle Dynamic Input
  */
 export function useDrawingKeyboard() {
   const {
@@ -34,6 +35,7 @@ export function useDrawingKeyboard() {
     toggleOrthoMode,
     togglePolarTracking,
     toggleObjectTracking,
+    toggleDynamicInput,
   } = useAppStore();
 
   useEffect(() => {
@@ -70,6 +72,12 @@ export function useDrawingKeyboard() {
           // Toggle Object tracking
           e.preventDefault();
           toggleObjectTracking();
+          return;
+
+        case 'F12':
+          // Toggle Dynamic Input
+          e.preventDefault();
+          toggleDynamicInput();
           return;
       }
 

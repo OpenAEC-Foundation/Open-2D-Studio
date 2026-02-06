@@ -97,6 +97,19 @@ export class SnapLayer extends BaseRenderer {
         ctx.stroke();
         break;
 
+      case 'origin':
+        // Circle with crosshair marker
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, size / 2, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(point.x - size / 2, point.y);
+        ctx.lineTo(point.x + size / 2, point.y);
+        ctx.moveTo(point.x, point.y - size / 2);
+        ctx.lineTo(point.x, point.y + size / 2);
+        ctx.stroke();
+        break;
+
       case 'parallel':
         // Two parallel lines marker
         ctx.beginPath();

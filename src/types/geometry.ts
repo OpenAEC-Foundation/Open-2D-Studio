@@ -271,7 +271,8 @@ export type SnapType =
   | 'perpendicular'
   | 'parallel'
   | 'tangent'
-  | 'nearest';
+  | 'nearest'
+  | 'origin';
 
 export interface SnapPoint {
   point: Point;
@@ -337,7 +338,7 @@ export type RectangleMode =
   | '3point';          // Three points: corner, width direction, height
 
 // ============================================================================
-// Drawings & Sheets System (Model Space + Paper Space)
+// Drawings & Sheets System
 // ============================================================================
 
 // Drawing boundary - defines the visible region when placed on sheets
@@ -373,7 +374,7 @@ export type PaperOrientation = 'portrait' | 'landscape';
 // Using import type to avoid circular dependency
 import type { SheetAnnotation } from './sheet';
 
-// Sheet - printable layout (paper space)
+// Sheet - printable layout
 export interface Sheet {
   id: string;
   name: string;
@@ -490,5 +491,5 @@ export interface TitleBlockField {
   align: 'left' | 'center' | 'right';
 }
 
-// Editor mode - are we in model space or paper space?
+// Editor mode - are we in drawing or sheet layout?
 export type EditorMode = 'drawing' | 'sheet';

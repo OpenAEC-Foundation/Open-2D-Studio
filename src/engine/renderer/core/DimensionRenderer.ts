@@ -17,12 +17,27 @@ import {
 } from '../../geometry/DimensionUtils';
 
 export class DimensionRenderer extends BaseRenderer {
+  private drawingScale: number = 0.02;
+  private static readonly REFERENCE_SCALE = 0.02; // 1:50
+
+  /**
+   * Set the drawing scale for dimension text/arrow scaling
+   */
+  setDrawingScale(scale: number): void {
+    this.drawingScale = scale;
+  }
+
   /**
    * Draw a dimension shape
    */
   drawDimension(dimension: DimensionShape, isSelected: boolean, isHovered: boolean = false): void {
     const ctx = this.ctx;
-    const style = dimension.dimensionStyle;
+    const scaleFactor = DimensionRenderer.REFERENCE_SCALE / this.drawingScale;
+    const style: DimensionStyle = {
+      ...dimension.dimensionStyle,
+      textHeight: dimension.dimensionStyle.textHeight * scaleFactor,
+      arrowSize: dimension.dimensionStyle.arrowSize * scaleFactor,
+    };
 
     // Set drawing style
     const highlightColor = isSelected ? COLORS.selection : isHovered ? COLORS.hover : null;

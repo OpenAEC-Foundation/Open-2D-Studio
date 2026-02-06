@@ -13,6 +13,7 @@ import type { DimensionShape } from '../../../types/dimension';
 import { drawSplinePath } from '../../geometry/SplineUtils';
 import { bulgeToArc, bulgeArcMidpoint } from '../../geometry/GeometryUtils';
 import { svgToImage } from '../../../services/export/svgPatternService';
+import { getGripHover } from '../gripHoverState';
 
 export class ShapeRenderer extends BaseRenderer {
   private dimensionRenderer: DimensionRenderer;
@@ -37,6 +38,7 @@ export class ShapeRenderer extends BaseRenderer {
    */
   setDrawingScale(scale: number): void {
     this.drawingScale = scale;
+    this.dimensionRenderer.setDrawingScale(scale);
   }
 
   /**
@@ -1641,13 +1643,25 @@ export class ShapeRenderer extends BaseRenderer {
 
     const points = this.getShapeHandlePoints(shape);
 
+    const hover = getGripHover();
+
     for (let i = 0; i < points.length; i++) {
       const point = points[i];
+      ctx.fillStyle = COLORS.selectionHandle;
+      ctx.strokeStyle = COLORS.selectionHandleStroke;
+      ctx.lineWidth = 1 / zoom;
       ctx.fillRect(point.x - handleSize / 2, point.y - handleSize / 2, handleSize, handleSize);
       ctx.strokeRect(point.x - handleSize / 2, point.y - handleSize / 2, handleSize, handleSize);
       // Skip axis arrows on arc midpoint grip (circumcenter algorithm can't handle axis constraint)
       if (!(shape.type === 'arc' && i === 3)) {
-        this.drawAxisArrows(point, zoom);
+        // For line/beam midpoint (index 2), align axes along/perpendicular to the shape
+        let angle = 0;
+        if (i === 2 && (shape.type === 'line' || shape.type === 'beam')) {
+          angle = Math.atan2(shape.end.y - shape.start.y, shape.end.x - shape.start.x);
+        }
+        // Determine which axis is hovered for highlighting
+        const hoveredAxis = (hover && hover.shapeId === shape.id && hover.gripIndex === i) ? hover.axis : null;
+        this.drawAxisArrows(point, zoom, angle, hoveredAxis);
       }
     }
   }
@@ -1655,44 +1669,67 @@ export class ShapeRenderer extends BaseRenderer {
   /**
    * Draw X (red) and Y (green) axis-constraint arrows at a grip point.
    * Arrow length is constant in screen space (~20px).
+   * When angle is provided, axes are rotated to align along/perpendicular to the shape.
+   * When hoveredAxis is provided, that arrow is drawn highlighted (brighter, thicker).
    */
-  private drawAxisArrows(point: { x: number; y: number }, zoom: number): void {
+  private drawAxisArrows(point: { x: number; y: number }, zoom: number, angle: number = 0, hoveredAxis: 'x' | 'y' | null = null): void {
     const ctx = this.ctx;
     const arrowLen = 20 / zoom;
     const headLen = 5 / zoom;
     const headWidth = 3 / zoom;
 
+    const cosA = Math.cos(angle);
+    const sinA = Math.sin(angle);
+
+    // Perpendicular direction (rotated 90 degrees CCW)
+    const cosP = Math.cos(angle - Math.PI / 2);
+    const sinP = Math.sin(angle - Math.PI / 2);
+
     ctx.save();
 
-    // X-axis arrow (red, pointing right)
-    ctx.strokeStyle = COLORS.axisX;
-    ctx.fillStyle = COLORS.axisX;
-    ctx.lineWidth = 1.5 / zoom;
+    // Along-shape axis arrow (red, along the shape direction)
+    const xHovered = hoveredAxis === 'x';
+    ctx.strokeStyle = xHovered ? '#ff8888' : COLORS.axisX;
+    ctx.fillStyle = xHovered ? '#ff8888' : COLORS.axisX;
+    ctx.lineWidth = (xHovered ? 2.5 : 1.5) / zoom;
     ctx.beginPath();
     ctx.moveTo(point.x, point.y);
-    ctx.lineTo(point.x + arrowLen, point.y);
+    ctx.lineTo(point.x + cosA * arrowLen, point.y + sinA * arrowLen);
     ctx.stroke();
     // Arrowhead
     ctx.beginPath();
-    ctx.moveTo(point.x + arrowLen, point.y);
-    ctx.lineTo(point.x + arrowLen - headLen, point.y - headWidth);
-    ctx.lineTo(point.x + arrowLen - headLen, point.y + headWidth);
+    ctx.moveTo(point.x + cosA * arrowLen, point.y + sinA * arrowLen);
+    ctx.lineTo(
+      point.x + cosA * (arrowLen - headLen) - sinA * headWidth,
+      point.y + sinA * (arrowLen - headLen) + cosA * headWidth
+    );
+    ctx.lineTo(
+      point.x + cosA * (arrowLen - headLen) + sinA * headWidth,
+      point.y + sinA * (arrowLen - headLen) - cosA * headWidth
+    );
     ctx.closePath();
     ctx.fill();
 
-    // Y-axis arrow (green, pointing up i.e. negative Y in screen space)
-    ctx.strokeStyle = COLORS.axisY;
-    ctx.fillStyle = COLORS.axisY;
-    ctx.lineWidth = 1.5 / zoom;
+    // Perpendicular axis arrow (green, perpendicular to the shape direction)
+    const yHovered = hoveredAxis === 'y';
+    ctx.strokeStyle = yHovered ? '#88ff88' : COLORS.axisY;
+    ctx.fillStyle = yHovered ? '#88ff88' : COLORS.axisY;
+    ctx.lineWidth = (yHovered ? 2.5 : 1.5) / zoom;
     ctx.beginPath();
     ctx.moveTo(point.x, point.y);
-    ctx.lineTo(point.x, point.y - arrowLen);
+    ctx.lineTo(point.x + cosP * arrowLen, point.y + sinP * arrowLen);
     ctx.stroke();
     // Arrowhead
     ctx.beginPath();
-    ctx.moveTo(point.x, point.y - arrowLen);
-    ctx.lineTo(point.x - headWidth, point.y - arrowLen + headLen);
-    ctx.lineTo(point.x + headWidth, point.y - arrowLen + headLen);
+    ctx.moveTo(point.x + cosP * arrowLen, point.y + sinP * arrowLen);
+    ctx.lineTo(
+      point.x + cosP * (arrowLen - headLen) - sinP * headWidth,
+      point.y + sinP * (arrowLen - headLen) + cosP * headWidth
+    );
+    ctx.lineTo(
+      point.x + cosP * (arrowLen - headLen) + sinP * headWidth,
+      point.y + sinP * (arrowLen - headLen) - cosP * headWidth
+    );
     ctx.closePath();
     ctx.fill();
 

@@ -1,5 +1,5 @@
 /**
- * Drawing Service - Business logic for drawing (model space) operations
+ * Drawing Service - Business logic for drawing operations
  *
  * Provides functions for:
  * - Creating drawings with proper defaults

@@ -75,7 +75,7 @@ export interface CurrentStyle {
   strokeWidth: number;
 }
 
-// Render options for drawing mode (model space)
+// Render options for drawing mode
 export interface RenderOptions {
   shapes: Shape[];
   selectedShapeIds: string[];
@@ -94,7 +94,7 @@ export interface RenderOptions {
   boundaryDragging?: boolean;
 }
 
-// Render options for sheet mode (paper space)
+// Render options for sheet layout mode
 export interface SheetRenderOptions {
   sheet: Sheet;
   drawings: Drawing[];
@@ -146,6 +146,7 @@ export const SNAP_COLORS: Record<SnapType, string> = {
   tangent: '#88ff00',      // Lime
   nearest: '#ff88ff',      // Pink
   grid: '#8888ff',         // Light blue
+  origin: '#ff4444',       // Red
 };
 
 // Snap labels
@@ -159,6 +160,7 @@ export const SNAP_LABELS: Record<SnapType, string> = {
   tangent: 'Tangent',
   nearest: 'Nearest',
   grid: 'Grid',
+  origin: 'Origin',
 };
 
 // Line dash patterns

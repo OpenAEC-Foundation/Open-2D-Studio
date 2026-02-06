@@ -101,7 +101,7 @@ export const NavigationPanel = memo(function NavigationPanel() {
             <ChevronDown size={14} className="text-cad-text-dim" />
           )}
           <span className="text-xs font-medium text-cad-text">Drawings</span>
-          <span className="text-[10px] text-cad-text-dim ml-auto">Model Space</span>
+          <span className="text-[10px] text-cad-text-dim ml-auto">Drawing</span>
         </div>
 
         {/* Drawings Content */}
@@ -133,7 +133,7 @@ export const NavigationPanel = memo(function NavigationPanel() {
             <ChevronDown size={14} className="text-cad-text-dim" />
           )}
           <span className="text-xs font-medium text-cad-text">Sheets</span>
-          <span className="text-[10px] text-cad-text-dim ml-auto">Paper Space</span>
+          <span className="text-[10px] text-cad-text-dim ml-auto">Sheet Layout</span>
         </div>
 
         {/* Sheets Content */}

@@ -865,6 +865,14 @@ export function findNearestSnapPoint(
 ): SnapPoint | null {
   const snapPoints: SnapPoint[] = [];
 
+  // Get origin snap point if enabled
+  if (activeSnaps.includes('origin')) {
+    snapPoints.push({
+      point: { x: 0, y: 0 },
+      type: 'origin',
+    });
+  }
+
   // Get grid snap point if enabled
   if (activeSnaps.includes('grid')) {
     snapPoints.push({
@@ -900,7 +908,8 @@ export function findNearestSnapPoint(
     parallel: 6,
     tangent: 7,
     nearest: 8,
-    grid: 9,
+    origin: 9,
+    grid: 10,
   };
 
   snapPoints.forEach((snap) => {
@@ -940,6 +949,8 @@ export function getSnapSymbol(type: SnapType): string {
       return '◇';
     case 'grid':
       return '+';
+    case 'origin':
+      return '⊕';
     default:
       return '•';
   }
@@ -966,6 +977,8 @@ export function getSnapTypeName(type: SnapType): string {
       return 'Nearest';
     case 'grid':
       return 'Grid';
+    case 'origin':
+      return 'Origin';
     default:
       return type;
   }

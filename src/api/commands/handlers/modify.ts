@@ -23,6 +23,7 @@ function cloneShape(shape: Shape, offset: Point = { x: 0, y: 0 }): Shape {
 function translateShape(shape: Shape, offset: Point): void {
   switch (shape.type) {
     case 'line':
+    case 'beam':
       shape.start.x += offset.x;
       shape.start.y += offset.y;
       shape.end.x += offset.x;
@@ -85,6 +86,11 @@ function rotateShape(shape: Shape, center: Point, angle: number): void {
       shape.start = rotatePoint(shape.start, center, angle);
       shape.end = rotatePoint(shape.end, center, angle);
       break;
+    case 'beam':
+      shape.start = rotatePoint(shape.start, center, angle);
+      shape.end = rotatePoint(shape.end, center, angle);
+      shape.rotation = (shape.rotation || 0) + angle;
+      break;
     case 'rectangle':
       shape.topLeft = rotatePoint(shape.topLeft, center, angle);
       shape.rotation = (shape.rotation || 0) + angle;
@@ -134,6 +140,11 @@ function scaleShape(shape: Shape, center: Point, factor: number): void {
     case 'line':
       shape.start = scale(shape.start);
       shape.end = scale(shape.end);
+      break;
+    case 'beam':
+      shape.start = scale(shape.start);
+      shape.end = scale(shape.end);
+      shape.flangeWidth *= factor;
       break;
     case 'rectangle':
       shape.topLeft = scale(shape.topLeft);
@@ -205,6 +216,11 @@ function mirrorShape(shape: Shape, p1: Point, p2: Point): void {
     case 'line':
       shape.start = mirrorPoint(shape.start);
       shape.end = mirrorPoint(shape.end);
+      break;
+    case 'beam':
+      shape.start = mirrorPoint(shape.start);
+      shape.end = mirrorPoint(shape.end);
+      shape.rotation = -(shape.rotation || 0);
       break;
     case 'rectangle':
       shape.topLeft = mirrorPoint(shape.topLeft);

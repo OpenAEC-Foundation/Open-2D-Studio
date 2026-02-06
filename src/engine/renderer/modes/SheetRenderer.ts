@@ -1,5 +1,5 @@
 /**
- * SheetRenderer - Orchestrates rendering for sheet (paper space) mode
+ * SheetRenderer - Orchestrates rendering for sheet layout mode
  *
  * Supports:
  * - Viewport crop regions
@@ -100,7 +100,7 @@ export class SheetRenderer extends BaseRenderer {
   }
 
   /**
-   * Render a sheet (Paper Space) with viewports showing drawings
+   * Render a sheet layout with viewports showing drawings
    */
   render(options: SheetRenderOptions): void {
     const {

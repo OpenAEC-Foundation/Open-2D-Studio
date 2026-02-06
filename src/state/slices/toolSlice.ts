@@ -84,6 +84,9 @@ export interface ToolState {
   // Filled Region mode (sketch-based boundary drawing)
   filledRegionMode: boolean;
   filledRegionDrawTool: 'line' | 'rectangle' | 'polygon' | 'circle' | 'arc' | 'spline' | 'pickLines';
+
+  // Dynamic Input toggle
+  dynamicInputEnabled: boolean;
 }
 
 // ============================================================================
@@ -158,6 +161,9 @@ export interface ToolActions {
   cancelFilledRegionMode: () => void;
   finishFilledRegion: () => void;
   setFilledRegionDrawTool: (tool: 'line' | 'rectangle' | 'polygon' | 'circle' | 'arc' | 'spline' | 'pickLines') => void;
+
+  // Dynamic Input toggle
+  toggleDynamicInput: () => void;
 }
 
 export type ToolSlice = ToolState & ToolActions;
@@ -238,6 +244,9 @@ export const initialToolState: ToolState = {
   // Filled Region mode
   filledRegionMode: false,
   filledRegionDrawTool: 'line' as const,
+
+  // Dynamic Input
+  dynamicInputEnabled: true,
 };
 
 // ============================================================================
@@ -607,5 +616,11 @@ export const createToolSlice = (
       state.drawingPoints = [];
       state.drawingBulges = [];
       state.drawingPreview = null;
+    }),
+
+  // Dynamic Input toggle
+  toggleDynamicInput: () =>
+    set((state) => {
+      state.dynamicInputEnabled = !state.dynamicInputEnabled;
     }),
 });

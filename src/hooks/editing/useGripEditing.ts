@@ -17,6 +17,7 @@ import { getTextBounds } from '../../engine/geometry/GeometryUtils';
 import { calculateAlignedDimensionGeometry, angleBetweenPoints, calculateDimensionValue, formatDimensionValue } from '../../engine/geometry/DimensionUtils';
 import { findNearestSnapPoint } from '../../engine/geometry/SnapUtils';
 import { applyTracking, type TrackingSettings } from '../../engine/geometry/Tracking';
+import { setGripHover } from '../../engine/renderer/gripHoverState';
 
 interface GripDragState {
   shapeId: string;
@@ -34,6 +35,10 @@ interface GripDragState {
   originalGripPoint?: Point;
   /** Enable snapping for this grip (e.g., dimension reference points). */
   enableSnapping?: boolean;
+  /** Offset between the click position and the grip center (prevents jumping). */
+  clickOffset?: Point;
+  /** Angle of the local axis system (for line/beam midpoint perpendicular constraint). */
+  axisAngle?: number;
   /** Initial angle for rotation handles (to calculate relative rotation). */
   initialRotationAngle?: number;
   /** Rotation center for rotation handles. */
@@ -53,32 +58,43 @@ const AXIS_ARROW_SCREEN_LEN = 20;
 
 /**
  * Check if a world-space point is near an axis arrow extending from a grip point.
+ * When angle is provided, axes are rotated (for line/beam midpoint grips).
  * Returns 'x', 'y', or null.
  */
-function hitTestAxisArrow(worldPos: Point, gripPoint: Point, zoom: number): 'x' | 'y' | null {
+function hitTestAxisArrow(worldPos: Point, gripPoint: Point, zoom: number, angle: number = 0): 'x' | 'y' | null {
   const arrowLen = AXIS_ARROW_SCREEN_LEN / zoom;
   const tolerance = 5 / zoom;
 
-  // Y-axis arrow (grip → grip.y - arrowLen)
-  // Check if point is within tolerance of the vertical segment
+  // Transform worldPos into the local coordinate system of the grip
+  const dx = worldPos.x - gripPoint.x;
+  const dy = worldPos.y - gripPoint.y;
+  const cosA = Math.cos(-angle);
+  const sinA = Math.sin(-angle);
+  const localX = dx * cosA - dy * sinA;
+  const localY = dx * sinA + dy * cosA;
+
+  // X-axis arrow (along direction, in local coords: points right)
   if (
-    Math.abs(worldPos.x - gripPoint.x) <= tolerance &&
-    worldPos.y >= gripPoint.y - arrowLen - tolerance &&
-    worldPos.y <= gripPoint.y + tolerance
+    Math.abs(localY) <= tolerance &&
+    localX >= -tolerance &&
+    localX <= arrowLen + tolerance
   ) {
-    // Make sure it's actually along the arrow, not just near the grip center
-    const dist = gripPoint.y - worldPos.y;
-    if (dist > tolerance * 0.5) return 'y';
+    if (localX > tolerance * 0.5) return 'x';
   }
 
-  // X-axis arrow (grip → grip.x + arrowLen)
+  // Y-axis arrow (perpendicular direction, in local coords: points up / negative Y)
+  const perpAngle = angle - Math.PI / 2;
+  const cosP = Math.cos(-perpAngle);
+  const sinP = Math.sin(-perpAngle);
+  const perpLocalX = dx * cosP - dy * sinP;
+  const perpLocalY = dx * sinP + dy * cosP;
+
   if (
-    Math.abs(worldPos.y - gripPoint.y) <= tolerance &&
-    worldPos.x >= gripPoint.x - tolerance &&
-    worldPos.x <= gripPoint.x + arrowLen + tolerance
+    Math.abs(perpLocalY) <= tolerance &&
+    perpLocalX >= -tolerance &&
+    perpLocalX <= arrowLen + tolerance
   ) {
-    const dist = worldPos.x - gripPoint.x;
-    if (dist > tolerance * 0.5) return 'x';
+    if (perpLocalX > tolerance * 0.5) return 'y';
   }
 
   return null;
@@ -815,6 +831,7 @@ export function useGripEditing() {
 
   const dragRef = useRef<GripDragState | null>(null);
   const parametricDragRef = useRef<ParametricGripDragState | null>(null);
+  const justFinishedDragRef = useRef(false);
 
   // Get the active drawing scale for text bounds calculation
   const activeDrawing = drawings.find(d => d.id === activeDrawingId);
@@ -882,7 +899,12 @@ export function useGripEditing() {
       for (let i = 0; i < grips.length; i++) {
         if (shape.type === 'arc' && i === 3) continue;
         if (shape.type === 'text' && i === 3) continue; // Rotation handle - no axis arrows
-        const axisHit = hitTestAxisArrow(worldPos, grips[i], viewport.zoom);
+        // For line/beam midpoint (index 2), use rotated axes
+        let gripAxisAngle = 0;
+        if (i === 2 && (shape.type === 'line' || shape.type === 'beam')) {
+          gripAxisAngle = Math.atan2(shape.end.y - shape.start.y, shape.end.x - shape.start.x);
+        }
+        const axisHit = hitTestAxisArrow(worldPos, grips[i], viewport.zoom, gripAxisAngle);
         if (axisHit) {
           // For text resize handles, only accept X-axis constraint (width adjustment only)
           if (shape.type === 'text' && (i === 1 || i === 2) && axisHit === 'y') {
@@ -924,6 +946,8 @@ export function useGripEditing() {
             convertedToPolyline: false, originalRectGripIndex: i,
             polylineMidpointIndices,
             axisConstraint: effectiveAxisHit, originalGripPoint: { ...grips[i] },
+            clickOffset: { x: worldPos.x - grips[i].x, y: worldPos.y - grips[i].y },
+            axisAngle: gripAxisAngle || undefined,
           };
           return true;
         }
@@ -1065,12 +1089,44 @@ export function useGripEditing() {
       const currentShape = useAppStore.getState().shapes.find(s => s.id === drag.shapeId);
       if (!currentShape) return true;
 
+      // Apply click offset (prevent grip from jumping to mouse position when clicking on arrow)
+      const adjustedPos = drag.clickOffset
+        ? { x: worldPos.x - drag.clickOffset.x, y: worldPos.y - drag.clickOffset.y }
+        : worldPos;
+
       // Apply axis constraint
-      let constrainedPos = worldPos;
+      let constrainedPos = adjustedPos;
       if (drag.axisConstraint && drag.originalGripPoint) {
-        constrainedPos = { ...worldPos };
-        if (drag.axisConstraint === 'x') constrainedPos.y = drag.originalGripPoint.y;
-        if (drag.axisConstraint === 'y') constrainedPos.x = drag.originalGripPoint.x;
+        if (drag.axisAngle) {
+          // Rotated axis constraint (for line/beam midpoint)
+          const dx = adjustedPos.x - drag.originalGripPoint.x;
+          const dy = adjustedPos.y - drag.originalGripPoint.y;
+          if (drag.axisConstraint === 'x') {
+            // Constrain along the line direction
+            const cosA = Math.cos(drag.axisAngle);
+            const sinA = Math.sin(drag.axisAngle);
+            const proj = dx * cosA + dy * sinA;
+            constrainedPos = {
+              x: drag.originalGripPoint.x + proj * cosA,
+              y: drag.originalGripPoint.y + proj * sinA,
+            };
+          } else {
+            // Constrain perpendicular to the line direction
+            const perpAngle = drag.axisAngle - Math.PI / 2;
+            const cosP = Math.cos(perpAngle);
+            const sinP = Math.sin(perpAngle);
+            const proj = dx * cosP + dy * sinP;
+            constrainedPos = {
+              x: drag.originalGripPoint.x + proj * cosP,
+              y: drag.originalGripPoint.y + proj * sinP,
+            };
+          }
+        } else {
+          // Global axis constraint
+          constrainedPos = { ...adjustedPos };
+          if (drag.axisConstraint === 'x') constrainedPos.y = drag.originalGripPoint.y;
+          if (drag.axisConstraint === 'y') constrainedPos.x = drag.originalGripPoint.x;
+        }
       }
 
       // Apply tracking for beam/line endpoint drags and polyline vertex drags
@@ -1267,6 +1323,7 @@ export function useGripEditing() {
       }
 
       parametricDragRef.current = null;
+      justFinishedDragRef.current = true;
       return true;
     }
 
@@ -1300,10 +1357,18 @@ export function useGripEditing() {
     }
 
     dragRef.current = null;
+    justFinishedDragRef.current = true;
     return true;
   }, [updateShape, updateProfilePosition, setCurrentSnapPoint, setCurrentTrackingLines, setTrackingPoint]);
 
   const isDragging = useCallback(() => dragRef.current !== null || parametricDragRef.current !== null, []);
+
+  /** Returns true once after a grip drag finishes (consumed on read, like justFinishedBoxSelection). */
+  const justFinishedGripDrag = useCallback(() => {
+    const result = justFinishedDragRef.current;
+    justFinishedDragRef.current = false;
+    return result;
+  }, []);
 
   /**
    * Check if a world position is hovering over an axis arrow on any selected grip.
@@ -1325,13 +1390,22 @@ export function useGripEditing() {
       }
 
       const shape = shapes.find(s => s.id === selectedShapeIds[0]);
-      if (!shape) return null;
+      if (!shape) { setGripHover(null); return null; }
       const grips = getGripPoints(shape, drawingScale, viewport.zoom);
       for (let i = 0; i < grips.length; i++) {
         if (shape.type === 'arc' && i === 3) continue;
-        const axis = hitTestAxisArrow(worldPos, grips[i], viewport.zoom);
-        if (axis) return axis;
+        // For line/beam midpoint (index 2), use rotated axes
+        let gripAxisAngle = 0;
+        if (i === 2 && (shape.type === 'line' || shape.type === 'beam')) {
+          gripAxisAngle = Math.atan2(shape.end.y - shape.start.y, shape.end.x - shape.start.x);
+        }
+        const axis = hitTestAxisArrow(worldPos, grips[i], viewport.zoom, gripAxisAngle);
+        if (axis) {
+          setGripHover({ shapeId: shape.id, gripIndex: i, axis });
+          return null;
+        }
       }
+      setGripHover(null);
       return null;
     },
     [selectedShapeIds, shapes, parametricShapes, viewport.zoom, drawingScale]
@@ -1343,5 +1417,6 @@ export function useGripEditing() {
     handleGripMouseUp,
     isDragging,
     getHoveredAxis,
+    justFinishedGripDrag,
   };
 }

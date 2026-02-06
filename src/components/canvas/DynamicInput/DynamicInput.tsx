@@ -45,6 +45,7 @@ export function DynamicInput() {
     // Tracking state - use constrained values when tracking is active
     trackingPoint,
     directDistanceAngle,
+    dynamicInputEnabled,
   } = useAppStore();
 
   const [focusedField, setFocusedField] = useState<0 | 1 | -1>(-1); // -1 = none, 0 = field1, 1 = field2
@@ -60,8 +61,8 @@ export function DynamicInput() {
   const isRotateMode = activeTool === 'rotate' && drawingPoints.length >= 2;
   const isDrawingMode = isDrawing && drawingPoints.length > 0 && supportedDrawingTools.includes(activeTool);
 
-  // Only show when drawing with supported tools OR during move/copy/rotate with points set
-  const showDynamicInput = isDrawingMode || isModifyMode || isRotateMode;
+  // Only show when enabled and drawing with supported tools OR during move/copy/rotate with points set
+  const showDynamicInput = dynamicInputEnabled && (isDrawingMode || isModifyMode || isRotateMode);
 
   // Reset when drawing ends or tool changes
   useEffect(() => {

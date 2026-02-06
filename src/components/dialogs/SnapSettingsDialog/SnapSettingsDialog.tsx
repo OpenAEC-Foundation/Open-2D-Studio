@@ -74,6 +74,13 @@ const snapTypes: SnapTypeOption[] = [
     color: '#ff88ff',
   },
   {
+    type: 'origin',
+    label: 'Origin',
+    description: 'Snap to the coordinate origin (0,0)',
+    symbol: '⊕',
+    color: '#ff4444',
+  },
+  {
     type: 'grid',
     label: 'Grid',
     description: 'Snap to grid intersections',

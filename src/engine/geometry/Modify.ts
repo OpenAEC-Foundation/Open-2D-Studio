@@ -64,6 +64,10 @@ export function transformShape(shape: Shape, transform: PointTransform, newId?: 
       cloned.start = transform(cloned.start);
       cloned.end = transform(cloned.end);
       break;
+    case 'beam':
+      cloned.start = transform(cloned.start);
+      cloned.end = transform(cloned.end);
+      break;
     case 'rectangle': {
       const rot = cloned.rotation || 0;
       const cos = Math.cos(rot);

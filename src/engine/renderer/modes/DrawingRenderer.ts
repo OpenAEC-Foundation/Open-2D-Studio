@@ -1,5 +1,5 @@
 /**
- * DrawingRenderer - Orchestrates rendering for drawing (model space) mode
+ * DrawingRenderer - Orchestrates rendering for drawing mode
  */
 
 import type { Shape, Viewport, SnapPoint, DrawingBoundary } from '../types';

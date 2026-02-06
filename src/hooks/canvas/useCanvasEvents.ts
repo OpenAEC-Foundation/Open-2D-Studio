@@ -182,9 +182,10 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
    */
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
-      // Skip if was panning or just finished box selection
+      // Skip if was panning, just finished box selection, or just finished grip drag
       if (panZoom.getIsPanning()) return;
       if (boxSelection.justFinishedBoxSelection()) return;
+      if (gripEditing.justFinishedGripDrag()) return;
       if (e.button !== 0) return;
 
       const screenPos = panZoom.getMousePos(e);
@@ -435,17 +436,9 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
           return;
         }
 
-        // Update cursor for axis arrow hover
-        const canvas = canvasRef.current;
-        if (canvas && activeTool === 'select') {
-          const axis = gripEditing.getHoveredAxis(worldPos);
-          if (axis === 'x') {
-            canvas.style.cursor = 'ew-resize';
-          } else if (axis === 'y') {
-            canvas.style.cursor = 'ns-resize';
-          } else {
-            canvas.style.cursor = '';
-          }
+        // Update grip axis hover highlighting (no cursor change)
+        if (activeTool === 'select') {
+          gripEditing.getHoveredAxis(worldPos);
         }
       }
 

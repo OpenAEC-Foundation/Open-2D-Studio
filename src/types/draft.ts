@@ -1,5 +1,5 @@
 /**
- * Draft Types - Enhanced types for Model Space (drafts)
+ * Draft Types - Enhanced types for drafts
  *
  * These types support draft functionality including:
  * - Named views within drafts

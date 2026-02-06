@@ -445,7 +445,7 @@ export function Backstage({ isOpen, onClose, initialView, onOpenSheetTemplateImp
                 <table className="w-full text-xs">
                   <tbody>
                     {([
-                      ['MV', 'Move'],
+                      ['G / MV', 'Move'],
                       ['CO', 'Copy'],
                       ['RO', 'Rotate'],
                       ['MM', 'Mirror'],

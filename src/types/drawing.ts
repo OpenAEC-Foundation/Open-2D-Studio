@@ -1,5 +1,5 @@
 /**
- * Drawing Types - Enhanced types for Model Space (drawings)
+ * Drawing Types - Enhanced types for drawings
  *
  * These types support drawing functionality including:
  * - Named views within drawings

@@ -345,7 +345,7 @@ export function SheetsTab() {
             onClick={switchToDrawingMode}
             className="w-full px-2 py-1 text-xs bg-cad-border text-cad-text rounded hover:bg-cad-border/80"
           >
-            Back to Model Space
+            Back to Drawing
           </button>
         </div>
       )}

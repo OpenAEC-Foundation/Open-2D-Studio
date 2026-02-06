@@ -138,11 +138,11 @@ function calculateSheetFitViewport(
 // ============================================================================
 
 export interface ModelState {
-  // Drawings (Model Space)
+  // Drawings
   drawings: Drawing[];
   activeDrawingId: string;
 
-  // Sheets (Paper Space)
+  // Sheets
   sheets: Sheet[];
   activeSheetId: string | null;
   editorMode: EditorMode;

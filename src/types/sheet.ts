@@ -1,5 +1,5 @@
 /**
- * Sheet Types - Enhanced types for Paper Space (sheets and viewports)
+ * Sheet Types - Enhanced types for sheet layouts (sheets and viewports)
  *
  * These types support sheet functionality including:
  * - Sheet annotations (text, dimensions, leaders on sheets)

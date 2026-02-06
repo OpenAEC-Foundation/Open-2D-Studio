@@ -18,25 +18,15 @@ interface ScalePreset {
 
 // All scale presets organized by category
 const SCALE_PRESETS: ScalePreset[] = [
-  // Detail scales (enlargement)
-  { value: 10, display: '10:1', category: 'detail' },
-  { value: 5, display: '5:1', category: 'detail' },
-  { value: 2, display: '2:1', category: 'detail' },
   { value: 1, display: '1:1', category: 'detail' },
-  // Plan scales
   { value: 0.5, display: '1:2', category: 'plan' },
   { value: 0.2, display: '1:5', category: 'plan' },
   { value: 0.1, display: '1:10', category: 'plan' },
   { value: 0.05, display: '1:20', category: 'plan' },
-  { value: 0.04, display: '1:25', category: 'plan' },
   { value: 0.02, display: '1:50', category: 'plan' },
   { value: 0.01, display: '1:100', category: 'plan' },
   { value: 0.005, display: '1:200', category: 'plan' },
-  // Site scales
   { value: 0.002, display: '1:500', category: 'site' },
-  { value: 0.001, display: '1:1000', category: 'site' },
-  { value: 0.0005, display: '1:2000', category: 'site' },
-  { value: 0.0002, display: '1:5000', category: 'site' },
 ];
 
 // Parse scale string to value

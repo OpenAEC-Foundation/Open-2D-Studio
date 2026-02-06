@@ -372,8 +372,11 @@ export function useKeyboardShortcuts() {
      * first letters of two-key combos.
      */
     function executeSingleKey(k: string) {
-      // Single-letter shortcuts for visibility and locking
+      // Single-letter shortcuts for tools, visibility and locking
       switch (k) {
+        case 'g':
+          setActiveTool('move');
+          break;
         case 'h':
           hideSelectedShapes();
           break;

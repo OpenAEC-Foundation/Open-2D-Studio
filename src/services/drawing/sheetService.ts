@@ -1,5 +1,5 @@
 /**
- * Sheet Service - Business logic for sheet (paper space) operations
+ * Sheet Service - Business logic for sheet layout operations
  *
  * Provides functions for:
  * - Creating sheets with proper defaults

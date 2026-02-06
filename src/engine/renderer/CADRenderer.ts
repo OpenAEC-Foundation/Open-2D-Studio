@@ -1,8 +1,8 @@
 /**
  * CADRenderer - Main renderer facade
  *
- * This class provides a unified interface for rendering both draft (model space)
- * and sheet (paper space) modes. It delegates to specialized renderers for
+ * This class provides a unified interface for rendering both drawing
+ * and sheet layout modes. It delegates to specialized renderers for
  * different aspects of the rendering.
  *
  * The modular structure allows for:
@@ -120,7 +120,7 @@ export class CADRenderer {
   }
 
   /**
-   * Render drawing (model space) view
+   * Render drawing view
    */
   render(options: RenderOptions): void {
     const drawingOptions: DrawingRenderOptions = {
@@ -152,7 +152,7 @@ export class CADRenderer {
   }
 
   /**
-   * Render sheet (paper space) view
+   * Render sheet layout view
    */
   renderSheet(options: SheetModeRenderOptions): void {
     const sheetOptions: SheetRenderOptions = {

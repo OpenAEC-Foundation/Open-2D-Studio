@@ -3,8 +3,8 @@
  *
  * This module re-exports all types from:
  * - geometry.ts - Core geometry and CAD types
- * - drawing.ts - Enhanced drawing (model space) types
- * - sheet.ts - Enhanced sheet (paper space) types
+ * - drawing.ts - Enhanced drawing types
+ * - sheet.ts - Enhanced sheet layout types
  * - rendering.ts - Rendering and display types
  * - events.ts - Event handling types
  * - guards.ts - Runtime type guard functions

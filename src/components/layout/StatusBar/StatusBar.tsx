@@ -349,7 +349,26 @@ function StatusMessage() {
   );
 }
 
+const SCALE_PRESETS = [
+  { value: 1, label: '1:1' },
+  { value: 0.5, label: '1:2' },
+  { value: 0.2, label: '1:5' },
+  { value: 0.1, label: '1:10' },
+  { value: 0.05, label: '1:20' },
+  { value: 0.02, label: '1:50' },
+  { value: 0.01, label: '1:100' },
+  { value: 0.005, label: '1:200' },
+  { value: 0.002, label: '1:500' },
+];
+
+function isPresetScale(scale: number): boolean {
+  return SCALE_PRESETS.some(p => Math.abs(p.value - scale) < 0.0001);
+}
+
 export const StatusBar = memo(function StatusBar() {
+  const [customScaleDialogOpen, setCustomScaleDialogOpen] = useState(false);
+  const [customScaleDenominator, setCustomScaleDenominator] = useState('');
+  const [customScaleError, setCustomScaleError] = useState('');
   const mousePosition = useAppStore(s => s.mousePosition);
   const viewport = useAppStore(s => s.viewport);
   const activeTool = useAppStore(s => s.activeTool);
@@ -367,6 +386,8 @@ export const StatusBar = memo(function StatusBar() {
   const toggleObjectTracking = useAppStore(s => s.toggleObjectTracking);
   const toggleSnap = useAppStore(s => s.toggleSnap);
   const setSnapSettingsOpen = useAppStore(s => s.setSnapSettingsOpen);
+  const dynamicInputEnabled = useAppStore(s => s.dynamicInputEnabled);
+  const toggleDynamicInput = useAppStore(s => s.toggleDynamicInput);
   const terminalOpen = useAppStore(s => s.terminalOpen);
   const toggleTerminal = useAppStore(s => s.toggleTerminal);
   const drawings = useAppStore(s => s.drawings);
@@ -428,25 +449,97 @@ export const StatusBar = memo(function StatusBar() {
         <div className="flex items-center gap-2">
           <span>Scale:</span>
           <select
-            value={drawingScale}
-            onChange={(e) => updateDrawingScale(targetDrawingId!, parseFloat(e.target.value))}
+            value={isPresetScale(drawingScale) ? drawingScale : 'current-custom'}
+            onChange={(e) => {
+              if (e.target.value === 'custom') {
+                const den = drawingScale <= 1 ? Math.round(1 / drawingScale) : 1;
+                setCustomScaleDenominator(String(den));
+                setCustomScaleError('');
+                setCustomScaleDialogOpen(true);
+              } else if (e.target.value !== 'current-custom') {
+                updateDrawingScale(targetDrawingId!, parseFloat(e.target.value));
+              }
+            }}
             className="bg-cad-bg border border-cad-border text-cad-text text-xs px-1 py-0 h-[18px] outline-none focus:border-cad-accent"
           >
-            <option value={10}>10:1</option>
-            <option value={5}>5:1</option>
-            <option value={2}>2:1</option>
-            <option value={1}>1:1</option>
-            <option value={0.5}>1:2</option>
-            <option value={0.2}>1:5</option>
-            <option value={0.1}>1:10</option>
-            <option value={0.05}>1:20</option>
-            <option value={0.04}>1:25</option>
-            <option value={0.02}>1:50</option>
-            <option value={0.01}>1:100</option>
-            <option value={0.005}>1:200</option>
-            <option value={0.002}>1:500</option>
-            <option value={0.001}>1:1000</option>
+            {!isPresetScale(drawingScale) && (
+              <option value="current-custom">
+                1:{Math.round(1 / drawingScale)}
+              </option>
+            )}
+            {SCALE_PRESETS.map(p => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+            <option value="custom">Custom...</option>
           </select>
+        </div>
+      )}
+
+      {/* Custom Scale Dialog */}
+      {customScaleDialogOpen && targetDrawingId && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
+          <div
+            className="bg-cad-surface border border-cad-border rounded shadow-lg p-4 min-w-[260px]"
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setCustomScaleDialogOpen(false);
+              }
+            }}
+          >
+            <div className="text-sm font-semibold text-cad-text mb-3">Custom Scale</div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs text-cad-text">Ratio:</span>
+              <span className="text-xs text-cad-text font-mono">1 :</span>
+              <input
+                type="number"
+                min={1}
+                max={24000}
+                value={customScaleDenominator}
+                onChange={(e) => {
+                  setCustomScaleDenominator(e.target.value);
+                  setCustomScaleError('');
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    const val = parseInt(customScaleDenominator);
+                    if (!Number.isInteger(val) || val < 1 || val > 24000) {
+                      setCustomScaleError('Please enter an integer between 1 and 24000.');
+                    } else {
+                      updateDrawingScale(targetDrawingId!, 1 / val);
+                      setCustomScaleDialogOpen(false);
+                    }
+                  }
+                }}
+                className="bg-cad-bg border border-cad-border text-cad-text text-xs px-2 py-1 w-24 outline-none focus:border-cad-accent font-mono"
+                autoFocus
+              />
+            </div>
+            {customScaleError && (
+              <div className="text-red-400 text-xs mt-1 mb-1">{customScaleError}</div>
+            )}
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => {
+                  const val = parseInt(customScaleDenominator);
+                  if (!Number.isInteger(val) || val < 1 || val > 24000) {
+                    setCustomScaleError('Please enter an integer between 1 and 24000.');
+                  } else {
+                    updateDrawingScale(targetDrawingId!, 1 / val);
+                    setCustomScaleDialogOpen(false);
+                  }
+                }}
+                className="px-3 py-1 text-xs bg-cad-accent text-white hover:bg-cad-accent/80 rounded"
+              >
+                OK
+              </button>
+              <button
+                onClick={() => setCustomScaleDialogOpen(false)}
+                className="px-3 py-1 text-xs bg-cad-bg border border-cad-border text-cad-text hover:bg-cad-hover rounded"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -502,6 +595,17 @@ export const StatusBar = memo(function StatusBar() {
           title="Object Snap Tracking - align to geometry [F11]"
         >
           OTRACK
+        </button>
+        <button
+          onClick={toggleDynamicInput}
+          className={`px-2 py-0.5 text-xs font-medium rounded transition-colors cursor-default ${
+            dynamicInputEnabled
+              ? 'bg-purple-600 text-white hover:bg-purple-500'
+              : 'bg-cad-bg text-cad-text-dim hover:bg-cad-hover'
+          }`}
+          title="Position Info - show position info while drawing [F12]"
+        >
+          POS
         </button>
       </div>
 
