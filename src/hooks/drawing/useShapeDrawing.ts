@@ -121,7 +121,6 @@ export function useShapeDrawing() {
     polylineArcMode,
     polylineArcThroughPoint,
     setPolylineArcThroughPoint,
-    drawingBulges,
     addDrawingBulge,
   } = useAppStore();
 
