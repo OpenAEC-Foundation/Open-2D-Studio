@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useAppStore } from '../../state/appStore';
+import { useAppStore, generateId } from '../../state/appStore';
 import {
   showOpenDialog,
   showSaveDialog,
@@ -11,7 +11,6 @@ import {
   exportToSVG,
   exportToDXF,
   exportToIFC,
-  confirmUnsavedChanges,
   showError,
   showInfo,
   showImportDxfDialog,
@@ -19,10 +18,9 @@ import {
   type ProjectFile,
 } from '../../services/file/fileService';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
+import { DEFAULT_PROJECT_INFO } from '../../types/projectInfo';
 
 export function useFileOperations() {
-  const newProject = useAppStore(s => s.newProject);
-  const loadProject = useAppStore(s => s.loadProject);
   const setFilePath = useAppStore(s => s.setFilePath);
   const setProjectName = useAppStore(s => s.setProjectName);
   const setModified = useAppStore(s => s.setModified);
@@ -30,49 +28,66 @@ export function useFileOperations() {
   const addShapes = useAppStore(s => s.addShapes);
 
   const handleNew = useCallback(async () => {
-    if (useAppStore.getState().isModified) {
-      const proceed = await confirmUnsavedChanges();
-      if (!proceed) return;
-    }
-    newProject();
-  }, [newProject]);
+    useAppStore.getState().createNewDocument();
+  }, []);
 
   const handleOpen = useCallback(async () => {
-    if (useAppStore.getState().isModified) {
-      const proceed = await confirmUnsavedChanges();
-      if (!proceed) return;
-    }
-
     const filePath = await showOpenDialog();
     if (!filePath) return;
 
     try {
       const project = await readProjectFile(filePath);
       const fileName = filePath.split(/[/\\]/).pop()?.replace('.o2d', '') || 'Untitled';
-      loadProject(
-        {
-          shapes: project.shapes,
-          layers: project.layers,
-          activeLayerId: project.activeLayerId,
-          settings: project.settings,
-          drawings: project.drawings,
-          sheets: project.sheets,
-          activeDrawingId: project.activeDrawingId,
-          activeSheetId: project.activeSheetId,
-          drawingViewports: project.drawingViewports,
-          sheetViewports: project.sheetViewports,
-        },
+
+      // Check if current tab is an empty untitled document — close it after opening
+      const s = useAppStore.getState();
+      const prevDocId = s.activeDocumentId;
+      const isEmptyUntitled = !s.isModified && !s.currentFilePath
+        && s.shapes.length === 0 && s.projectName.startsWith('Untitled');
+
+      // Open as a new document tab (or switch to it if already open)
+      const docId = generateId();
+      s.openDocument(docId, {
+        shapes: project.shapes,
+        layers: project.layers,
+        activeLayerId: project.activeLayerId,
+        drawings: project.drawings || [],
+        sheets: project.sheets || [],
+        activeDrawingId: project.activeDrawingId || (project.drawings?.[0]?.id ?? ''),
+        activeSheetId: project.activeSheetId ?? null,
+        drawingViewports: project.drawingViewports || {},
+        sheetViewports: project.sheetViewports || {},
         filePath,
-        fileName
-      );
+        projectName: fileName,
+        isModified: false,
+        projectInfo: project.projectInfo || { ...DEFAULT_PROJECT_INFO },
+      });
+
+      // Restore snap settings from project
+      if (project.settings) {
+        const store = useAppStore.getState();
+        store.setGridSize(project.settings.gridSize);
+        if (store.gridVisible !== project.settings.gridVisible) store.toggleGrid();
+        if (store.snapEnabled !== project.settings.snapEnabled) store.toggleSnap();
+      }
+
       // Restore project-level filled region types (backward compatible)
       if (project.filledRegionTypes && project.filledRegionTypes.length > 0) {
         useAppStore.getState().setProjectFilledRegionTypes(project.filledRegionTypes);
       }
+      // Restore project info (backward compatible)
+      if (project.projectInfo) {
+        useAppStore.getState().setProjectInfo(project.projectInfo);
+      }
+
+      // Close the previous empty untitled tab
+      if (isEmptyUntitled) {
+        useAppStore.getState().closeDocument(prevDocId);
+      }
     } catch (err) {
       await showError(`Failed to open file: ${err}`);
     }
-  }, [loadProject]);
+  }, []);
 
   const handleSave = useCallback(async () => {
     const s = useAppStore.getState();
@@ -107,6 +122,10 @@ export function useFileOperations() {
         },
         savedPrintPresets: Object.keys(s.savedPrintPresets).length > 0 ? s.savedPrintPresets : undefined,
         filledRegionTypes: customRegionTypes.length > 0 ? customRegionTypes : undefined,
+        projectInfo: {
+          ...s.projectInfo,
+          erpnext: { ...s.projectInfo.erpnext, apiSecret: '' },
+        },
       };
 
       await writeProjectFile(filePath, project);
@@ -148,6 +167,10 @@ export function useFileOperations() {
         },
         savedPrintPresets: Object.keys(s.savedPrintPresets).length > 0 ? s.savedPrintPresets : undefined,
         filledRegionTypes: customRegionTypes.length > 0 ? customRegionTypes : undefined,
+        projectInfo: {
+          ...s.projectInfo,
+          erpnext: { ...s.projectInfo.erpnext, apiSecret: '' },
+        },
       };
 
       await writeProjectFile(filePath, project);

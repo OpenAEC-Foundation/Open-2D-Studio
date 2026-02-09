@@ -139,3 +139,21 @@ export {
   initialClipboardState,
   createClipboardSlice,
 } from './clipboardSlice';
+
+// Project Info Slice
+export {
+  type ProjectInfoState,
+  type ProjectInfoActions,
+  type ProjectInfoSlice,
+  initialProjectInfoState,
+  createProjectInfoSlice,
+} from './projectInfoSlice';
+
+// Extension Slice
+export {
+  type ExtensionState,
+  type ExtensionActions,
+  type ExtensionSlice,
+  initialExtensionState,
+  createExtensionSlice,
+} from './extensionSlice';

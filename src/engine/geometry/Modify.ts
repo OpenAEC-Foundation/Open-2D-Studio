@@ -170,6 +170,38 @@ export function transformShape(shape: Shape, transform: PointTransform, newId?: 
     case 'dimension':
       (cloned as any).points = ((cloned as any).points as Point[]).map(transform);
       break;
+    case 'image': {
+      const imgRot = cloned.rotation || 0;
+      const imgCos = Math.cos(imgRot);
+      const imgSin = Math.sin(imgRot);
+      const imgTl = cloned.position;
+      // Compute corners in world space
+      const imgCorners = [
+        { x: 0, y: 0 },
+        { x: cloned.width, y: 0 },
+        { x: cloned.width, y: cloned.height },
+        { x: 0, y: cloned.height },
+      ].map(c => ({
+        x: imgTl.x + c.x * imgCos - c.y * imgSin,
+        y: imgTl.y + c.x * imgSin + c.y * imgCos,
+      }));
+      // Transform all four corners
+      const imgTc = imgCorners.map(transform);
+      // Derive new rotation from transformed first edge (TL -> TR)
+      const imgEdgeDx = imgTc[1].x - imgTc[0].x;
+      const imgEdgeDy = imgTc[1].y - imgTc[0].y;
+      const imgNewRot = Math.atan2(imgEdgeDy, imgEdgeDx);
+      // Derive new width/height from transformed edges
+      const imgNewWidth = Math.sqrt(imgEdgeDx * imgEdgeDx + imgEdgeDy * imgEdgeDy);
+      const imgSideDx = imgTc[3].x - imgTc[0].x;
+      const imgSideDy = imgTc[3].y - imgTc[0].y;
+      const imgNewHeight = Math.sqrt(imgSideDx * imgSideDx + imgSideDy * imgSideDy);
+      cloned.position = imgTc[0];
+      cloned.width = imgNewWidth;
+      cloned.height = imgNewHeight;
+      cloned.rotation = imgNewRot;
+      break;
+    }
   }
 
   return cloned;

@@ -3,7 +3,7 @@
  */
 
 import type { Shape, DrawingPreview, CurrentStyle, Viewport } from '../types';
-import type { HatchShape, HatchPatternType, BeamShape } from '../../../types/geometry';
+import type { HatchShape, HatchPatternType, BeamShape, ImageShape } from '../../../types/geometry';
 import type { CustomHatchPattern, LineFamily, SvgHatchPattern } from '../../../types/hatch';
 import { BUILTIN_PATTERNS, isSvgHatchPattern } from '../../../types/hatch';
 import { BaseRenderer } from './BaseRenderer';
@@ -28,6 +28,8 @@ export class ShapeRenderer extends BaseRenderer {
   // Live preview: temporarily override pattern for selected hatch shapes
   private previewPatternId: string | null = null;
   private previewSelectedIds: Set<string> = new Set();
+  // Cache for loaded image elements (keyed by shape ID)
+  private imageCache: Map<string, HTMLImageElement> = new Map();
 
   constructor(ctx: CanvasRenderingContext2D, width: number = 0, height: number = 0, dpr?: number) {
     super(ctx, width, height, dpr);
@@ -172,6 +174,9 @@ export class ShapeRenderer extends BaseRenderer {
       case 'beam':
         this.drawBeam(shape as BeamShape, invertColors);
         break;
+      case 'image':
+        this.drawImage(shape as ImageShape);
+        break;
       default:
         break;
     }
@@ -240,6 +245,9 @@ export class ShapeRenderer extends BaseRenderer {
         break;
       case 'beam':
         this.drawBeam(shape as BeamShape, invertColors);
+        break;
+      case 'image':
+        this.drawImage(shape as ImageShape);
         break;
     }
 
@@ -1663,8 +1671,8 @@ export class ShapeRenderer extends BaseRenderer {
       ctx.lineWidth = 1 / zoom;
       ctx.fillRect(point.x - handleSize / 2, point.y - handleSize / 2, handleSize, handleSize);
       ctx.strokeRect(point.x - handleSize / 2, point.y - handleSize / 2, handleSize, handleSize);
-      // Skip axis arrows on arc midpoint grip (circumcenter algorithm can't handle axis constraint)
-      if (!(shape.type === 'arc' && i === 3)) {
+      // Skip axis arrows on arc midpoint grip and image corner/side grips (only center grip 8 gets arrows)
+      if (!(shape.type === 'arc' && i === 3) && !(shape.type === 'image' && i !== 8)) {
         // For line/beam midpoint (index 2), align axes along/perpendicular to the shape
         let angle = 0;
         if (i === 2 && (shape.type === 'line' || shape.type === 'beam')) {
@@ -1914,9 +1922,70 @@ export class ShapeRenderer extends BaseRenderer {
           shape.end,
           { x: (shape.start.x + shape.end.x) / 2, y: (shape.start.y + shape.end.y) / 2 },
         ];
+      case 'image': {
+        const imgShape = shape as ImageShape;
+        const tl = imgShape.position;
+        const w = imgShape.width;
+        const h = imgShape.height;
+        const rot = imgShape.rotation || 0;
+        const cos = Math.cos(rot);
+        const sin = Math.sin(rot);
+        const toWorld = (lx: number, ly: number) => ({
+          x: tl.x + lx * cos - ly * sin,
+          y: tl.y + lx * sin + ly * cos,
+        });
+        return [
+          toWorld(0, 0),
+          toWorld(w, 0),
+          toWorld(w, h),
+          toWorld(0, h),
+          toWorld(w / 2, 0),
+          toWorld(w, h / 2),
+          toWorld(w / 2, h),
+          toWorld(0, h / 2),
+          toWorld(w / 2, h / 2),
+        ];
+      }
       default:
         return [];
     }
+  }
+
+  private drawImage(shape: ImageShape): void {
+    const ctx = this.ctx;
+    let img = this.imageCache.get(shape.id);
+
+    if (!img) {
+      // Create and cache the image element
+      img = new Image();
+      img.src = shape.imageData;
+      this.imageCache.set(shape.id, img);
+      // Request a re-render once the image loads
+      img.onload = () => {
+        // The canvas render loop will pick it up on next frame
+      };
+    }
+
+    // Only draw if image has loaded
+    if (!img.complete || img.naturalWidth === 0) return;
+
+    ctx.save();
+
+    // Apply opacity
+    if (shape.opacity !== undefined && shape.opacity < 1) {
+      ctx.globalAlpha = shape.opacity;
+    }
+
+    // Apply rotation around the top-left corner
+    if (shape.rotation) {
+      ctx.translate(shape.position.x, shape.position.y);
+      ctx.rotate(shape.rotation);
+      ctx.drawImage(img, 0, 0, shape.width, shape.height);
+    } else {
+      ctx.drawImage(img, shape.position.x, shape.position.y, shape.width, shape.height);
+    }
+
+    ctx.restore();
   }
 
   private drawHatch(shape: HatchShape, invertColors: boolean = false): void {

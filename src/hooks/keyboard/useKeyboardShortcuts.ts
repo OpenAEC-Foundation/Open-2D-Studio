@@ -42,6 +42,7 @@ const TWO_KEY_SHORTCUTS: Record<string, string> = {
   'dd': 'dimension-diameter',
   'se': 'section',  // Structural section
   'be': 'beam',     // Structural beam
+  'im': 'image',    // Image import
 };
 
 const TWO_KEY_TIMEOUT = 750; // ms to wait for second key

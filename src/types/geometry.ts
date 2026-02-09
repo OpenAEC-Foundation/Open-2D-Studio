@@ -43,7 +43,7 @@ export interface ShapeGroup {
 /** @deprecated Use drawingId instead */
 export type BaseShapeWithDraftId = BaseShape & { draftId?: string };
 
-export type ShapeType = 'line' | 'rectangle' | 'circle' | 'arc' | 'polyline' | 'ellipse' | 'spline' | 'text' | 'point' | 'dimension' | 'hatch' | 'beam';
+export type ShapeType = 'line' | 'rectangle' | 'circle' | 'arc' | 'polyline' | 'ellipse' | 'spline' | 'text' | 'point' | 'dimension' | 'hatch' | 'beam' | 'image';
 
 export type HatchPatternType = 'solid' | 'diagonal' | 'crosshatch' | 'horizontal' | 'vertical' | 'dots' | 'custom';
 
@@ -104,6 +104,21 @@ export interface BeamShape extends BaseShape {
   showLabel: boolean;              // Whether to show beam label
   labelText?: string;              // Custom label (auto-generated if not set)
   rotation: number;                // Additional rotation around start point (radians)
+}
+
+// Image shape - embedded raster image on the canvas
+export interface ImageShape extends BaseShape {
+  type: 'image';
+  position: Point;        // Top-left corner in world coords
+  width: number;          // Display width in world units
+  height: number;         // Display height in world units
+  rotation: number;       // Radians
+  imageData: string;      // Base64 data URL (embedded)
+  sourcePath?: string;    // Original file path (for re-linking)
+  originalWidth: number;  // Pixel width of source image
+  originalHeight: number; // Pixel height of source image
+  opacity: number;        // 0-1, default 1
+  maintainAspectRatio: boolean; // default true
 }
 
 // Specific shape types
@@ -263,7 +278,8 @@ export type Shape =
   | PointShape
   | DimensionShape
   | HatchShape
-  | BeamShape;
+  | BeamShape
+  | ImageShape;
 
 // Layer type
 export interface Layer {
@@ -328,6 +344,8 @@ export type ToolType =
   | 'detail-component'
   // Structural tools
   | 'beam'
+  // Image tools
+  | 'image'
   // Modify tools (legacy - now commands)
   | 'move'
   | 'copy'

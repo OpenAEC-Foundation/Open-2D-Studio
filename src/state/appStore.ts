@@ -47,6 +47,10 @@ import {
   type HatchActions,
   type ClipboardState,
   type ClipboardActions,
+  type ProjectInfoState,
+  type ProjectInfoActions,
+  type ExtensionState,
+  type ExtensionActions,
 
   // Initial states
   initialModelState,
@@ -63,6 +67,8 @@ import {
   initialParametricState,
   initialHatchState,
   initialClipboardState,
+  initialProjectInfoState,
+  initialExtensionState,
 
   // Slice creators
   createModelSlice,
@@ -79,6 +85,8 @@ import {
   createParametricSlice,
   createHatchSlice,
   createClipboardSlice,
+  createProjectInfoSlice,
+  createExtensionSlice,
 } from './slices';
 
 // Re-export types for backward compatibility
@@ -179,6 +187,8 @@ function extractPerDocState(s: any) {
     // Text styles
     textStyles: s.textStyles,
     activeTextStyleId: s.activeTextStyleId,
+    // Project info
+    projectInfo: s.projectInfo,
   };
 }
 
@@ -249,6 +259,8 @@ function restoreDocState(docId: string, set: any) {
     // Text styles
     state.textStyles = saved.textStyles || [];
     state.activeTextStyleId = saved.activeTextStyleId || null;
+    // Project info
+    if (saved.projectInfo) state.projectInfo = saved.projectInfo;
   });
 }
 
@@ -299,6 +311,8 @@ export type AppState =
   & ParametricState
   & HatchState
   & ClipboardState
+  & ProjectInfoState
+  & ExtensionState
   & ModelActions
   & ViewActions
   & ToolActions
@@ -313,6 +327,8 @@ export type AppState =
   & ParametricActions
   & HatchActions
   & ClipboardActions
+  & ProjectInfoActions
+  & ExtensionActions
   & CoordinatingActions
   & DocumentManagementState
   & DocumentManagementActions;
@@ -336,6 +352,8 @@ const initialState = {
   ...initialParametricState,
   ...initialHatchState,
   ...initialClipboardState,
+  ...initialProjectInfoState,
+  ...initialExtensionState,
 };
 
 // ============================================================================
@@ -376,6 +394,8 @@ export const useAppStore = create<AppState>()(
       ...createParametricSlice(set as any, get as any),
       ...createHatchSlice(set as any, get as any),
       ...createClipboardSlice(set as any, get as any),
+      ...createProjectInfoSlice(set as any, get as any),
+      ...createExtensionSlice(set as any, get as any),
 
       // ========================================================================
       // Coordinating Actions (cross-slice operations)

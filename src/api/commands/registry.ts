@@ -66,6 +66,14 @@ export class CommandRegistry {
   }
 
   /**
+   * Unregister a command definition
+   */
+  unregister(command: string, action: string, entity?: string): void {
+    const key = getCommandKey(command, action, entity);
+    this.commands.delete(key);
+  }
+
+  /**
    * Get a command definition
    */
   get(command: string, action: string, entity?: string): CommandDefinition | undefined {

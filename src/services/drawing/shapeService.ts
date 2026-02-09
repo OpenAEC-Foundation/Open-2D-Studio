@@ -290,6 +290,7 @@ export function translateShape(shape: Shape, offset: Point): void {
       });
       break;
     case 'point':
+    case 'image':
       shape.position.x += offset.x;
       shape.position.y += offset.y;
       break;
@@ -343,6 +344,10 @@ export function rotateShape(shape: Shape, center: Point, angle: number): void {
     case 'point':
       shape.position = rotatePoint(shape.position, center, angle);
       break;
+    case 'image':
+      shape.position = rotatePoint(shape.position, center, angle);
+      shape.rotation = (shape.rotation || 0) + angle;
+      break;
   }
 }
 
@@ -385,6 +390,11 @@ export function scaleShape(shape: Shape, center: Point, scaleX: number, scaleY: 
       break;
     case 'point':
       shape.position = scale(shape.position);
+      break;
+    case 'image':
+      shape.position = scale(shape.position);
+      shape.width *= scaleX;
+      shape.height *= scaleY;
       break;
   }
 }
@@ -444,6 +454,10 @@ export function mirrorShape(shape: Shape, p1: Point, p2: Point): void {
       break;
     case 'point':
       shape.position = mirrorPoint(shape.position);
+      break;
+    case 'image':
+      shape.position = mirrorPoint(shape.position);
+      shape.rotation = -(shape.rotation || 0);
       break;
   }
 }

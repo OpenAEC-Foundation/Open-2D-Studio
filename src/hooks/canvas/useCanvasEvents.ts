@@ -27,6 +27,9 @@ import { useAnnotationEditing } from '../editing/useAnnotationEditing';
 import { useGripEditing } from '../editing/useGripEditing';
 import { useModifyTools } from '../editing/useModifyTools';
 import { useBeamDrawing } from '../drawing/useBeamDrawing';
+import { showImportImageDialog } from '../../services/file/fileService';
+import { importImage } from '../../services/file/imageImportService';
+import type { ImageShape } from '../../types/geometry';
 
 export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
   // Compose specialized hooks
@@ -357,6 +360,44 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
           textDrawing.handleTextClick(snappedPos);
           snapDetection.clearTracking();
           break;
+
+        case 'image': {
+          deselectAll();
+          // Open file dialog, import image, place at click point
+          (async () => {
+            try {
+              const filePath = await showImportImageDialog();
+              if (!filePath) return;
+              const result = await importImage(filePath);
+              const { activeLayerId: layerId, activeDrawingId: drawingId } = useAppStore.getState();
+              // Scale image: use original pixel dimensions as world units
+              const imageShape: ImageShape = {
+                id: crypto.randomUUID(),
+                type: 'image',
+                layerId,
+                drawingId,
+                style: { strokeColor: '#ffffff', strokeWidth: 1, lineStyle: 'solid' },
+                visible: true,
+                locked: false,
+                position: { x: snappedPos.x - result.width / 2, y: snappedPos.y - result.height / 2 },
+                width: result.width,
+                height: result.height,
+                rotation: 0,
+                imageData: result.dataUrl,
+                sourcePath: result.filePath,
+                originalWidth: result.width,
+                originalHeight: result.height,
+                opacity: 1,
+                maintainAspectRatio: true,
+              };
+              useAppStore.getState().addShapes([imageShape]);
+              setActiveTool('select');
+            } catch (err) {
+              console.error('Failed to import image:', err);
+            }
+          })();
+          break;
+        }
 
         case 'pan':
           // Pan tool doesn't use click
@@ -711,7 +752,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       }
 
       // If a drawing or annotation tool is selected but not actively drawing, deselect it
-      const drawingTools = ['line', 'rectangle', 'circle', 'arc', 'polyline', 'spline', 'ellipse', 'hatch', 'text', 'dimension', 'beam'];
+      const drawingTools = ['line', 'rectangle', 'circle', 'arc', 'polyline', 'spline', 'ellipse', 'hatch', 'text', 'dimension', 'beam', 'image'];
       if (drawingTools.includes(activeTool)) {
         setActiveTool('select');
         // Clear any lingering snap/tracking indicators

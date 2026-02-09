@@ -29,6 +29,7 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowDownToLine,
+  ImageIcon,
 } from 'lucide-react';
 import type { UITheme } from '../../../state/slices/snapSlice';
 import { UI_THEMES } from '../../../state/slices/snapSlice';
@@ -51,7 +52,6 @@ import {
   CloudIcon,
   LeaderIcon,
   TableIcon,
-  DivideIcon,
   StretchIcon,
   BreakIcon,
   JoinIcon,
@@ -176,7 +176,7 @@ function useTooltip(delay = 400) {
   return { show, ref, onEnter, onLeave };
 }
 
-type RibbonTab = 'home' | 'modify' | 'structural' | 'view' | 'tools';
+type RibbonTab = 'home' | 'modify' | 'structural' | 'view' | 'tools' | string;
 
 interface RibbonButtonProps {
   icon: React.ReactNode;
@@ -208,93 +208,6 @@ function RibbonButton({ icon, label, onClick, active, disabled, shortcut, toolti
   );
 }
 
-interface DropdownOption {
-  id: string;
-  label: string;
-}
-
-interface RibbonDropdownButtonProps {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  active?: boolean;
-  options: DropdownOption[];
-  selectedOption: string;
-  onOptionSelect: (optionId: string) => void;
-  shortcut?: string;
-}
-
-function RibbonDropdownButton({
-  icon,
-  label,
-  onClick,
-  active,
-  options,
-  selectedOption,
-  onOptionSelect,
-  shortcut,
-}: RibbonDropdownButtonProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isOpen]);
-
-  const selectedOptionLabel = options.find(o => o.id === selectedOption)?.label || '';
-  const tt = useTooltip();
-
-  return (
-    <div className="ribbon-dropdown-container" ref={dropdownRef}>
-      <button
-        ref={tt.ref}
-        className={`ribbon-btn has-dropdown ${active ? 'active' : ''}`}
-        onClick={onClick}
-        onMouseEnter={tt.onEnter}
-        onMouseLeave={tt.onLeave}
-      >
-        <span className="ribbon-btn-icon">{icon}</span>
-        <span className="ribbon-btn-label">{label}</span>
-      </button>
-      <button
-        className={`ribbon-dropdown-trigger ${active ? 'active' : ''}`}
-        onClick={() => setIsOpen(!isOpen)}
-        title="More options"
-      >
-        <ChevronDown size={12} />
-      </button>
-
-      {isOpen && (
-        <div className="ribbon-dropdown-menu">
-          {options.map((option) => (
-            <button
-              key={option.id}
-              className={`ribbon-dropdown-item ${selectedOption === option.id ? 'selected' : ''}`}
-              onClick={() => {
-                onOptionSelect(option.id);
-                setIsOpen(false);
-                onClick();
-              }}
-            >
-              {selectedOption === option.id && <span className="checkmark">✓</span>}
-              <span className={selectedOption !== option.id ? 'no-check' : ''}>{option.label}</span>
-            </button>
-          ))}
-        </div>
-      )}
-      {tt.show && !isOpen && <RibbonTooltip label={`${label} (${selectedOptionLabel})`} shortcut={shortcut} parentRef={tt.ref as React.RefObject<HTMLElement>} />}
-    </div>
-  );
-}
 
 interface RibbonSmallButtonProps {
   icon: React.ReactNode;
@@ -325,9 +238,33 @@ function RibbonSmallButton({ icon, label, onClick, active, disabled, shortcut }:
   );
 }
 
-function RibbonGroup({ label, children }: { label: string; children: React.ReactNode }) {
+function RibbonMediumButton({ icon, label, onClick, active, disabled, shortcut }: RibbonSmallButtonProps) {
+  const tt = useTooltip();
   return (
-    <div className="ribbon-group">
+    <>
+      <button
+        ref={tt.ref}
+        className={`ribbon-btn medium ${active ? 'active' : ''} ${disabled ? 'disabled' : ''}`}
+        onClick={onClick}
+        disabled={disabled}
+        onMouseEnter={tt.onEnter}
+        onMouseLeave={tt.onLeave}
+      >
+        <span className="ribbon-btn-icon">{icon}</span>
+        <span className="ribbon-btn-label">{label}</span>
+      </button>
+      {tt.show && <RibbonTooltip label={label} shortcut={shortcut} parentRef={tt.ref as React.RefObject<HTMLElement>} />}
+    </>
+  );
+}
+
+function RibbonMediumButtonStack({ children }: { children: React.ReactNode }) {
+  return <div className="ribbon-btn-medium-stack">{children}</div>;
+}
+
+function RibbonGroup({ label, children, noLabels }: { label: string; children: React.ReactNode; noLabels?: boolean }) {
+  return (
+    <div className={`ribbon-group ${noLabels ? 'no-labels' : ''}`}>
       <div className="ribbon-group-content">{children}</div>
       <div className="ribbon-group-label">{label}</div>
     </div>
@@ -417,10 +354,6 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
     activeTool,
     switchToDrawingTool,
     switchToolAndCancelCommand,
-    circleMode,
-    setCircleMode,
-    rectangleMode,
-    setRectangleMode,
     dimensionMode,
     setDimensionMode,
     gridVisible,
@@ -457,28 +390,58 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
     // Theme
     uiTheme,
     setUITheme,
+
+    // Extensions
+    extensionRibbonTabs,
+    extensionRibbonButtons,
   } = useAppStore();
 
-  const circleOptions: DropdownOption[] = [
-    { id: 'center-radius', label: 'Center, Radius' },
-    { id: 'center-diameter', label: 'Center, Diameter' },
-    { id: '2point', label: '2-Point' },
-    { id: '3point', label: '3-Point' },
-  ];
-
-  const rectangleOptions: DropdownOption[] = [
-    { id: 'corner', label: 'Corner' },
-    { id: 'center', label: 'Center' },
-    { id: '3point', label: '3-Point' },
-  ];
-
-  const tabs: { id: RibbonTab; label: string }[] = [
+  const builtInTabs: { id: RibbonTab; label: string }[] = [
     { id: 'home', label: 'Home' },
     { id: 'modify', label: 'Modify' },
     { id: 'structural', label: 'Structural' },
     { id: 'view', label: 'View' },
     { id: 'tools', label: 'Tools' },
   ];
+
+  const extTabs = extensionRibbonTabs
+    .slice()
+    .sort((a, b) => a.order - b.order)
+    .map((t) => ({ id: t.id as RibbonTab, label: t.label }));
+
+  const tabs = [...builtInTabs, ...extTabs];
+
+  // Helper: render extension buttons injected into a built-in tab
+  const builtInTabIds = new Set(builtInTabs.map((t) => t.id));
+  const renderExtensionButtonsForTab = (tabId: string) => {
+    const btns = extensionRibbonButtons.filter((b) => b.tab === tabId && builtInTabIds.has(b.tab));
+    if (btns.length === 0) return null;
+
+    const groups = new Map<string, typeof btns>();
+    for (const btn of btns) {
+      const group = groups.get(btn.group) || [];
+      group.push(btn);
+      groups.set(btn.group, group);
+    }
+
+    return Array.from(groups.entries()).map(([groupLabel, groupBtns]) => (
+      <RibbonGroup key={`ext-${groupLabel}`} label={groupLabel}>
+        {groupBtns.map((btn) => {
+          const iconContent = btn.icon
+            ? <span dangerouslySetInnerHTML={{ __html: btn.icon }} />
+            : <Settings size={btn.size === 'small' ? 14 : btn.size === 'medium' ? 18 : 24} />;
+
+          if (btn.size === 'small') {
+            return <RibbonSmallButton key={btn.label} icon={iconContent} label={btn.label} onClick={btn.onClick} shortcut={btn.shortcut} />;
+          }
+          if (btn.size === 'medium') {
+            return <RibbonMediumButton key={btn.label} icon={iconContent} label={btn.label} onClick={btn.onClick} shortcut={btn.shortcut} />;
+          }
+          return <RibbonButton key={btn.label} icon={iconContent} label={btn.label} onClick={btn.onClick} tooltip={btn.tooltip} shortcut={btn.shortcut} />;
+        })}
+      </RibbonGroup>
+    ));
+  };
 
   return (
     <div className="ribbon-container">
@@ -576,85 +539,86 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
             </RibbonGroup>
 
             {/* Draw Group */}
-            <RibbonGroup label="Draw">
-              <RibbonButton
-                icon={<LineIcon size={24} />}
-                label="Line"
-                onClick={() => switchToDrawingTool('line')}
-                active={activeTool === 'line'}
-                shortcut="LI"
-              />
-              <RibbonDropdownButton
-                icon={<Square size={24} />}
-                label="Rectangle"
-                onClick={() => switchToDrawingTool('rectangle')}
-                active={activeTool === 'rectangle'}
-                options={rectangleOptions}
-                selectedOption={rectangleMode}
-                onOptionSelect={(mode) => setRectangleMode(mode as 'corner' | 'center' | '3point')}
-                shortcut="RC"
-              />
-              <RibbonDropdownButton
-                icon={<Circle size={24} />}
-                label="Circle"
-                onClick={() => switchToDrawingTool('circle')}
-                active={activeTool === 'circle'}
-                options={circleOptions}
-                selectedOption={circleMode}
-                onOptionSelect={(mode) => setCircleMode(mode as 'center-radius' | 'center-diameter' | '2point' | '3point')}
-                shortcut="CI"
-              />
-              <RibbonButtonStack>
-                <RibbonSmallButton
-                  icon={<ArcIcon size={14} />}
-                  label="Arc"
-                  onClick={() => switchToDrawingTool('arc')}
-                  active={activeTool === 'arc'}
-                  shortcut="AR"
+            <RibbonGroup label="Draw" noLabels>
+              <RibbonMediumButtonStack>
+                <RibbonMediumButton
+                  icon={<LineIcon size={18} />}
+                  label="Line"
+                  onClick={() => switchToDrawingTool('line')}
+                  active={activeTool === 'line'}
+                  shortcut="LI"
                 />
-                <RibbonSmallButton
-                  icon={<PolylineIcon size={14} />}
+                <RibbonMediumButton
+                  icon={<PolylineIcon size={18} />}
                   label="Polyline"
                   onClick={() => switchToDrawingTool('polyline')}
                   active={activeTool === 'polyline'}
                   shortcut="PL"
                 />
-                <RibbonSmallButton
-                  icon={<EllipseIcon size={14} />}
+              </RibbonMediumButtonStack>
+              <RibbonMediumButtonStack>
+                <RibbonMediumButton
+                  icon={<Square size={18} />}
+                  label="Rectangle"
+                  onClick={() => switchToDrawingTool('rectangle')}
+                  active={activeTool === 'rectangle'}
+                  shortcut="RC"
+                />
+                <RibbonMediumButton
+                  icon={<Circle size={18} />}
+                  label="Circle"
+                  onClick={() => switchToDrawingTool('circle')}
+                  active={activeTool === 'circle'}
+                  shortcut="CI"
+                />
+              </RibbonMediumButtonStack>
+              <RibbonMediumButtonStack>
+                <RibbonMediumButton
+                  icon={<ArcIcon size={18} />}
+                  label="Arc"
+                  onClick={() => switchToDrawingTool('arc')}
+                  active={activeTool === 'arc'}
+                  shortcut="AR"
+                />
+                <RibbonMediumButton
+                  icon={<EllipseIcon size={18} />}
                   label="Ellipse"
                   onClick={() => switchToDrawingTool('ellipse')}
                   active={activeTool === 'ellipse'}
                   shortcut="EL"
                 />
-              </RibbonButtonStack>
-              <RibbonButtonStack>
-                <RibbonSmallButton
-                  icon={<SplineIcon size={14} />}
+              </RibbonMediumButtonStack>
+              <RibbonMediumButtonStack>
+                <RibbonMediumButton
+                  icon={<SplineIcon size={18} />}
                   label="Spline"
                   onClick={() => switchToDrawingTool('spline')}
                   active={activeTool === 'spline'}
                   shortcut="SP"
                 />
-                <RibbonSmallButton
-                  icon={<FilledRegionIcon size={14} />}
+                <RibbonMediumButton
+                  icon={<FilledRegionIcon size={18} />}
                   label="Filled Region"
                   onClick={() => switchToDrawingTool('hatch')}
                   active={activeTool === 'hatch'}
                 />
-                <RibbonSmallButton
-                  icon={<DivideIcon size={14} />}
-                  label="Divide"
-                  onClick={() => {}}
-                  disabled={true}
+              </RibbonMediumButtonStack>
+              <RibbonMediumButtonStack>
+                <RibbonMediumButton
+                  icon={<Type size={18} />}
+                  label="Text"
+                  onClick={() => switchToDrawingTool('text')}
+                  active={activeTool === 'text'}
+                  shortcut="TX"
                 />
-              </RibbonButtonStack>
-              <RibbonButton
-                icon={<Type size={24} />}
-                label="Text"
-                onClick={() => switchToDrawingTool('text')}
-                active={activeTool === 'text'}
-                shortcut="TX"
-              />
+                <RibbonMediumButton
+                  icon={<ImageIcon size={18} />}
+                  label="Image"
+                  onClick={() => switchToDrawingTool('image')}
+                  active={activeTool === 'image'}
+                  shortcut="IM"
+                />
+              </RibbonMediumButtonStack>
             </RibbonGroup>
 
             {/* Annotate Group */}
@@ -905,6 +869,7 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 />
               </RibbonButtonStack>
             </RibbonGroup>
+            {renderExtensionButtonsForTab('home')}
           </div>
         </div>
 
@@ -912,12 +877,6 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
         <div className={`ribbon-content ${activeTab === 'modify' ? 'active' : ''}`}>
           <div className="ribbon-groups">
             <RibbonGroup label="Region">
-              <RibbonButton
-                icon={<FilledRegionIcon size={24} />}
-                label="Filled Region"
-                onClick={() => switchToDrawingTool('hatch')}
-                active={activeTool === 'hatch'}
-              />
               <RibbonButton
                 icon={<HatchIcon size={24} />}
                 label="Pattern Manager"
@@ -946,6 +905,7 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 disabled={selectedShapeIds.length === 0}
               />
             </RibbonGroup>
+            {renderExtensionButtonsForTab('modify')}
           </div>
         </div>
 
@@ -973,6 +933,7 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 shortcut="BE"
               />
             </RibbonGroup>
+            {renderExtensionButtonsForTab('structural')}
           </div>
         </div>
 
@@ -1033,6 +994,7 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 onThemeChange={setUITheme}
               />
             </RibbonGroup>
+            {renderExtensionButtonsForTab('view')}
           </div>
         </div>
 
@@ -1054,8 +1016,69 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 onClick={() => setPrintDialogOpen(true)}
               />
             </RibbonGroup>
+            {renderExtensionButtonsForTab('tools')}
           </div>
         </div>
+
+        {/* Extension Tabs — render buttons grouped by group for each extension tab */}
+        {extTabs.map((extTab) => {
+          const buttonsForTab = extensionRibbonButtons.filter((b) => b.tab === extTab.id);
+          const groups = new Map<string, typeof buttonsForTab>();
+          for (const btn of buttonsForTab) {
+            const group = groups.get(btn.group) || [];
+            group.push(btn);
+            groups.set(btn.group, group);
+          }
+
+          return (
+            <div key={extTab.id} className={`ribbon-content ${activeTab === extTab.id ? 'active' : ''}`}>
+              <div className="ribbon-groups">
+                {Array.from(groups.entries()).map(([groupLabel, btns]) => (
+                  <RibbonGroup key={groupLabel} label={groupLabel}>
+                    {btns.map((btn) => {
+                      const iconContent = btn.icon
+                        ? <span dangerouslySetInnerHTML={{ __html: btn.icon }} />
+                        : <Settings size={btn.size === 'small' ? 14 : btn.size === 'medium' ? 18 : 24} />;
+
+                      if (btn.size === 'small') {
+                        return (
+                          <RibbonSmallButton
+                            key={btn.label}
+                            icon={iconContent}
+                            label={btn.label}
+                            onClick={btn.onClick}
+                            shortcut={btn.shortcut}
+                          />
+                        );
+                      }
+                      if (btn.size === 'medium') {
+                        return (
+                          <RibbonMediumButton
+                            key={btn.label}
+                            icon={iconContent}
+                            label={btn.label}
+                            onClick={btn.onClick}
+                            shortcut={btn.shortcut}
+                          />
+                        );
+                      }
+                      return (
+                        <RibbonButton
+                          key={btn.label}
+                          icon={iconContent}
+                          label={btn.label}
+                          onClick={btn.onClick}
+                          tooltip={btn.tooltip}
+                          shortcut={btn.shortcut}
+                        />
+                      );
+                    })}
+                  </RibbonGroup>
+                ))}
+              </div>
+            </div>
+          );
+        })}
 
       </div>
     </div>

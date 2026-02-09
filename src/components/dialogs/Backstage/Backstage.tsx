@@ -1,9 +1,13 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { useFileOperations } from '../../../hooks/file/useFileOperations';
 import { getSetting, setSetting } from '../../../utils/settings';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
+import { ProjectInfoPanel } from '../ProjectInfoDialog';
+import { ExtensionManagerPanel } from './ExtensionManagerPanel';
+import { useAppStore } from '../../../state/appStore';
+import type { ExtensionBackstagePanel } from '../../../extensions/types';
 
-export type BackstageView = 'none' | 'import' | 'export' | 'shortcuts' | 'feedback' | 'about';
+export type BackstageView = 'none' | 'import' | 'export' | 'shortcuts' | 'feedback' | 'about' | 'projectInfo' | 'extensions' | `ext:${string}`;
 
 interface BackstageProps {
   isOpen: boolean;
@@ -343,9 +347,36 @@ function FeedbackPanel() {
   );
 }
 
+function ExtensionPanelHost({ panel }: { panel: ExtensionBackstagePanel }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
+
+  useLayoutEffect(() => {
+    if (containerRef.current) {
+      try {
+        const result = panel.render(containerRef.current);
+        if (typeof result === 'function') {
+          cleanupRef.current = result;
+        }
+      } catch (err) {
+        console.error(`[Extensions] Error rendering backstage panel "${panel.id}":`, err);
+      }
+    }
+    return () => {
+      if (cleanupRef.current) {
+        try { cleanupRef.current(); } catch { /* ignore */ }
+        cleanupRef.current = null;
+      }
+    };
+  }, [panel]);
+
+  return <div ref={containerRef} className="p-8 flex-1 overflow-y-auto" />;
+}
+
 export function Backstage({ isOpen, onClose, initialView, onOpenSheetTemplateImport }: BackstageProps) {
   const { handleNew, handleOpen, handleSave, handleSaveAs, handleExportSVG, handleExportDXF, handleExportIFC, handleExportJSON, handleImportDXF, handlePrint, handleExit } = useFileOperations();
   const [activeView, setActiveView] = useState<BackstageView>('none');
+  const extensionBackstagePanels = useAppStore((s) => s.extensionBackstagePanels);
 
   const handleEscape = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') onClose();
@@ -444,6 +475,43 @@ export function Backstage({ isOpen, onClose, initialView, onOpenSheetTemplateImp
             onMouseEnter={clearView}
           />
 
+          <div className="h-px bg-cad-border my-1 mx-4" />
+
+          <BackstageItem
+            icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>}
+            label="Project Info"
+            onClick={() => setActiveView('projectInfo')}
+            onMouseEnter={() => setActiveView('projectInfo')}
+            active={activeView === 'projectInfo'}
+          />
+          <BackstageItem
+            icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>}
+            label="Extensions"
+            onClick={() => setActiveView('extensions')}
+            onMouseEnter={() => setActiveView('extensions')}
+            active={activeView === 'extensions'}
+          />
+
+          {/* Extension-registered backstage panels */}
+          {extensionBackstagePanels.length > 0 && (
+            <>
+              <div className="h-px bg-cad-border my-1 mx-4" />
+              {extensionBackstagePanels
+                .slice()
+                .sort((a, b) => a.order - b.order)
+                .map((panel) => (
+                  <BackstageItem
+                    key={panel.id}
+                    icon={panel.icon ? <span dangerouslySetInnerHTML={{ __html: panel.icon }} /> : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>}
+                    label={panel.label}
+                    onClick={() => setActiveView(`ext:${panel.id}` as BackstageView)}
+                    onMouseEnter={() => setActiveView(`ext:${panel.id}` as BackstageView)}
+                    active={activeView === `ext:${panel.id}`}
+                  />
+                ))}
+            </>
+          )}
+
           {/* Spacer */}
           <div className="flex-1" />
 
@@ -481,7 +549,7 @@ export function Backstage({ isOpen, onClose, initialView, onOpenSheetTemplateImp
       </div>
 
       {/* Right content area */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col overflow-hidden">
         {activeView === 'import' && (
           <div className="p-8">
             <h2 className="text-lg font-semibold text-cad-text mb-6">Import</h2>
@@ -729,6 +797,7 @@ export function Backstage({ isOpen, onClose, initialView, onOpenSheetTemplateImp
           </div>
         )}
         {activeView === 'feedback' && <FeedbackPanel />}
+        {activeView === 'projectInfo' && <ProjectInfoPanel isOpen={true} />}
         {activeView === 'about' && (
           <div className="p-8">
             <h2 className="text-lg font-semibold text-cad-text mb-6">About</h2>
@@ -752,6 +821,13 @@ export function Backstage({ isOpen, onClose, initialView, onOpenSheetTemplateImp
             </div>
           </div>
         )}
+        {activeView === 'extensions' && <ExtensionManagerPanel />}
+        {activeView.startsWith('ext:') && (() => {
+          const panelId = activeView.slice(4);
+          const panel = extensionBackstagePanels.find((p) => p.id === panelId);
+          if (!panel) return null;
+          return <ExtensionPanelHost key={panelId} panel={panel} />;
+        })()}
         {activeView === 'none' && (
           <div className="flex-1 flex items-center justify-center">
             <span className="text-cad-text-muted text-sm">Select an action from the menu</span>

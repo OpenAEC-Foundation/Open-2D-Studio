@@ -34,6 +34,7 @@ import { useKeyboardShortcuts } from './hooks/keyboard/useKeyboardShortcuts';
 import { useGlobalKeyboard } from './hooks/keyboard/useGlobalKeyboard';
 import { useAppStore } from './state/appStore';
 import { CadApi } from './api';
+import { loadAllExtensions } from './extensions';
 
 function App() {
   // Initialize keyboard shortcuts
@@ -133,6 +134,11 @@ function App() {
     if (!cadApiRef.current) {
       cadApiRef.current = new CadApi(useAppStore);
       (window as any).cad = cadApiRef.current;
+
+      // Load extensions after CadApi is available
+      loadAllExtensions().catch((err) =>
+        console.error('[Extensions] Failed to load extensions:', err)
+      );
     }
     return () => {
       if (cadApiRef.current) {

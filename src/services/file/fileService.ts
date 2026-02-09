@@ -4,7 +4,7 @@
 
 import { open, save, message, ask } from '@tauri-apps/plugin-dialog';
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
-import type { Shape, ShapeStyle, LineStyle, Layer, Drawing, Sheet, Viewport, DrawingBoundary, PolylineShape } from '../../types/geometry';
+import type { Shape, ShapeStyle, LineStyle, Layer, Drawing, Sheet, Viewport, DrawingBoundary, PolylineShape, ImageShape } from '../../types/geometry';
 import { splineToSvgPath } from '../../engine/geometry/SplineUtils';
 import { bulgeToArc, bulgeArcBounds } from '../../engine/geometry/GeometryUtils';
 export { exportToIFC } from '../export/ifcExport';
@@ -95,6 +95,8 @@ export interface ProjectFileV2 {
   savedPrintPresets?: Record<string, import('../../state/slices/uiSlice').PrintSettings>;
   // Filled region types (optional, backward compatible)
   filledRegionTypes?: import('../../types/filledRegion').FilledRegionType[];
+  // Project info (optional, backward compatible)
+  projectInfo?: import('../../types/projectInfo').ProjectInfo;
 }
 
 // Current project file type
@@ -414,6 +416,16 @@ function shapeToSVG(shape: Shape): string {
       if (shape.points.length < 2) return '';
       return `  <path ${baseAttrs} d="${splineToSvgPath(shape.points)}${shape.closed ? ' Z' : ''}" />\n`;
 
+    case 'image': {
+      const imgShape = shape as ImageShape;
+      const cx = imgShape.position.x + imgShape.width / 2;
+      const cy = imgShape.position.y + imgShape.height / 2;
+      const rotDeg = (imgShape.rotation || 0) * 180 / Math.PI;
+      const transform = rotDeg ? ` transform="rotate(${rotDeg} ${cx} ${cy})"` : '';
+      const opacity = imgShape.opacity !== undefined && imgShape.opacity < 1 ? ` opacity="${imgShape.opacity}"` : '';
+      return `  <image href="${imgShape.imageData}" x="${imgShape.position.x}" y="${imgShape.position.y}" width="${imgShape.width}" height="${imgShape.height}"${transform}${opacity} />\n`;
+    }
+
     default:
       return '';
   }
@@ -726,6 +738,13 @@ function getShapeBounds(shape: Shape): { minX: number; minY: number; maxX: numbe
         maxX: Math.max(...xs),
         maxY: Math.max(...ys),
       };
+    case 'image':
+      return {
+        minX: shape.position.x,
+        minY: shape.position.y,
+        maxX: shape.position.x + shape.width,
+        maxY: shape.position.y + shape.height,
+      };
     default:
       return null;
   }
@@ -739,6 +758,18 @@ export async function showImportDxfDialog(): Promise<string | null> {
     multiple: false,
     filters: [{ name: 'DXF Files', extensions: ['dxf'] }],
     title: 'Import DXF',
+  });
+  return result as string | null;
+}
+
+/**
+ * Show import image file dialog
+ */
+export async function showImportImageDialog(): Promise<string | null> {
+  const result = await open({
+    multiple: false,
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp', 'gif', 'webp', 'svg'] }],
+    title: 'Import Image',
   });
   return result as string | null;
 }

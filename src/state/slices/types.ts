@@ -313,6 +313,13 @@ export const getShapeBounds = (shape: Shape): { minX: number; minY: number; maxX
         maxY: Math.max(...corners.map(c => c.y)),
       };
     }
+    case 'image':
+      return {
+        minX: shape.position.x,
+        minY: shape.position.y,
+        maxX: shape.position.x + shape.width,
+        maxY: shape.position.y + shape.height,
+      };
     default:
       return null;
   }

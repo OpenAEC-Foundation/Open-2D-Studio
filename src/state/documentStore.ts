@@ -217,6 +217,9 @@ export interface DocumentState {
   // Text Styles
   textStyles: TextStyle[];              // Available text styles (built-in + custom)
   activeTextStyleId: string | null;     // Currently selected text style for new text
+
+  // Project Info
+  projectInfo: import('../types/projectInfo').ProjectInfo;
 }
 
 // ============================================================================
@@ -520,6 +523,29 @@ export function createEmptyDocumentState(projectName = 'Untitled'): DocumentStat
     // Text Styles
     textStyles: createDefaultTextStyles(),
     activeTextStyleId: 'annotation-medium', // Default to 3.5mm annotation
+    // Project Info
+    projectInfo: {
+      projectName: '',
+      projectNumber: '',
+      client: '',
+      address: '',
+      author: '',
+      architect: '',
+      contractor: '',
+      phase: '',
+      status: '',
+      discipline: '',
+      description: '',
+      startDate: '',
+      endDate: '',
+      customFields: {},
+      erpnext: {
+        enabled: false,
+        url: '',
+        apiKey: '',
+        apiSecret: '',
+      },
+    },
   };
 }
 

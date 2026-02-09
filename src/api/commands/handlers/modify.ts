@@ -49,6 +49,7 @@ function translateShape(shape: Shape, offset: Point): void {
       break;
     case 'point':
     case 'text':
+    case 'image':
       shape.position.x += offset.x;
       shape.position.y += offset.y;
       break;
@@ -119,6 +120,10 @@ function rotateShape(shape: Shape, center: Point, angle: number): void {
       shape.position = rotatePoint(shape.position, center, angle);
       shape.rotation = (shape.rotation || 0) + angle;
       break;
+    case 'image':
+      shape.position = rotatePoint(shape.position, center, angle);
+      shape.rotation = (shape.rotation || 0) + angle;
+      break;
     case 'dimension':
       if (shape.points) {
         shape.points = shape.points.map((p: Point) => rotatePoint(p, center, angle));
@@ -183,6 +188,11 @@ function scaleShape(shape: Shape, center: Point, factor: number): void {
           shape.backgroundPadding *= factor;
         }
       }
+      break;
+    case 'image':
+      shape.position = scale(shape.position);
+      shape.width *= factor;
+      shape.height *= factor;
       break;
     case 'dimension':
       if (shape.points) {
@@ -254,6 +264,10 @@ function mirrorShape(shape: Shape, p1: Point, p2: Point): void {
       shape.position = mirrorPoint(shape.position);
       break;
     case 'text':
+      shape.position = mirrorPoint(shape.position);
+      shape.rotation = -(shape.rotation || 0);
+      break;
+    case 'image':
       shape.position = mirrorPoint(shape.position);
       shape.rotation = -(shape.rotation || 0);
       break;

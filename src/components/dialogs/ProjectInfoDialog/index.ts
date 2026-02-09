@@ -1,0 +1,1 @@
+export { ProjectInfoPanel } from './ProjectInfoDialog';

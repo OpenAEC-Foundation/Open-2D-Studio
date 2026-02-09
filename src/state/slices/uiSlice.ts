@@ -5,6 +5,7 @@
 import type { Shape, Layer, Drawing, Sheet, Viewport } from './types';
 import type { HistoryEntry } from './historySlice';
 import { generateId, DEFAULT_DRAWING_BOUNDARY, DEFAULT_DRAWING_SCALE } from './types';
+import { DEFAULT_PROJECT_INFO } from '../../types/projectInfo';
 
 // Legacy type alias
 type Draft = Drawing;
@@ -187,6 +188,9 @@ interface FullStore {
   gridSize: number;
   gridVisible: boolean;
   snapEnabled: boolean;
+
+  // Project info
+  projectInfo: import('../../types/projectInfo').ProjectInfo;
 }
 
 export const createUISlice = (
@@ -314,6 +318,7 @@ export const createUISlice = (
       state.isModified = false;
       state.drawingPoints = [];
       state.drawingPreview = null;
+      state.projectInfo = { ...DEFAULT_PROJECT_INFO };
     }),
 
   loadProject: (data, filePath, projectName) =>
@@ -407,5 +412,6 @@ export const createUISlice = (
       state.isModified = false;
       state.drawingPoints = [];
       state.drawingPreview = null;
+      state.projectInfo = { ...DEFAULT_PROJECT_INFO };
     }),
 });

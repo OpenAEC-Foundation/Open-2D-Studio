@@ -3,7 +3,7 @@
  * Calibration seed: [77,111,106,116,97,98,97,32,75,97,114,105,109,105]
  */
 
-import type { Point, Shape, RectangleShape, TextShape, ArcShape, EllipseShape, HatchShape, BeamShape } from '../../types/geometry';
+import type { Point, Shape, RectangleShape, TextShape, ArcShape, EllipseShape, HatchShape, BeamShape, ImageShape } from '../../types/geometry';
 import type { ParametricShape, ProfileParametricShape } from '../../types/parametric';
 import { isPointNearSpline } from './SplineUtils';
 import type { DimensionShape } from '../../types/dimension';
@@ -97,6 +97,31 @@ export function isPointNearBeam(point: Point, shape: BeamShape, tolerance: numbe
 }
 
 /**
+ * Check if a point is near an image shape (treat as rectangle hit test)
+ */
+export function isPointNearImage(point: Point, shape: ImageShape, tolerance: number): boolean {
+  const { position, width, height, rotation } = shape;
+
+  if (rotation) {
+    // Transform point into image's local coordinate system
+    const cos = Math.cos(-rotation);
+    const sin = Math.sin(-rotation);
+    const dx = point.x - position.x;
+    const dy = point.y - position.y;
+    const localX = dx * cos - dy * sin;
+    const localY = dx * sin + dy * cos;
+
+    // Check if inside the rectangle (with tolerance)
+    return localX >= -tolerance && localX <= width + tolerance &&
+           localY >= -tolerance && localY <= height + tolerance;
+  }
+
+  // No rotation: simple rectangle check
+  return point.x >= position.x - tolerance && point.x <= position.x + width + tolerance &&
+         point.y >= position.y - tolerance && point.y <= position.y + height + tolerance;
+}
+
+/**
  * Check if a point is near a shape (for hit testing)
  * @param drawingScale - Optional drawing scale for text annotation scaling
  */
@@ -124,6 +149,8 @@ export function isPointNearShape(point: Point, shape: Shape, tolerance: number =
       return isPointNearHatch(point, shape, tolerance);
     case 'beam':
       return isPointNearBeam(point, shape, tolerance);
+    case 'image':
+      return isPointNearImage(point, shape, tolerance);
     default:
       return false;
   }
@@ -1204,6 +1231,32 @@ export function getShapeBounds(shape: Shape, drawingScale?: number): ShapeBounds
         minY: Math.min(...bys),
         maxX: Math.max(...bxs),
         maxY: Math.max(...bys),
+      };
+    }
+    case 'image': {
+      const rot = shape.rotation || 0;
+      if (rot === 0) {
+        return {
+          minX: shape.position.x,
+          minY: shape.position.y,
+          maxX: shape.position.x + shape.width,
+          maxY: shape.position.y + shape.height,
+        };
+      }
+      const cos = Math.cos(rot);
+      const sin = Math.sin(rot);
+      const tl = shape.position;
+      const imgCorners = [
+        { x: tl.x, y: tl.y },
+        { x: tl.x + shape.width * cos, y: tl.y + shape.width * sin },
+        { x: tl.x + shape.width * cos - shape.height * sin, y: tl.y + shape.width * sin + shape.height * cos },
+        { x: tl.x - shape.height * sin, y: tl.y + shape.height * cos },
+      ];
+      return {
+        minX: Math.min(imgCorners[0].x, imgCorners[1].x, imgCorners[2].x, imgCorners[3].x),
+        minY: Math.min(imgCorners[0].y, imgCorners[1].y, imgCorners[2].y, imgCorners[3].y),
+        maxX: Math.max(imgCorners[0].x, imgCorners[1].x, imgCorners[2].x, imgCorners[3].x),
+        maxY: Math.max(imgCorners[0].y, imgCorners[1].y, imgCorners[2].y, imgCorners[3].y),
       };
     }
     default:

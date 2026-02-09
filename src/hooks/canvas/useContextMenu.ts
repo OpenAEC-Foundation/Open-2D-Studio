@@ -26,6 +26,7 @@ const TOOL_DISPLAY_NAMES: Record<ToolType, string> = {
   'hatch': 'Hatch',
   'detail-component': 'Detail Component',
   'beam': 'Beam',
+  'image': 'Image',
   'move': 'Move',
   'copy': 'Copy',
   'rotate': 'Rotate',

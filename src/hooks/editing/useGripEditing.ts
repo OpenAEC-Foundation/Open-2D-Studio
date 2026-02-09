@@ -9,7 +9,7 @@
 
 import { useCallback, useRef } from 'react';
 import { useAppStore } from '../../state/appStore';
-import type { Point, Shape, EllipseShape, TextShape, BeamShape, LineShape } from '../../types/geometry';
+import type { Point, Shape, EllipseShape, TextShape, BeamShape, LineShape, ImageShape } from '../../types/geometry';
 import type { DimensionShape } from '../../types/dimension';
 import type { ParametricShape } from '../../types/parametric';
 import { updateParametricPosition } from '../../services/parametric/parametricService';
@@ -198,6 +198,30 @@ function getGripPoints(shape: Shape, drawingScale?: number, zoom?: number): Poin
         shape.end,
         { x: (shape.start.x + shape.end.x) / 2, y: (shape.start.y + shape.end.y) / 2 },
       ];
+    case 'image': {
+      // Image handles: 4 corners + 4 midpoints + center (like rectangle)
+      const imgTl = shape.position;
+      const imgW = shape.width;
+      const imgH = shape.height;
+      const imgRot = shape.rotation || 0;
+      const imgCos = Math.cos(imgRot);
+      const imgSin = Math.sin(imgRot);
+      const imgToWorld = (lx: number, ly: number) => ({
+        x: imgTl.x + lx * imgCos - ly * imgSin,
+        y: imgTl.y + lx * imgSin + ly * imgCos,
+      });
+      return [
+        imgToWorld(0, 0),
+        imgToWorld(imgW, 0),
+        imgToWorld(imgW, imgH),
+        imgToWorld(0, imgH),
+        imgToWorld(imgW / 2, 0),
+        imgToWorld(imgW, imgH / 2),
+        imgToWorld(imgW / 2, imgH),
+        imgToWorld(0, imgH / 2),
+        imgToWorld(imgW / 2, imgH / 2),
+      ];
+    }
     case 'text': {
       // Grip 0: center of text box (move handle)
       // Grip 1: left edge midpoint (resize width from left)
@@ -591,6 +615,102 @@ function computeGripUpdates(shape: Shape, gripIndex: number, newPos: Point, edge
         } as Partial<Shape>;
       }
       return null;
+    }
+
+    case 'image': {
+      const imgShape = shape as ImageShape;
+      if (gripIndex === 8) {
+        // Center grip — move the image (account for rotation)
+        const rot = imgShape.rotation || 0;
+        const cosR = Math.cos(rot);
+        const sinR = Math.sin(rot);
+        const cx = imgShape.position.x + (imgShape.width / 2) * cosR - (imgShape.height / 2) * sinR;
+        const cy = imgShape.position.y + (imgShape.width / 2) * sinR + (imgShape.height / 2) * cosR;
+        const dx = newPos.x - cx;
+        const dy = newPos.y - cy;
+        return { position: { x: imgShape.position.x + dx, y: imgShape.position.y + dy } } as Partial<Shape>;
+      }
+
+      // Corner grips (0-3): TL, TR, BR, BL
+      // Midpoint grips (4-7): top, right, bottom, left
+      // Transform newPos into local (unrotated) space relative to image origin
+      const imgRot = imgShape.rotation || 0;
+      let localX: number, localY: number;
+      if (imgRot !== 0) {
+        const cos = Math.cos(-imgRot);
+        const sin = Math.sin(-imgRot);
+        const dx = newPos.x - imgShape.position.x;
+        const dy = newPos.y - imgShape.position.y;
+        localX = dx * cos - dy * sin;
+        localY = dx * sin + dy * cos;
+      } else {
+        localX = newPos.x - imgShape.position.x;
+        localY = newPos.y - imgShape.position.y;
+      }
+
+      // Current bounds in local space: (0,0) to (width, height)
+      let newLocalLeft = 0, newLocalTop = 0;
+      let newLocalRight = imgShape.width, newLocalBottom = imgShape.height;
+
+      switch (gripIndex) {
+        case 0: newLocalLeft = localX; newLocalTop = localY; break;     // TL
+        case 1: newLocalRight = localX; newLocalTop = localY; break;    // TR
+        case 2: newLocalRight = localX; newLocalBottom = localY; break;  // BR
+        case 3: newLocalLeft = localX; newLocalBottom = localY; break;   // BL
+        case 4: newLocalTop = localY; break;     // top mid
+        case 5: newLocalRight = localX; break;   // right mid
+        case 6: newLocalBottom = localY; break;  // bottom mid
+        case 7: newLocalLeft = localX; break;    // left mid
+        default: return null;
+      }
+
+      // Maintain aspect ratio for corner grips if enabled
+      if (imgShape.maintainAspectRatio && gripIndex <= 3) {
+        const aspectRatio = imgShape.width / imgShape.height;
+        const newW = Math.abs(newLocalRight - newLocalLeft);
+        const newH = Math.abs(newLocalBottom - newLocalTop);
+        if (newW / newH > aspectRatio) {
+          // Width is too wide — adjust width to match height
+          const adjustedW = newH * aspectRatio;
+          if (gripIndex === 0 || gripIndex === 3) {
+            newLocalLeft = newLocalRight - (newLocalRight > newLocalLeft ? adjustedW : -adjustedW);
+          } else {
+            newLocalRight = newLocalLeft + (newLocalRight > newLocalLeft ? adjustedW : -adjustedW);
+          }
+        } else {
+          // Height is too tall — adjust height to match width
+          const adjustedH = newW / aspectRatio;
+          if (gripIndex === 0 || gripIndex === 1) {
+            newLocalTop = newLocalBottom - (newLocalBottom > newLocalTop ? adjustedH : -adjustedH);
+          } else {
+            newLocalBottom = newLocalTop + (newLocalBottom > newLocalTop ? adjustedH : -adjustedH);
+          }
+        }
+      }
+
+      // Normalize so width/height are positive
+      const finalLocalLeft = Math.min(newLocalLeft, newLocalRight);
+      const finalLocalTop = Math.min(newLocalTop, newLocalBottom);
+      const newWidth = Math.abs(newLocalRight - newLocalLeft);
+      const newHeight = Math.abs(newLocalBottom - newLocalTop);
+
+      // Transform the new local top-left back to world space
+      let newPosX: number, newPosY: number;
+      if (imgRot !== 0) {
+        const cos = Math.cos(imgRot);
+        const sin = Math.sin(imgRot);
+        newPosX = imgShape.position.x + finalLocalLeft * cos - finalLocalTop * sin;
+        newPosY = imgShape.position.y + finalLocalLeft * sin + finalLocalTop * cos;
+      } else {
+        newPosX = imgShape.position.x + finalLocalLeft;
+        newPosY = imgShape.position.y + finalLocalTop;
+      }
+
+      return {
+        position: { x: newPosX, y: newPosY },
+        width: Math.max(1, newWidth),
+        height: Math.max(1, newHeight),
+      } as Partial<Shape>;
     }
 
     case 'text': {
