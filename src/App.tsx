@@ -37,6 +37,7 @@ import { useAppStore } from './state/appStore';
 import { CadApi } from './api';
 import { loadAllExtensions } from './extensions';
 import { logger } from './services/log/logService';
+import { checkForUpdates } from './services/updater/updaterService';
 
 function App() {
   // Initialize keyboard shortcuts
@@ -149,6 +150,11 @@ function App() {
         delete (window as any).cad;
       }
     };
+  }, []);
+
+  // Silent auto-check for updates on startup
+  useEffect(() => {
+    checkForUpdates(true).catch(() => {});
   }, []);
 
   // Disable browser context menu in production

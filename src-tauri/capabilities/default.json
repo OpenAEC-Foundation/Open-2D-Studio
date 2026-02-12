@@ -51,6 +51,9 @@
       "identifier": "fs:allow-remove",
       "allow": [{ "path": "**" }]
     },
+    "updater:default",
+    "process:allow-restart",
+    "process:allow-exit",
     "http:default",
     {
       "identifier": "http:allow-fetch",

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Open 2D Studio",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "identifier": "com.open2dstudio.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -43,6 +43,15 @@
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
       "timestampUrl": ""
+    },
+    "createUpdaterArtifacts": "v1Compatible"
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/OpenAEC-Foundation/Open-2D-Studio/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhCMTNBOTBGQ0RCMTM3REYKUldUZk43SE5ENmtUaTQwdmk3bDBhVTRaVWJDRzcxeDFIMlJ0OHVaUit4UWQyRmMxM0VKS3ZzeTQK"
     }
   }
 }

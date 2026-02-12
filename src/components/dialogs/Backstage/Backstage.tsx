@@ -2,9 +2,11 @@ import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react
 import { useFileOperations } from '../../../hooks/file/useFileOperations';
 import { getSetting, setSetting } from '../../../utils/settings';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
+import { getVersion } from '@tauri-apps/api/app';
 import { ProjectInfoPanel } from '../ProjectInfoDialog';
 import { ExtensionManagerPanel } from './ExtensionManagerPanel';
 import { useAppStore } from '../../../state/appStore';
+import { checkForUpdates, downloadAndInstall, type UpdateStatus } from '../../../services/updater/updaterService';
 import type { ExtensionBackstagePanel } from '../../../extensions/types';
 import type { LengthUnit, NumberFormat } from '../../../units/types';
 
@@ -500,6 +502,116 @@ function ExtensionPanelHost({ panel }: { panel: ExtensionBackstagePanel }) {
   return <div ref={containerRef} className="p-8 flex-1 overflow-y-auto" />;
 }
 
+function AboutPanel() {
+  const [appVersion, setAppVersion] = useState('');
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion('unknown'));
+  }, []);
+
+  const handleCheckForUpdates = async () => {
+    setChecking(true);
+    setUpdateStatus(null);
+    const info = await checkForUpdates(false, setUpdateStatus);
+    if (!info) {
+      setChecking(false);
+    }
+  };
+
+  const handleDownloadAndInstall = async () => {
+    await downloadAndInstall(setUpdateStatus);
+  };
+
+  return (
+    <div className="p-8">
+      <h2 className="text-lg font-semibold text-cad-text mb-6">About</h2>
+      <div className="max-w-md">
+        <h1 className="text-xl font-bold text-cad-text mb-1">Open 2D Studio</h1>
+        <p className="text-sm text-cad-text-dim mb-4">Version {appVersion}</p>
+        <p className="text-sm text-cad-text-dim mb-4">
+          A cross-platform 2D CAD application
+        </p>
+        <a
+          href="https://impertio.nl/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm text-cad-accent hover:underline"
+        >
+          impertio.nl
+        </a>
+
+        {/* Check for Updates */}
+        <div className="mt-6">
+          {!updateStatus && (
+            <button
+              className="px-4 py-1.5 text-xs font-medium rounded bg-cad-surface border border-cad-border text-cad-text-dim hover:bg-cad-hover cursor-default disabled:opacity-50"
+              onClick={handleCheckForUpdates}
+              disabled={checking}
+            >
+              {checking ? 'Checking...' : 'Check for Updates'}
+            </button>
+          )}
+
+          {updateStatus?.kind === 'upToDate' && (
+            <p className="text-xs text-green-400">You are using the latest version.</p>
+          )}
+
+          {updateStatus?.kind === 'available' && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs text-cad-accent">
+                Update available: v{updateStatus.info.version}
+              </p>
+              {updateStatus.info.body && (
+                <p className="text-xs text-cad-text-muted">{updateStatus.info.body}</p>
+              )}
+              <button
+                className="self-start px-4 py-1.5 text-xs font-medium text-white rounded bg-cad-accent hover:bg-cad-accent/80 cursor-default"
+                onClick={handleDownloadAndInstall}
+              >
+                Download and Install
+              </button>
+            </div>
+          )}
+
+          {updateStatus?.kind === 'downloading' && (
+            <div className="flex flex-col gap-1">
+              <p className="text-xs text-cad-text-dim">Downloading... {updateStatus.progress}%</p>
+              <div className="w-full h-1.5 bg-cad-bg rounded overflow-hidden">
+                <div
+                  className="h-full bg-cad-accent transition-all"
+                  style={{ width: `${updateStatus.progress}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {updateStatus?.kind === 'readyToInstall' && (
+            <p className="text-xs text-cad-accent">Installing and restarting...</p>
+          )}
+
+          {updateStatus?.kind === 'error' && (
+            <div className="flex flex-col gap-1">
+              <p className="text-xs text-red-400">Update check failed: {updateStatus.message}</p>
+              <button
+                className="self-start px-3 py-1 text-[10px] text-cad-text-dim border border-cad-border rounded hover:bg-cad-hover cursor-default"
+                onClick={handleCheckForUpdates}
+              >
+                Try Again
+              </button>
+            </div>
+          )}
+        </div>
+
+        <p className="text-xs text-cad-text-muted mt-6">
+          &copy; 2025 Impertio. All rights reserved.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function Backstage({ isOpen, onClose, initialView, onOpenSheetTemplateImport }: BackstageProps) {
   const { handleNew, handleOpen, handleSave, handleSaveAs, handleExportSVG, handleExportDXF, handleExportIFC, handleExportJSON, handleImportDXF, handlePrint, handleExit } = useFileOperations();
   const [activeView, setActiveView] = useState<BackstageView>('none');
@@ -953,29 +1065,7 @@ export function Backstage({ isOpen, onClose, initialView, onOpenSheetTemplateImp
         {activeView === 'feedback' && <FeedbackPanel />}
         {activeView === 'projectInfo' && <ProjectInfoPanel isOpen={true} />}
         {activeView === 'units' && <UnitsPanel />}
-        {activeView === 'about' && (
-          <div className="p-8">
-            <h2 className="text-lg font-semibold text-cad-text mb-6">About</h2>
-            <div className="max-w-md">
-              <h1 className="text-xl font-bold text-cad-text mb-1">Open 2D Studio</h1>
-              <p className="text-sm text-cad-text-dim mb-4">Version 0.5.0</p>
-              <p className="text-sm text-cad-text-dim mb-4">
-                A cross-platform 2D CAD application
-              </p>
-              <a
-                href="https://impertio.nl/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-cad-accent hover:underline"
-              >
-                impertio.nl
-              </a>
-              <p className="text-xs text-cad-text-muted mt-6">
-                &copy; 2025 Impertio. All rights reserved.
-              </p>
-            </div>
-          </div>
-        )}
+        {activeView === 'about' && <AboutPanel />}
         {activeView === 'extensions' && <ExtensionManagerPanel />}
         {activeView.startsWith('ext:') && (() => {
           const panelId = activeView.slice(4);

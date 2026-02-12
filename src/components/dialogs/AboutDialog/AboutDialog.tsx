@@ -1,5 +1,6 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { X } from 'lucide-react';
+import { getVersion } from '@tauri-apps/api/app';
 
 interface AboutDialogProps {
   isOpen: boolean;
@@ -27,6 +28,11 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
+  }, []);
+
+  const [appVersion, setAppVersion] = useState('');
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion('unknown'));
   }, []);
 
   if (!isOpen) return null;
@@ -60,7 +66,7 @@ export function AboutDialog({ isOpen, onClose }: AboutDialogProps) {
         {/* Content */}
         <div className="flex-1 p-4 flex flex-col items-center text-center justify-center">
           <h1 className="text-lg font-bold text-cad-text mb-1">Open 2D Studio</h1>
-          <p className="text-xs text-cad-text-dim mb-3">Version 0.8.0</p>
+          <p className="text-xs text-cad-text-dim mb-3">Version {appVersion}</p>
 
           <p className="text-xs text-cad-text-dim mb-3">
             A cross-platform 2D CAD application
