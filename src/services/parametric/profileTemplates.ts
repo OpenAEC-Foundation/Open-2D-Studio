@@ -521,6 +521,278 @@ const roundBarTemplate: ProfileTemplate = {
 };
 
 // ============================================================================
+// Concrete Templates
+// ============================================================================
+
+const concreteRectParameters: ParameterDefinition[] = [
+  {
+    id: 'width',
+    label: 'Width (b)',
+    type: 'number',
+    defaultValue: 300,
+    unit: 'mm',
+    min: 50,
+    max: 3000,
+    step: 10,
+    group: 'Dimensions',
+    order: 1,
+    description: 'Width of the concrete section',
+  },
+  {
+    id: 'height',
+    label: 'Height (h)',
+    type: 'number',
+    defaultValue: 500,
+    unit: 'mm',
+    min: 50,
+    max: 3000,
+    step: 10,
+    group: 'Dimensions',
+    order: 2,
+    description: 'Height of the concrete section',
+  },
+];
+
+const concreteRectTemplate: ProfileTemplate = {
+  id: 'concrete-rect',
+  name: 'Concrete Rectangular',
+  description: 'Rectangular concrete beam or column section',
+  category: 'concrete',
+  parameters: concreteRectParameters,
+  icon: 'concrete-rect',
+  insertionMode: 'center',
+};
+
+const concreteRoundParameters: ParameterDefinition[] = [
+  {
+    id: 'diameter',
+    label: 'Diameter (d)',
+    type: 'number',
+    defaultValue: 400,
+    unit: 'mm',
+    min: 100,
+    max: 3000,
+    step: 10,
+    group: 'Dimensions',
+    order: 1,
+    description: 'Diameter of the concrete column',
+  },
+];
+
+const concreteRoundTemplate: ProfileTemplate = {
+  id: 'concrete-round',
+  name: 'Concrete Circular',
+  description: 'Circular concrete column section',
+  category: 'concrete',
+  parameters: concreteRoundParameters,
+  icon: 'concrete-round',
+  insertionMode: 'center',
+};
+
+const concreteTeeParameters: ParameterDefinition[] = [
+  {
+    id: 'flangeWidth',
+    label: 'Flange Width (bf)',
+    type: 'number',
+    defaultValue: 800,
+    unit: 'mm',
+    min: 100,
+    max: 5000,
+    step: 10,
+    group: 'Dimensions',
+    order: 1,
+    description: 'Width of the flange',
+  },
+  {
+    id: 'flangeThickness',
+    label: 'Flange Thickness (hf)',
+    type: 'number',
+    defaultValue: 150,
+    unit: 'mm',
+    min: 50,
+    max: 500,
+    step: 10,
+    group: 'Dimensions',
+    order: 2,
+    description: 'Thickness of the flange (slab)',
+  },
+  {
+    id: 'webWidth',
+    label: 'Web Width (bw)',
+    type: 'number',
+    defaultValue: 300,
+    unit: 'mm',
+    min: 100,
+    max: 2000,
+    step: 10,
+    group: 'Dimensions',
+    order: 3,
+    description: 'Width of the web (stem)',
+  },
+  {
+    id: 'height',
+    label: 'Total Height (h)',
+    type: 'number',
+    defaultValue: 600,
+    unit: 'mm',
+    min: 100,
+    max: 3000,
+    step: 10,
+    group: 'Dimensions',
+    order: 4,
+    description: 'Total height of the T-beam',
+  },
+];
+
+const concreteTeeTemplate: ProfileTemplate = {
+  id: 'concrete-tee',
+  name: 'Concrete T-Beam',
+  description: 'Concrete T-shaped beam section',
+  category: 'concrete',
+  parameters: concreteTeeParameters,
+  icon: 'concrete-tee',
+  insertionMode: 'center',
+};
+
+// ============================================================================
+// Timber Templates
+// ============================================================================
+
+const timberRectParameters: ParameterDefinition[] = [
+  {
+    id: 'width',
+    label: 'Width (b)',
+    type: 'number',
+    defaultValue: 100,
+    unit: 'mm',
+    min: 20,
+    max: 1000,
+    step: 5,
+    group: 'Dimensions',
+    order: 1,
+    description: 'Width of the timber section',
+  },
+  {
+    id: 'height',
+    label: 'Height (h)',
+    type: 'number',
+    defaultValue: 200,
+    unit: 'mm',
+    min: 20,
+    max: 1500,
+    step: 5,
+    group: 'Dimensions',
+    order: 2,
+    description: 'Height of the timber section',
+  },
+];
+
+const timberRectTemplate: ProfileTemplate = {
+  id: 'timber-rect',
+  name: 'Timber Rectangular',
+  description: 'Rectangular timber beam or post section',
+  category: 'timber',
+  parameters: timberRectParameters,
+  icon: 'timber-rect',
+  insertionMode: 'center',
+};
+
+const timberRoundParameters: ParameterDefinition[] = [
+  {
+    id: 'diameter',
+    label: 'Diameter (d)',
+    type: 'number',
+    defaultValue: 200,
+    unit: 'mm',
+    min: 50,
+    max: 1000,
+    step: 5,
+    group: 'Dimensions',
+    order: 1,
+    description: 'Diameter of the timber log',
+  },
+];
+
+const timberRoundTemplate: ProfileTemplate = {
+  id: 'timber-round',
+  name: 'Timber Round',
+  description: 'Round timber log section',
+  category: 'timber',
+  parameters: timberRoundParameters,
+  icon: 'timber-round',
+  insertionMode: 'center',
+};
+
+// ============================================================================
+// Generic Templates
+// ============================================================================
+
+const genericRectParameters: ParameterDefinition[] = [
+  {
+    id: 'width',
+    label: 'Width (b)',
+    type: 'number',
+    defaultValue: 200,
+    unit: 'mm',
+    min: 1,
+    max: 5000,
+    step: 1,
+    group: 'Dimensions',
+    order: 1,
+    description: 'Width of the section',
+  },
+  {
+    id: 'height',
+    label: 'Height (h)',
+    type: 'number',
+    defaultValue: 200,
+    unit: 'mm',
+    min: 1,
+    max: 5000,
+    step: 1,
+    group: 'Dimensions',
+    order: 2,
+    description: 'Height of the section',
+  },
+];
+
+const genericRectTemplate: ProfileTemplate = {
+  id: 'generic-rect',
+  name: 'Generic Rectangular',
+  description: 'Generic rectangular section',
+  category: 'generic',
+  parameters: genericRectParameters,
+  icon: 'generic-rect',
+  insertionMode: 'center',
+};
+
+const genericCircParameters: ParameterDefinition[] = [
+  {
+    id: 'diameter',
+    label: 'Diameter (d)',
+    type: 'number',
+    defaultValue: 200,
+    unit: 'mm',
+    min: 1,
+    max: 5000,
+    step: 1,
+    group: 'Dimensions',
+    order: 1,
+    description: 'Diameter of the section',
+  },
+];
+
+const genericCircTemplate: ProfileTemplate = {
+  id: 'generic-circ',
+  name: 'Generic Circular',
+  description: 'Generic circular section',
+  category: 'generic',
+  parameters: genericCircParameters,
+  icon: 'generic-circ',
+  insertionMode: 'center',
+};
+
+// ============================================================================
 // Template Registry
 // ============================================================================
 
@@ -536,6 +808,13 @@ export const PROFILE_TEMPLATES: Record<ProfileType, ProfileTemplate> = {
   'hss-round': hssRoundTemplate,
   'plate': plateTemplate,
   'round-bar': roundBarTemplate,
+  'concrete-rect': concreteRectTemplate,
+  'concrete-round': concreteRoundTemplate,
+  'concrete-tee': concreteTeeTemplate,
+  'timber-rect': timberRectTemplate,
+  'timber-round': timberRoundTemplate,
+  'generic-rect': genericRectTemplate,
+  'generic-circ': genericCircTemplate,
   'custom': {
     id: 'custom',
     name: 'Custom Profile',

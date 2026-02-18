@@ -6,7 +6,7 @@
 
 import { useCallback } from 'react';
 import { useAppStore } from '../../state/appStore';
-import type { Point, Shape, ToolType } from '../../types/geometry';
+import type { Point, Shape, ToolType, PlateSystemShape } from '../../types/geometry';
 import type { ParametricShape } from '../../types/parametric';
 import {
   transformShape,
@@ -17,13 +17,154 @@ import {
   getShapeTransformUpdates,
   trimLineAtIntersection,
   extendLineToBoundary,
+  extendBothToIntersection,
   filletTwoLines,
   chamferTwoLines,
   offsetShape,
+  miterJoinWalls,
+  recalculateMiterJoins,
 } from '../../engine/geometry/Modify';
-import { generateId } from '../../state/slices/types';
+import { generateId, getShapeBounds } from '../../state/slices/types';
+import { findLinkedLabels, computeLinkedLabelPosition } from '../../engine/geometry/LabelUtils';
+import type { PointTransform } from '../../engine/geometry/Modify';
+import { regenerateGridDimensions, updateLinkedDimensions } from '../../utils/gridDimensionUtils';
 
-const MODIFY_TOOLS: ToolType[] = ['move', 'copy', 'rotate', 'scale', 'mirror', 'array', 'trim', 'extend', 'fillet', 'chamfer', 'offset'];
+/**
+ * Collect transform updates for all linked labels of the given shapes.
+ *
+ * For shapes with start/end geometry (wall, beam, line, gridline, etc.),
+ * the label position and rotation are recalculated to stay 1000mm from
+ * the start and parallel with the element direction.
+ *
+ * For other shapes, the same spatial transform is applied to the label.
+ *
+ * Returns update entries for labels that are NOT already in the selectedIdSet.
+ */
+function getLinkedLabelUpdates(
+  movedShapes: Shape[],
+  allShapes: Shape[],
+  selectedIdSet: Set<string>,
+  transform: PointTransform,
+  /** Optional: the pending updates for the parent shapes so we can compute
+   *  the post-transform geometry. If not provided, the transform is applied
+   *  to the original shape to derive the new geometry. */
+  pendingParentUpdates?: Map<string, Partial<Shape>>,
+): { id: string; updates: Partial<Shape> }[] {
+  const updates: { id: string; updates: Partial<Shape> }[] = [];
+  for (const s of movedShapes) {
+    const linkedLabels = findLinkedLabels(allShapes, s.id);
+    if (linkedLabels.length === 0) continue;
+
+    // Compute the post-transform parent shape so we can derive the label position
+    let postTransformParent: Shape;
+    const pending = pendingParentUpdates?.get(s.id);
+    if (pending) {
+      postTransformParent = { ...s, ...pending } as Shape;
+    } else {
+      postTransformParent = transformShape(s, transform);
+    }
+
+    // Try to compute precise label position from parent geometry
+    const labelPos = computeLinkedLabelPosition(postTransformParent);
+
+    for (const label of linkedLabels) {
+      if (selectedIdSet.has(label.id)) continue;
+
+      if (labelPos) {
+        // Recalculate position and rotation to stay parallel with element
+        updates.push({
+          id: label.id,
+          updates: {
+            position: labelPos.position,
+            rotation: labelPos.rotation,
+          } as Partial<Shape>,
+        });
+      } else {
+        // Fallback: just apply the same transform
+        updates.push({
+          id: label.id,
+          updates: getShapeTransformUpdates(label, transform),
+        });
+      }
+    }
+  }
+  return updates;
+}
+
+/**
+ * After moving/rotating/scaling walls or beams that have miter joins, recalculate
+ * the miter angles for the modified shapes and their partners.
+ *
+ * @param pendingUpdates - the updates that are about to be applied (used to compute
+ *   the post-update shape for miter recalculation)
+ * @param movedShapes - the original shapes that were moved
+ * @param allShapes - all shapes from the store
+ * @returns additional updates to merge (may overlap with pendingUpdates by id)
+ */
+function getMiterRecalcUpdates(
+  pendingUpdates: { id: string; updates: Partial<Shape> }[],
+  movedShapes: Shape[],
+  allShapes: Shape[],
+): { id: string; updates: Partial<Shape> }[] {
+  const extraUpdates: { id: string; updates: Partial<Shape> }[] = [];
+  const pendingMap = new Map(pendingUpdates.map(u => [u.id, u.updates]));
+
+  for (const shape of movedShapes) {
+    if (shape.type !== 'wall' && shape.type !== 'beam') continue;
+    const ws = shape as any;
+    const hasMiter = (ws.startMiterAngle !== undefined && ws.startCap === 'miter') ||
+                     (ws.endMiterAngle !== undefined && ws.endCap === 'miter');
+    if (!hasMiter) continue;
+
+    // Build the post-update version of this shape
+    const pending = pendingMap.get(shape.id);
+    const updatedShape = pending ? { ...(shape as any), ...(pending as any) } as Shape : shape;
+
+    const miterUpdates = recalculateMiterJoins(updatedShape, allShapes);
+    for (const mu of miterUpdates) {
+      extraUpdates.push(mu);
+    }
+  }
+  return extraUpdates;
+}
+
+const MODIFY_TOOLS: ToolType[] = ['move', 'copy', 'copy2', 'rotate', 'scale', 'mirror', 'array', 'trim', 'extend', 'fillet', 'chamfer', 'offset', 'elastic', 'align', 'trim-walls'];
+
+/** Compute the next sequential gridline label, avoiding existing labels.
+ *  "1" → "2", "A" → "B", "Z" → "AA", "9" → "10", "A1" → "A2" */
+function nextGridlineLabel(currentLabel: string, existingLabels: Set<string>): string {
+  const tryNext = (label: string): string => {
+    // Pure numeric: "1" → "2", "10" → "11"
+    if (/^\d+$/.test(label)) {
+      return String(Number(label) + 1);
+    }
+    // Pure alpha: "A" → "B", "Z" → "AA"
+    if (/^[A-Z]+$/i.test(label)) {
+      const upper = label.toUpperCase();
+      let carry = true;
+      let result = '';
+      for (let i = upper.length - 1; i >= 0 && carry; i--) {
+        const code = upper.charCodeAt(i) + 1;
+        if (code > 90) { result = 'A' + result; carry = true; }
+        else { result = String.fromCharCode(code) + result; carry = false; }
+        if (i > 0 && !carry) result = upper.substring(0, i) + result;
+      }
+      if (carry) result = 'A' + result;
+      return label === label.toUpperCase() ? result : result.toLowerCase();
+    }
+    // Mixed (e.g. "A1"): increment trailing number
+    const match = label.match(/^(.*?)(\d+)$/);
+    if (match) return match[1] + String(Number(match[2]) + 1);
+    return label + '2';
+  };
+
+  let candidate = tryNext(currentLabel);
+  const maxAttempts = 1000;
+  for (let i = 0; i < maxAttempts && existingLabels.has(candidate); i++) {
+    candidate = tryNext(candidate);
+  }
+  return candidate;
+}
 
 export function useModifyTools() {
   const activeTool = useAppStore((s) => s.activeTool);
@@ -37,30 +178,42 @@ export function useModifyTools() {
   const addShapes = useAppStore((s) => s.addShapes);
   const updateShapes = useAppStore((s) => s.updateShapes);
   const selectShape = useAppStore((s) => s.selectShape);
+  const selectShapes = useAppStore((s) => s.selectShapes);
   const cloneParametricShapes = useAppStore((s) => s.cloneParametricShapes);
   const updateProfilePosition = useAppStore((s) => s.updateProfilePosition);
+  const selectedGrip = useAppStore((s) => s.selectedGrip);
+  const setSelectedGrip = useAppStore((s) => s.setSelectedGrip);
   const updateProfileRotation = useAppStore((s) => s.updateProfileRotation);
   const updateProfileScale = useAppStore((s) => s.updateProfileScale);
 
   // Modify options
   const modifyCopy = useAppStore((s) => s.modifyCopy);
+  const modifyConstrainAxis = useAppStore((s) => s.modifyConstrainAxis);
   const modifyMultiple = useAppStore((s) => s.modifyMultiple);
-  const moveAxisLock = useAppStore((s) => s.moveAxisLock);
   const scaleMode = useAppStore((s) => s.scaleMode);
   const scaleFactor = useAppStore((s) => s.scaleFactor);
   const filletRadius = useAppStore((s) => s.filletRadius);
   const chamferDistance1 = useAppStore((s) => s.chamferDistance1);
   const chamferDistance2 = useAppStore((s) => s.chamferDistance2);
   const offsetDistance = useAppStore((s) => s.offsetDistance);
+  const lockedDistance = useAppStore((s) => s.lockedDistance);
   const rotateAngle = useAppStore((s) => s.rotateAngle);
   const modifyRefShapeId = useAppStore((s) => s.modifyRefShapeId);
   const setModifyRefShapeId = useAppStore((s) => s.setModifyRefShapeId);
+  const setActiveTool = useAppStore((s) => s.setActiveTool);
   const activeDrawingId = useAppStore((s) => s.activeDrawingId);
   const activeLayerId = useAppStore((s) => s.activeLayerId);
   const arrayMode = useAppStore((s) => s.arrayMode);
   const arrayCount = useAppStore((s) => s.arrayCount);
   const arraySpacing = useAppStore((s) => s.arraySpacing);
   const arrayAngle = useAppStore((s) => s.arrayAngle);
+
+  /** Constrain a delta vector to the specified axis */
+  const constrainDelta = useCallback((dx: number, dy: number): { dx: number; dy: number } => {
+    if (modifyConstrainAxis === 'x') return { dx, dy: 0 };
+    if (modifyConstrainAxis === 'y') return { dx: 0, dy };
+    return { dx, dy };
+  }, [modifyConstrainAxis]);
 
   const isModifyTool = useCallback((tool: ToolType) => MODIFY_TOOLS.includes(tool), []);
 
@@ -69,10 +222,59 @@ export function useModifyTools() {
     return shapes.filter((s) => idSet.has(s.id));
   }, [shapes, selectedShapeIds]);
 
+  /**
+   * Collect child beam shape IDs from plate-system shapes in the selection.
+   * Returns the IDs of child beams that are NOT already in the selection.
+   */
+  const getPlateSystemChildIds = useCallback((selected: Shape[]): string[] => {
+    const selectedIdSet = new Set(selectedShapeIds);
+    const childIds: string[] = [];
+    for (const s of selected) {
+      if (s.type === 'plate-system') {
+        const ps = s as PlateSystemShape;
+        if (ps.childShapeIds) {
+          for (const cid of ps.childShapeIds) {
+            if (!selectedIdSet.has(cid)) {
+              childIds.push(cid);
+            }
+          }
+        }
+      }
+    }
+    return childIds;
+  }, [selectedShapeIds]);
+
+  /**
+   * Get child beam shapes of plate-systems in the selection that are not
+   * themselves already selected. Used to move/copy/rotate/mirror child beams
+   * together with their parent plate-system.
+   */
+  const getPlateSystemChildShapes = useCallback((selected: Shape[]): Shape[] => {
+    const childIds = getPlateSystemChildIds(selected);
+    if (childIds.length === 0) return [];
+    const childIdSet = new Set(childIds);
+    return shapes.filter(s => childIdSet.has(s.id));
+  }, [shapes, getPlateSystemChildIds]);
+
   const getSelectedParametricShapes = useCallback((): ParametricShape[] => {
     const idSet = new Set(selectedShapeIds);
     return parametricShapes.filter((s) => idSet.has(s.id));
   }, [parametricShapes, selectedShapeIds]);
+
+  /** Auto-regenerate grid dimensions if any of the given shapes include a gridline */
+  const triggerGridDimensionRegenIfNeeded = useCallback((affectedShapes: Shape[]) => {
+    const movedGridlines = affectedShapes.filter(s => s.type === 'gridline');
+    if (movedGridlines.length > 0) {
+      // Update associative DimAssociate dimensions linked to moved gridlines
+      for (const gl of movedGridlines) {
+        updateLinkedDimensions(gl.id);
+      }
+      // Regenerate auto-generated grid dimensions if enabled
+      if (useAppStore.getState().autoGridDimension) {
+        setTimeout(() => regenerateGridDimensions(), 50);
+      }
+    }
+  }, []);
 
   /**
    * Handle click for modify tools. Returns true if handled.
@@ -89,10 +291,13 @@ export function useModifyTools() {
         // ==================================================================
         case 'move': {
           if (selectedShapeIds.length === 0) {
-            // Select mode: click to select
+            // Select mode: click to select and use as base point
             if (findShapeAtPoint) {
               const id = findShapeAtPoint(worldPos);
-              if (id) selectShape(id, shiftKey);
+              if (id) {
+                selectShape(id, shiftKey);
+                addDrawingPoint(worldPos);
+              }
             }
             return true;
           }
@@ -103,18 +308,86 @@ export function useModifyTools() {
           }
           // Click destination
           const basePoint = pts[0];
-          let dx = worldPos.x - basePoint.x;
-          let dy = worldPos.y - basePoint.y;
-          if (moveAxisLock === 'x') dy = 0;
-          if (moveAxisLock === 'y') dx = 0;
+          const { dx, dy } = constrainDelta(worldPos.x - basePoint.x, worldPos.y - basePoint.y);
+
+          // --- Endpoint grip move: stretch only the selected endpoint ---
+          if (selectedGrip && (selectedGrip.gripIndex === 0 || selectedGrip.gripIndex === 1)) {
+            const shape = shapes.find(s => s.id === selectedGrip.shapeId);
+            if (shape) {
+              const endpointKey = selectedGrip.gripIndex === 0 ? 'start' : 'end';
+              const currentEndpoint = (shape as any)[endpointKey] as Point;
+              const shapeUpdates: Partial<Shape> = {
+                [endpointKey]: { x: currentEndpoint.x + dx, y: currentEndpoint.y + dy },
+              } as any;
+              const batchUpdates: { id: string; updates: Partial<Shape> }[] = [{ id: shape.id, updates: shapeUpdates }];
+
+              // Recalculate miter joins for walls/beams with miter angles
+              const allShapesNow = useAppStore.getState().shapes;
+              const miterUpdates = getMiterRecalcUpdates(batchUpdates, [shape], allShapesNow);
+              for (const mu of miterUpdates) {
+                const existing = batchUpdates.find(u => u.id === mu.id);
+                if (existing) {
+                  existing.updates = { ...(existing.updates as any), ...(mu.updates as any) };
+                } else {
+                  batchUpdates.push(mu);
+                }
+              }
+
+              // Update linked labels to stay parallel with the modified shape
+              const postShape = { ...shape, ...shapeUpdates } as Shape;
+              const labelPos = computeLinkedLabelPosition(postShape);
+              if (labelPos) {
+                const linkedLabels = findLinkedLabels(allShapesNow, shape.id);
+                for (const label of linkedLabels) {
+                  batchUpdates.push({
+                    id: label.id,
+                    updates: {
+                      position: labelPos.position,
+                      rotation: labelPos.rotation,
+                    } as Partial<Shape>,
+                  });
+                }
+              }
+
+              updateShapes(batchUpdates);
+              triggerGridDimensionRegenIfNeeded([shape]);
+            }
+            setSelectedGrip(null);
+            clearDrawingPoints();
+            setActiveTool('select');
+            return true;
+          }
+
           const transform = translateTransform(dx, dy);
           const selected = getSelectedShapes();
           const selectedParametric = getSelectedParametricShapes();
 
+          // Collect child beams of plate-systems that need to move along
+          const childBeams = getPlateSystemChildShapes(selected);
+
           if (modifyCopy) {
-            // Copy regular shapes
-            if (selected.length > 0) {
-              const copies = selected.map((s) => transformShape(s, transform));
+            // Copy regular shapes (including plate-system child beams)
+            const allToCopy = [...selected, ...childBeams];
+            if (allToCopy.length > 0) {
+              // Build old-ID -> new-ID map for plate-system parent-child linkage
+              const idMap = new Map<string, string>();
+              const copies = allToCopy.map((s) => {
+                const copy = transformShape(s, transform);
+                idMap.set(s.id, copy.id);
+                return copy;
+              });
+              // Re-link child beams to their new parent plate-system IDs
+              for (const copy of copies) {
+                if (copy.type === 'beam' && (copy as any).plateSystemId) {
+                  const newParentId = idMap.get((copy as any).plateSystemId);
+                  if (newParentId) (copy as any).plateSystemId = newParentId;
+                }
+                if (copy.type === 'plate-system' && (copy as any).childShapeIds) {
+                  (copy as any).childShapeIds = ((copy as any).childShapeIds as string[]).map(
+                    (cid: string) => idMap.get(cid) ?? cid
+                  );
+                }
+              }
               addShapes(copies);
             }
             // Copy parametric shapes
@@ -125,12 +398,30 @@ export function useModifyTools() {
               );
             }
           } else {
-            // Move regular shapes
-            if (selected.length > 0) {
-              const updates = selected.map((s) => ({
+            // Move regular shapes (including plate-system child beams)
+            const allToMove = [...selected, ...childBeams];
+            if (allToMove.length > 0) {
+              const updates = allToMove.map((s) => ({
                 id: s.id,
                 updates: getShapeTransformUpdates(s, transform),
               }));
+
+              // Also move linked labels that are NOT already in the selection
+              const allShapes = useAppStore.getState().shapes;
+              const labelUpdates = getLinkedLabelUpdates(allToMove, allShapes, new Set(selectedShapeIds), transform);
+              updates.push(...labelUpdates);
+
+              // Recalculate miter joins for walls/beams with miter angles
+              const miterUpdates = getMiterRecalcUpdates(updates, allToMove, allShapes);
+              for (const mu of miterUpdates) {
+                const existing = updates.find(u => u.id === mu.id);
+                if (existing) {
+                  existing.updates = { ...(existing.updates as any), ...(mu.updates as any) };
+                } else {
+                  updates.push(mu);
+                }
+              }
+
               updateShapes(updates);
             }
             // Move parametric shapes
@@ -141,18 +432,25 @@ export function useModifyTools() {
               });
             }
           }
+          triggerGridDimensionRegenIfNeeded(selected);
           clearDrawingPoints();
+          setActiveTool('select');
           return true;
         }
 
         // ==================================================================
-        // COPY
+        // COPY / COPY2
         // ==================================================================
+        case 'copy2':
         case 'copy': {
           if (selectedShapeIds.length === 0) {
             if (findShapeAtPoint) {
               const id = findShapeAtPoint(worldPos);
-              if (id) selectShape(id, shiftKey);
+              if (id) {
+                selectShape(id, shiftKey);
+                // Use click position as base point immediately (saves one click)
+                addDrawingPoint(worldPos);
+              }
             }
             return true;
           }
@@ -162,14 +460,45 @@ export function useModifyTools() {
           }
           // Place copy
           const basePoint = pts[0];
-          let dx = worldPos.x - basePoint.x;
-          let dy = worldPos.y - basePoint.y;
-          if (moveAxisLock === 'x') dy = 0;
-          if (moveAxisLock === 'y') dx = 0;
+          const { dx, dy } = constrainDelta(worldPos.x - basePoint.x, worldPos.y - basePoint.y);
           const transform = translateTransform(dx, dy);
 
-          // Copy regular shapes
-          const regularCopies = getSelectedShapes().map((s) => transformShape(s, transform));
+          // Copy regular shapes (including plate-system child beams)
+          const selectedForCopy = getSelectedShapes();
+          const childBeamsForCopy = getPlateSystemChildShapes(selectedForCopy);
+          const allToCopy = [...selectedForCopy, ...childBeamsForCopy];
+
+          // Build old-ID -> new-ID map for plate-system parent-child linkage
+          const copyIdMap = new Map<string, string>();
+          const regularCopies = allToCopy.map((s) => {
+            const copy = transformShape(s, transform);
+            copyIdMap.set(s.id, copy.id);
+            return copy;
+          });
+
+          // Re-link child beams to their new parent plate-system IDs
+          for (const copy of regularCopies) {
+            if (copy.type === 'beam' && (copy as any).plateSystemId) {
+              const newParentId = copyIdMap.get((copy as any).plateSystemId);
+              if (newParentId) (copy as any).plateSystemId = newParentId;
+            }
+            if (copy.type === 'plate-system' && (copy as any).childShapeIds) {
+              (copy as any).childShapeIds = ((copy as any).childShapeIds as string[]).map(
+                (cid: string) => copyIdMap.get(cid) ?? cid
+              );
+            }
+          }
+
+          // Auto-increment gridline labels
+          for (const copy of regularCopies) {
+            if (copy.type === 'gridline') {
+              const existingLabels = new Set(
+                shapes.filter((s) => s.type === 'gridline').map((s) => (s as { label: string }).label)
+              );
+              copy.label = nextGridlineLabel(copy.label, existingLabels);
+            }
+          }
+
           if (regularCopies.length > 0) {
             addShapes(regularCopies);
           }
@@ -183,10 +512,34 @@ export function useModifyTools() {
             );
           }
 
-          if (!modifyMultiple) {
-            clearDrawingPoints();
+          // Select the new copies instead of the originals (only the primary shapes, not child beams)
+          const newIds = regularCopies.filter(s => {
+            // Only select shapes that correspond to originally selected shapes
+            return !childBeamsForCopy.some(cb => copyIdMap.get(cb.id) === s.id);
+          }).map(s => s.id);
+          // For parametric clones, get the newly added IDs from the store
+          const storeAfter = useAppStore.getState();
+          const allParamIds = new Set(storeAfter.parametricShapes.map(s => s.id));
+          const origParamIds = new Set(selectedParametric.map(s => s.id));
+          for (const id of allParamIds) {
+            if (!origParamIds.has(id) && !selectedShapeIds.includes(id)) {
+              // Likely a newly cloned parametric shape
+              newIds.push(id);
+            }
           }
-          // Stay at pts=1 for multiple copies
+          if (newIds.length > 0) {
+            selectShapes(newIds);
+          }
+
+          triggerGridDimensionRegenIfNeeded(regularCopies);
+          clearDrawingPoints();
+          setDrawingPreview(null);
+          // Continue mode: stay in copy tool for next placement (not for copy2)
+          if (activeTool === 'copy' && modifyMultiple) {
+            // Keep tool active, user clicks new base point next
+          } else {
+            setActiveTool('select');
+          }
           return true;
         }
 
@@ -211,10 +564,12 @@ export function useModifyTools() {
               const transform = rotateTransform(center, angleRad);
               const selected = getSelectedShapes();
               const selectedParametric = getSelectedParametricShapes();
+              const childBeamsRot1 = getPlateSystemChildShapes(selected);
+              const allToRot1 = [...selected, ...childBeamsRot1];
 
               if (modifyCopy) {
-                if (selected.length > 0) {
-                  addShapes(selected.map((s) => transformShape(s, transform)));
+                if (allToRot1.length > 0) {
+                  addShapes(allToRot1.map((s) => transformShape(s, transform)));
                 }
                 // Copy and rotate parametric shapes
                 if (selectedParametric.length > 0) {
@@ -232,8 +587,18 @@ export function useModifyTools() {
                   }
                 }
               } else {
-                if (selected.length > 0) {
-                  updateShapes(selected.map((s) => ({ id: s.id, updates: getShapeTransformUpdates(s, transform) })));
+                if (allToRot1.length > 0) {
+                  const updates = allToRot1.map((s) => ({ id: s.id, updates: getShapeTransformUpdates(s, transform) }));
+                  const allShapes = useAppStore.getState().shapes;
+                  updates.push(...getLinkedLabelUpdates(allToRot1, allShapes, new Set(selectedShapeIds), transform));
+                  // Recalculate miter joins for walls/beams with miter angles
+                  const miterUpdates = getMiterRecalcUpdates(updates, allToRot1, allShapes);
+                  for (const mu of miterUpdates) {
+                    const existing = updates.find(u => u.id === mu.id);
+                    if (existing) { existing.updates = { ...(existing.updates as any), ...(mu.updates as any) }; }
+                    else { updates.push(mu); }
+                  }
+                  updateShapes(updates);
                 }
                 // Rotate parametric shapes
                 for (const ps of selectedParametric) {
@@ -247,6 +612,7 @@ export function useModifyTools() {
                   updateProfileRotation(ps.id, ps.rotation + angleRad);
                 }
               }
+              triggerGridDimensionRegenIfNeeded(selected);
               clearDrawingPoints();
             }
             return true;
@@ -256,7 +622,7 @@ export function useModifyTools() {
             addDrawingPoint(worldPos);
             return true;
           }
-          // Click end ray → execute rotation
+          // Click end ray -> execute rotation
           const center = pts[0];
           const startAngle = Math.atan2(pts[1].y - center.y, pts[1].x - center.x);
           const endAngle = Math.atan2(worldPos.y - center.y, worldPos.x - center.x);
@@ -264,10 +630,12 @@ export function useModifyTools() {
           const transform = rotateTransform(center, angle);
           const selected = getSelectedShapes();
           const selectedParametric = getSelectedParametricShapes();
+          const childBeamsRot2 = getPlateSystemChildShapes(selected);
+          const allToRot2 = [...selected, ...childBeamsRot2];
 
           if (modifyCopy) {
-            if (selected.length > 0) {
-              addShapes(selected.map((s) => transformShape(s, transform)));
+            if (allToRot2.length > 0) {
+              addShapes(allToRot2.map((s) => transformShape(s, transform)));
             }
             // Copy and rotate parametric shapes
             if (selectedParametric.length > 0) {
@@ -284,8 +652,18 @@ export function useModifyTools() {
               }
             }
           } else {
-            if (selected.length > 0) {
-              updateShapes(selected.map((s) => ({ id: s.id, updates: getShapeTransformUpdates(s, transform) })));
+            if (allToRot2.length > 0) {
+              const updates = allToRot2.map((s) => ({ id: s.id, updates: getShapeTransformUpdates(s, transform) }));
+              const allShapes = useAppStore.getState().shapes;
+              updates.push(...getLinkedLabelUpdates(allToRot2, allShapes, new Set(selectedShapeIds), transform));
+              // Recalculate miter joins for walls/beams with miter angles
+              const miterUpdates = getMiterRecalcUpdates(updates, allToRot2, allShapes);
+              for (const mu of miterUpdates) {
+                const existing = updates.find(u => u.id === mu.id);
+                if (existing) { existing.updates = { ...(existing.updates as any), ...(mu.updates as any) }; }
+                else { updates.push(mu); }
+              }
+              updateShapes(updates);
             }
             // Rotate parametric shapes
             for (const ps of selectedParametric) {
@@ -299,6 +677,7 @@ export function useModifyTools() {
               updateProfileRotation(ps.id, ps.rotation + angle);
             }
           }
+          triggerGridDimensionRegenIfNeeded(selected);
           clearDrawingPoints();
           return true;
         }
@@ -323,10 +702,12 @@ export function useModifyTools() {
               const transform = scaleTransform(origin, scaleFactor);
               const selected = getSelectedShapes();
               const selectedParametric = getSelectedParametricShapes();
+              const childBeamsScale1 = getPlateSystemChildShapes(selected);
+              const allToScale1 = [...selected, ...childBeamsScale1];
 
               if (modifyCopy) {
-                if (selected.length > 0) {
-                  addShapes(selected.map((s) => transformShape(s, transform)));
+                if (allToScale1.length > 0) {
+                  addShapes(allToScale1.map((s) => transformShape(s, transform)));
                 }
                 // Copy and scale parametric shapes
                 if (selectedParametric.length > 0) {
@@ -341,8 +722,18 @@ export function useModifyTools() {
                   }
                 }
               } else {
-                if (selected.length > 0) {
-                  updateShapes(selected.map((s) => ({ id: s.id, updates: getShapeTransformUpdates(s, transform) })));
+                if (allToScale1.length > 0) {
+                  const updates = allToScale1.map((s) => ({ id: s.id, updates: getShapeTransformUpdates(s, transform) }));
+                  const allShapes = useAppStore.getState().shapes;
+                  updates.push(...getLinkedLabelUpdates(allToScale1, allShapes, new Set(selectedShapeIds), transform));
+                  // Recalculate miter joins for walls/beams with miter angles
+                  const miterUpdates = getMiterRecalcUpdates(updates, allToScale1, allShapes);
+                  for (const mu of miterUpdates) {
+                    const existing = updates.find(u => u.id === mu.id);
+                    if (existing) { existing.updates = { ...(existing.updates as any), ...(mu.updates as any) }; }
+                    else { updates.push(mu); }
+                  }
+                  updateShapes(updates);
                 }
                 // Scale parametric shapes
                 for (const ps of selectedParametric) {
@@ -354,6 +745,7 @@ export function useModifyTools() {
                   updateProfileScale(ps.id, ps.scale * scaleFactor);
                 }
               }
+              triggerGridDimensionRegenIfNeeded(selected);
               clearDrawingPoints();
             }
             return true;
@@ -372,10 +764,12 @@ export function useModifyTools() {
             const transform = scaleTransform(origin, factor);
             const selected = getSelectedShapes();
             const selectedParametric = getSelectedParametricShapes();
+            const childBeamsScale2 = getPlateSystemChildShapes(selected);
+            const allToScale2 = [...selected, ...childBeamsScale2];
 
             if (modifyCopy) {
-              if (selected.length > 0) {
-                addShapes(selected.map((s) => transformShape(s, transform)));
+              if (allToScale2.length > 0) {
+                addShapes(allToScale2.map((s) => transformShape(s, transform)));
               }
               // Copy and scale parametric shapes
               if (selectedParametric.length > 0) {
@@ -390,8 +784,18 @@ export function useModifyTools() {
                 }
               }
             } else {
-              if (selected.length > 0) {
-                updateShapes(selected.map((s) => ({ id: s.id, updates: getShapeTransformUpdates(s, transform) })));
+              if (allToScale2.length > 0) {
+                const updates = allToScale2.map((s) => ({ id: s.id, updates: getShapeTransformUpdates(s, transform) }));
+                const allShapes = useAppStore.getState().shapes;
+                updates.push(...getLinkedLabelUpdates(allToScale2, allShapes, new Set(selectedShapeIds), transform));
+                // Recalculate miter joins for walls/beams with miter angles
+                const miterUpdates = getMiterRecalcUpdates(updates, allToScale2, allShapes);
+                for (const mu of miterUpdates) {
+                  const existing = updates.find(u => u.id === mu.id);
+                  if (existing) { existing.updates = { ...(existing.updates as any), ...(mu.updates as any) }; }
+                  else { updates.push(mu); }
+                }
+                updateShapes(updates);
               }
               // Scale parametric shapes
               for (const ps of selectedParametric) {
@@ -403,6 +807,7 @@ export function useModifyTools() {
                 updateProfileScale(ps.id, ps.scale * factor);
               }
             }
+            triggerGridDimensionRegenIfNeeded(selected);
             clearDrawingPoints();
           }
           return true;
@@ -429,13 +834,15 @@ export function useModifyTools() {
           const transform = mirrorTransform(axisP1, axisP2);
           const selected = getSelectedShapes();
           const selectedParametric = getSelectedParametricShapes();
+          const childBeamsMirror = getPlateSystemChildShapes(selected);
+          const allToMirror = [...selected, ...childBeamsMirror];
 
           // Calculate axis angle for mirroring parametric shapes
           const axisAngle = Math.atan2(axisP2.y - axisP1.y, axisP2.x - axisP1.x);
 
           if (modifyCopy) {
-            if (selected.length > 0) {
-              addShapes(selected.map((s) => transformShape(s, transform)));
+            if (allToMirror.length > 0) {
+              addShapes(allToMirror.map((s) => transformShape(s, transform)));
             }
             // Copy and mirror parametric shapes
             if (selectedParametric.length > 0) {
@@ -454,8 +861,18 @@ export function useModifyTools() {
               }
             }
           } else {
-            if (selected.length > 0) {
-              updateShapes(selected.map((s) => ({ id: s.id, updates: getShapeTransformUpdates(s, transform) })));
+            if (allToMirror.length > 0) {
+              const updates = allToMirror.map((s) => ({ id: s.id, updates: getShapeTransformUpdates(s, transform) }));
+              const allShapes = useAppStore.getState().shapes;
+              updates.push(...getLinkedLabelUpdates(allToMirror, allShapes, new Set(selectedShapeIds), transform));
+              // Recalculate miter joins for walls/beams with miter angles
+              const miterUpdates = getMiterRecalcUpdates(updates, allToMirror, allShapes);
+              for (const mu of miterUpdates) {
+                const existing = updates.find(u => u.id === mu.id);
+                if (existing) { existing.updates = { ...(existing.updates as any), ...(mu.updates as any) }; }
+                else { updates.push(mu); }
+              }
+              updateShapes(updates);
             }
             // Mirror parametric shapes
             for (const ps of selectedParametric) {
@@ -469,44 +886,48 @@ export function useModifyTools() {
               updateProfileRotation(ps.id, 2 * axisAngle - ps.rotation);
             }
           }
+          triggerGridDimensionRegenIfNeeded(selected);
           clearDrawingPoints();
           return true;
         }
 
         // ==================================================================
-        // ARRAY
+        // ARRAY (simplified 3-step: select → base point → end point)
         // ==================================================================
         case 'array': {
           if (selectedShapeIds.length === 0) {
+            // Step 1: select element(s)
             if (findShapeAtPoint) {
               const id = findShapeAtPoint(worldPos);
               if (id) selectShape(id, shiftKey);
             }
             return true;
           }
-          if (arrayMode === 'linear') {
-            // Linear array: pts=0 click start → pts=1 click direction/end → create array along that vector
-            if (numPts === 0) {
-              addDrawingPoint(worldPos);
-              return true;
-            }
-            // Second click defines direction and spacing reference
-            const basePoint = pts[0];
-            const dx = worldPos.x - basePoint.x;
-            const dy = worldPos.y - basePoint.y;
-            const dist = Math.hypot(dx, dy);
-            if (dist < 0.001) { clearDrawingPoints(); return true; }
-            const ux = dx / dist;
-            const uy = dy / dist;
-            const selected = getSelectedShapes();
-            const selectedParametric = getSelectedParametricShapes();
+          if (numPts === 0) {
+            // Step 2: click base point
+            addDrawingPoint(worldPos);
+            return true;
+          }
+          // Step 3: click end point → create array
+          const basePoint = pts[0];
+          const { dx, dy } = constrainDelta(worldPos.x - basePoint.x, worldPos.y - basePoint.y);
+          const dist = Math.hypot(dx, dy);
+          if (dist < 0.001) { clearDrawingPoints(); return true; }
 
-            // Array regular shapes
+          const selected = getSelectedShapes();
+          const selectedParametric = getSelectedParametricShapes();
+          const childBeamsArray = getPlateSystemChildShapes(selected);
+          const allToArray = [...selected, ...childBeamsArray];
+
+          if (arrayMode === 'linear') {
+            // Linear array: distribute arrayCount copies evenly from base to end
             const allCopies: Shape[] = [];
             for (let i = 1; i < arrayCount; i++) {
-              const offset = arraySpacing * i;
-              const transform = translateTransform(ux * offset, uy * offset);
-              for (const s of selected) {
+              const frac = i / (arrayCount - 1);
+              const offsetX = dx * frac;
+              const offsetY = dy * frac;
+              const transform = translateTransform(offsetX, offsetY);
+              for (const s of allToArray) {
                 allCopies.push(transformShape(s, transform));
               }
             }
@@ -515,58 +936,53 @@ export function useModifyTools() {
             // Array parametric shapes
             if (selectedParametric.length > 0) {
               for (let i = 1; i < arrayCount; i++) {
-                const offset = arraySpacing * i;
+                const frac = i / (arrayCount - 1);
                 cloneParametricShapes(
                   selectedParametric.map(s => s.id),
-                  { x: ux * offset, y: uy * offset }
+                  { x: dx * frac, y: dy * frac }
                 );
               }
             }
-
-            clearDrawingPoints();
-            return true;
           } else {
-            // Radial array: pts=0 click center → execute immediately
-            if (numPts === 0) {
-              const center = worldPos;
-              const selected = getSelectedShapes();
-              const selectedParametric = getSelectedParametricShapes();
-              const totalAngleRad = (arrayAngle * Math.PI) / 180;
-              const angleStep = totalAngleRad / arrayCount;
+            // Radial array: base point = center, end point defines start direction
+            // Distribute arrayCount copies around the center over arrayAngle degrees
+            const center = basePoint;
+            const totalAngleRad = (arrayAngle * Math.PI) / 180;
+            const angleStep = totalAngleRad / arrayCount;
 
-              // Array regular shapes
-              const allCopies: Shape[] = [];
+            const allCopies: Shape[] = [];
+            for (let i = 1; i < arrayCount; i++) {
+              const angle = angleStep * i;
+              const transform = rotateTransform(center, angle);
+              for (const s of allToArray) {
+                allCopies.push(transformShape(s, transform));
+              }
+            }
+            if (allCopies.length > 0) addShapes(allCopies);
+
+            // Array parametric shapes (radial)
+            if (selectedParametric.length > 0) {
               for (let i = 1; i < arrayCount; i++) {
                 const angle = angleStep * i;
-                const transform = rotateTransform(center, angle);
-                for (const s of selected) {
-                  allCopies.push(transformShape(s, transform));
+                const clones = cloneParametricShapes(selectedParametric.map(s => s.id), { x: 0, y: 0 });
+                for (const clone of clones) {
+                  const cos = Math.cos(angle);
+                  const sin = Math.sin(angle);
+                  const cdx = clone.position.x - center.x;
+                  const cdy = clone.position.y - center.y;
+                  const newX = center.x + cdx * cos - cdy * sin;
+                  const newY = center.y + cdx * sin + cdy * cos;
+                  updateProfilePosition(clone.id, { x: newX, y: newY });
+                  updateProfileRotation(clone.id, clone.rotation + angle);
                 }
               }
-              if (allCopies.length > 0) addShapes(allCopies);
-
-              // Array parametric shapes (radial)
-              if (selectedParametric.length > 0) {
-                for (let i = 1; i < arrayCount; i++) {
-                  const angle = angleStep * i;
-                  const clones = cloneParametricShapes(selectedParametric.map(s => s.id), { x: 0, y: 0 });
-                  for (const clone of clones) {
-                    const cos = Math.cos(angle);
-                    const sin = Math.sin(angle);
-                    const dx = clone.position.x - center.x;
-                    const dy = clone.position.y - center.y;
-                    const newX = center.x + dx * cos - dy * sin;
-                    const newY = center.y + dx * sin + dy * cos;
-                    updateProfilePosition(clone.id, { x: newX, y: newY });
-                    updateProfileRotation(clone.id, clone.rotation + angle);
-                  }
-                }
-              }
-
-              clearDrawingPoints();
-              return true;
             }
           }
+
+          triggerGridDimensionRegenIfNeeded(selected);
+          clearDrawingPoints();
+          setDrawingPreview(null);
+          setActiveTool('select');
           return true;
         }
 
@@ -575,7 +991,7 @@ export function useModifyTools() {
         // ==================================================================
         case 'trim': {
           if (numPts === 0) {
-            // Click cutting edge
+            // First click: select cutting edge
             if (findShapeAtPoint) {
               const id = findShapeAtPoint(worldPos);
               if (id) {
@@ -585,13 +1001,41 @@ export function useModifyTools() {
             }
             return true;
           }
-          // Click element to trim
+          // Subsequent clicks: extend/trim BOTH lines to meet at intersection
           if (findShapeAtPoint && modifyRefShapeId) {
             const targetId = findShapeAtPoint(worldPos);
-            if (targetId) {
+            if (targetId && targetId !== modifyRefShapeId) {
               const target = shapes.find((s) => s.id === targetId);
               const cutter = shapes.find((s) => s.id === modifyRefShapeId);
-              if (target && cutter && target.type === 'line') {
+              const lineLikeTypes = ['line', 'gridline', 'beam', 'wall', 'level'];
+              if (target && cutter && lineLikeTypes.includes(target.type) && lineLikeTypes.includes(cutter.type)) {
+                // Extend/trim the target (line #2) to meet the cutter (line #1)
+                const targetResult = trimLineAtIntersection(target as any, cutter, worldPos);
+                // Extend/trim the cutter (line #1) to meet the target (line #2)
+                // Use the first click point (pts[0]) as the clicked-side hint for the cutter
+                const cutterResult = trimLineAtIntersection(cutter as any, target, pts[0]);
+                const updates: { id: string; updates: Partial<Shape> }[] = [];
+                if (targetResult) {
+                  updates.push({ id: targetId, updates: targetResult as Partial<Shape> });
+                }
+                if (cutterResult) {
+                  updates.push({ id: modifyRefShapeId, updates: cutterResult as Partial<Shape> });
+                }
+                // Fallback: if both trimLineAtIntersection calls returned null,
+                // the intersection is outside both segments. Extend both to meet
+                // at their mutual intersection point (infinite-line intersection).
+                if (updates.length === 0) {
+                  const mutualResult = extendBothToIntersection(target, cutter);
+                  if (mutualResult) {
+                    updates.push({ id: targetId, updates: mutualResult.shape1Update });
+                    updates.push({ id: modifyRefShapeId, updates: mutualResult.shape2Update });
+                  }
+                }
+                if (updates.length > 0) {
+                  updateShapes(updates);
+                }
+              } else if (target && cutter && lineLikeTypes.includes(target.type)) {
+                // Cutter is not line-like; only trim/extend the target
                 const result = trimLineAtIntersection(target as any, cutter, worldPos);
                 if (result) {
                   updateShapes([{ id: targetId, updates: result as Partial<Shape> }]);
@@ -599,8 +1043,13 @@ export function useModifyTools() {
               }
             }
           }
-          clearDrawingPoints();
-          setModifyRefShapeId(null);
+          // When Multiple is off, reset to select after the trim operation
+          if (!modifyMultiple) {
+            clearDrawingPoints();
+            setModifyRefShapeId(null);
+            setActiveTool('select');
+          }
+          // When Multiple is on, keep cutting edge selected for multiple trims (don't clear ref)
           return true;
         }
 
@@ -619,13 +1068,14 @@ export function useModifyTools() {
             }
             return true;
           }
-          // Click element to extend
+          // Click element to extend (supports line, gridline, beam, wall)
           if (findShapeAtPoint && modifyRefShapeId) {
             const targetId = findShapeAtPoint(worldPos);
             if (targetId) {
               const target = shapes.find((s) => s.id === targetId);
               const boundary = shapes.find((s) => s.id === modifyRefShapeId);
-              if (target && boundary && target.type === 'line') {
+              const lineLikeTypes = ['line', 'gridline', 'beam', 'wall'];
+              if (target && boundary && lineLikeTypes.includes(target.type)) {
                 const result = extendLineToBoundary(target as any, boundary);
                 if (result) {
                   updateShapes([{ id: targetId, updates: result as Partial<Shape> }]);
@@ -633,8 +1083,14 @@ export function useModifyTools() {
               }
             }
           }
-          clearDrawingPoints();
-          setModifyRefShapeId(null);
+          if (modifyMultiple) {
+            // Keep boundary edge selected — user can click more elements to extend
+          } else {
+            // Reset to select after single extend operation
+            clearDrawingPoints();
+            setModifyRefShapeId(null);
+            setActiveTool('select');
+          }
           return true;
         }
 
@@ -782,10 +1238,531 @@ export function useModifyTools() {
                 const result = offsetShape(shape, offsetDistance, worldPos);
                 if (result) {
                   addShapes([result]);
+                  triggerGridDimensionRegenIfNeeded([result]);
                 }
               }
             }
           }
+          return true;
+        }
+
+        // ==================================================================
+        // ELASTIC (STRETCH)
+        // ==================================================================
+        case 'elastic': {
+          if (numPts === 0) {
+            // Phase 1: First click = first corner of selection box
+            addDrawingPoint(worldPos);
+            return true;
+          }
+          if (numPts === 1) {
+            // Phase 2: Second click = second corner of selection box
+            // Store the box and move to base point selection
+            addDrawingPoint(worldPos);
+            return true;
+          }
+          if (numPts === 2) {
+            // Phase 3: Third click = base point
+            addDrawingPoint(worldPos);
+            return true;
+          }
+          if (numPts === 3) {
+            // Phase 4: Fourth click = destination point → execute stretch
+            const boxP1 = pts[0];
+            const boxP2 = pts[1];
+            const basePoint = pts[2];
+            const destPoint = worldPos;
+
+            const boxMinX = Math.min(boxP1.x, boxP2.x);
+            const boxMinY = Math.min(boxP1.y, boxP2.y);
+            const boxMaxX = Math.max(boxP1.x, boxP2.x);
+            const boxMaxY = Math.max(boxP1.y, boxP2.y);
+
+            const dx = destPoint.x - basePoint.x;
+            const dy = destPoint.y - basePoint.y;
+
+            // Helper: check if a point is inside the selection box
+            const isInsideBox = (p: Point) =>
+              p.x >= boxMinX && p.x <= boxMaxX && p.y >= boxMinY && p.y <= boxMaxY;
+
+            // Gather all visible shapes in the active drawing
+            const drawingShapes = shapes.filter(s => s.drawingId === activeDrawingId && s.visible && !s.locked);
+
+            const updates: { id: string; updates: Partial<Shape> }[] = [];
+
+            // Line-like types that can be stretched by endpoint
+            const lineLikeTypes = ['line', 'beam', 'gridline', 'wall', 'level'];
+
+            for (const shape of drawingShapes) {
+              const bounds = getShapeBounds(shape);
+              if (!bounds) continue;
+
+              // Check if shape is FULLY inside the box
+              const fullyInside =
+                bounds.minX >= boxMinX && bounds.maxX <= boxMaxX &&
+                bounds.minY >= boxMinY && bounds.maxY <= boxMaxY;
+
+              if (fullyInside) {
+                // Fully inside: translate the entire shape
+                const transform = translateTransform(dx, dy);
+                updates.push({ id: shape.id, updates: getShapeTransformUpdates(shape, transform) });
+                continue;
+              }
+
+              // Check if shape is PARTIALLY inside (endpoints inside box)
+              if (lineLikeTypes.includes(shape.type)) {
+                const s = shape as any;
+                const startInside = isInsideBox(s.start);
+                const endInside = isInsideBox(s.end);
+
+                if (startInside && endInside) {
+                  // Both endpoints inside: move entire shape
+                  const transform = translateTransform(dx, dy);
+                  updates.push({ id: shape.id, updates: getShapeTransformUpdates(shape, transform) });
+                } else if (startInside) {
+                  // Only start point inside: stretch start
+                  updates.push({
+                    id: shape.id,
+                    updates: { start: { x: s.start.x + dx, y: s.start.y + dy } } as Partial<Shape>,
+                  });
+                } else if (endInside) {
+                  // Only end point inside: stretch end
+                  updates.push({
+                    id: shape.id,
+                    updates: { end: { x: s.end.x + dx, y: s.end.y + dy } } as Partial<Shape>,
+                  });
+                }
+                continue;
+              }
+
+              // For polylines/splines: move individual points that are inside the box
+              if (shape.type === 'polyline' || shape.type === 'spline') {
+                const s = shape as any;
+                const newPoints = s.points.map((p: Point) => {
+                  if (isInsideBox(p)) {
+                    return { x: p.x + dx, y: p.y + dy };
+                  }
+                  return p;
+                });
+                const anyMoved = s.points.some((p: Point) => isInsideBox(p));
+                if (anyMoved) {
+                  updates.push({ id: shape.id, updates: { points: newPoints } as Partial<Shape> });
+                }
+                continue;
+              }
+
+              // For circles: if center is inside the box, move
+              if (shape.type === 'circle') {
+                const s = shape as any;
+                if (isInsideBox(s.center)) {
+                  updates.push({
+                    id: shape.id,
+                    updates: { center: { x: s.center.x + dx, y: s.center.y + dy } } as Partial<Shape>,
+                  });
+                }
+                continue;
+              }
+
+              // For arcs/ellipses: if center is inside the box, move
+              if (shape.type === 'arc' || shape.type === 'ellipse') {
+                const s = shape as any;
+                if (isInsideBox(s.center)) {
+                  updates.push({
+                    id: shape.id,
+                    updates: { center: { x: s.center.x + dx, y: s.center.y + dy } } as Partial<Shape>,
+                  });
+                }
+                continue;
+              }
+
+              // For rectangles: if any corner overlaps, move the whole shape
+              if (shape.type === 'rectangle') {
+                const s = shape as any;
+                const corners = [
+                  { x: s.topLeft.x, y: s.topLeft.y },
+                  { x: s.topLeft.x + s.width, y: s.topLeft.y },
+                  { x: s.topLeft.x, y: s.topLeft.y + s.height },
+                  { x: s.topLeft.x + s.width, y: s.topLeft.y + s.height },
+                ];
+                if (corners.some(c => isInsideBox(c))) {
+                  const transform = translateTransform(dx, dy);
+                  updates.push({ id: shape.id, updates: getShapeTransformUpdates(shape, transform) });
+                }
+                continue;
+              }
+
+              // For text/point/pile shapes: if position is inside the box, move
+              if (shape.type === 'text' || shape.type === 'point') {
+                const s = shape as any;
+                if (isInsideBox(s.position)) {
+                  updates.push({
+                    id: shape.id,
+                    updates: { position: { x: s.position.x + dx, y: s.position.y + dy } } as Partial<Shape>,
+                  });
+                }
+                continue;
+              }
+
+              if (shape.type === 'pile') {
+                const s = shape as any;
+                if (isInsideBox(s.position)) {
+                  updates.push({
+                    id: shape.id,
+                    updates: { position: { x: s.position.x + dx, y: s.position.y + dy } } as Partial<Shape>,
+                  });
+                }
+                continue;
+              }
+
+              // For images: if position is inside the box, move
+              if (shape.type === 'image') {
+                const s = shape as any;
+                if (isInsideBox(s.position)) {
+                  updates.push({
+                    id: shape.id,
+                    updates: { position: { x: s.position.x + dx, y: s.position.y + dy } } as Partial<Shape>,
+                  });
+                }
+                continue;
+              }
+
+              // For hatch shapes: move boundary points that are inside
+              if (shape.type === 'hatch') {
+                const s = shape as any;
+                const newPoints = s.points.map((p: Point) => {
+                  if (isInsideBox(p)) {
+                    return { x: p.x + dx, y: p.y + dy };
+                  }
+                  return p;
+                });
+                const anyMoved = s.points.some((p: Point) => isInsideBox(p));
+                if (anyMoved) {
+                  updates.push({ id: shape.id, updates: { points: newPoints } as Partial<Shape> });
+                }
+                continue;
+              }
+
+              // For slab shapes: move individual points that are inside the box
+              if (shape.type === 'slab') {
+                const s = shape as any;
+                const newPoints = s.points.map((p: Point) => {
+                  if (isInsideBox(p)) {
+                    return { x: p.x + dx, y: p.y + dy };
+                  }
+                  return p;
+                });
+                const anyMoved = s.points.some((p: Point) => isInsideBox(p));
+                if (anyMoved) {
+                  updates.push({ id: shape.id, updates: { points: newPoints } as Partial<Shape> });
+                }
+                continue;
+              }
+
+              // For plate-system shapes: move individual contour points that are inside the box
+              if (shape.type === 'plate-system') {
+                const s = shape as any;
+                const newPoints = s.contourPoints.map((p: Point) => {
+                  if (isInsideBox(p)) {
+                    return { x: p.x + dx, y: p.y + dy };
+                  }
+                  return p;
+                });
+                const anyMoved = s.contourPoints.some((p: Point) => isInsideBox(p));
+                if (anyMoved) {
+                  updates.push({ id: shape.id, updates: { contourPoints: newPoints } as Partial<Shape> });
+                }
+                continue;
+              }
+
+              // For section-callout shapes: stretch start/end like line-like types
+              if (shape.type === 'section-callout') {
+                const s = shape as any;
+                const startInside = isInsideBox(s.start);
+                const endInside = isInsideBox(s.end);
+
+                if (startInside && endInside) {
+                  const transform = translateTransform(dx, dy);
+                  updates.push({ id: shape.id, updates: getShapeTransformUpdates(shape, transform) });
+                } else if (startInside) {
+                  updates.push({
+                    id: shape.id,
+                    updates: { start: { x: s.start.x + dx, y: s.start.y + dy } } as Partial<Shape>,
+                  });
+                } else if (endInside) {
+                  updates.push({
+                    id: shape.id,
+                    updates: { end: { x: s.end.x + dx, y: s.end.y + dy } } as Partial<Shape>,
+                  });
+                }
+                continue;
+              }
+
+              // For dimension shapes: move individual points that are inside the box
+              if (shape.type === 'dimension') {
+                const s = shape as any;
+                if (s.points && s.points.length > 0) {
+                  const newPoints = s.points.map((p: Point) => {
+                    if (isInsideBox(p)) {
+                      return { x: p.x + dx, y: p.y + dy };
+                    }
+                    return p;
+                  });
+                  const anyMoved = s.points.some((p: Point) => isInsideBox(p));
+                  if (anyMoved) {
+                    updates.push({ id: shape.id, updates: { points: newPoints } as Partial<Shape> });
+                  }
+                }
+                continue;
+              }
+
+              // For spot-elevation shapes: if position is inside the box, move
+              if (shape.type === 'spot-elevation') {
+                const s = shape as any;
+                const posInside = isInsideBox(s.position);
+                const labelInside = isInsideBox(s.labelPosition);
+                if (posInside && labelInside) {
+                  updates.push({
+                    id: shape.id,
+                    updates: {
+                      position: { x: s.position.x + dx, y: s.position.y + dy },
+                      labelPosition: { x: s.labelPosition.x + dx, y: s.labelPosition.y + dy },
+                    } as Partial<Shape>,
+                  });
+                } else if (posInside) {
+                  updates.push({
+                    id: shape.id,
+                    updates: { position: { x: s.position.x + dx, y: s.position.y + dy } } as Partial<Shape>,
+                  });
+                } else if (labelInside) {
+                  updates.push({
+                    id: shape.id,
+                    updates: { labelPosition: { x: s.labelPosition.x + dx, y: s.labelPosition.y + dy } } as Partial<Shape>,
+                  });
+                }
+                continue;
+              }
+
+              // For CPT shapes: if position is inside the box, move
+              if (shape.type === 'cpt') {
+                const s = shape as any;
+                if (isInsideBox(s.position)) {
+                  updates.push({
+                    id: shape.id,
+                    updates: { position: { x: s.position.x + dx, y: s.position.y + dy } } as Partial<Shape>,
+                  });
+                }
+                continue;
+              }
+
+              // For space shapes: move individual contour points that are inside the box
+              if (shape.type === 'space') {
+                const s = shape as any;
+                const newPoints = s.contourPoints.map((p: Point) => {
+                  if (isInsideBox(p)) {
+                    return { x: p.x + dx, y: p.y + dy };
+                  }
+                  return p;
+                });
+                const anyMoved = s.contourPoints.some((p: Point) => isInsideBox(p));
+                if (anyMoved) {
+                  const upd: any = { contourPoints: newPoints };
+                  // Also move label position if inside box
+                  if (s.labelPosition && isInsideBox(s.labelPosition)) {
+                    upd.labelPosition = { x: s.labelPosition.x + dx, y: s.labelPosition.y + dy };
+                  }
+                  updates.push({ id: shape.id, updates: upd as Partial<Shape> });
+                }
+                continue;
+              }
+
+              // For foundation-zone shapes: move individual contour points that are inside the box
+              if (shape.type === 'foundation-zone') {
+                const s = shape as any;
+                const newPoints = s.contourPoints.map((p: Point) => {
+                  if (isInsideBox(p)) {
+                    return { x: p.x + dx, y: p.y + dy };
+                  }
+                  return p;
+                });
+                const anyMoved = s.contourPoints.some((p: Point) => isInsideBox(p));
+                if (anyMoved) {
+                  updates.push({ id: shape.id, updates: { contourPoints: newPoints } as Partial<Shape> });
+                }
+                continue;
+              }
+            }
+
+            // Also move linked labels for any shapes that were moved
+            if (updates.length > 0) {
+              const movedIds = new Set(updates.map(u => u.id));
+              // Build a map of pending updates so we can compute post-update geometry
+              const pendingMap = new Map<string, Partial<Shape>>();
+              for (const u of updates) {
+                pendingMap.set(u.id, u.updates);
+              }
+              for (const u of [...updates]) {
+                const parentShape = drawingShapes.find(s => s.id === u.id);
+                if (!parentShape) continue;
+                const linkedLabels = findLinkedLabels(drawingShapes, u.id);
+                for (const label of linkedLabels) {
+                  if (!movedIds.has(label.id)) {
+                    movedIds.add(label.id);
+                    // Compute post-update parent geometry for accurate label placement
+                    const postParent = { ...parentShape, ...u.updates } as Shape;
+                    const labelPos = computeLinkedLabelPosition(postParent);
+                    if (labelPos) {
+                      updates.push({
+                        id: label.id,
+                        updates: {
+                          position: labelPos.position,
+                          rotation: labelPos.rotation,
+                        } as Partial<Shape>,
+                      });
+                    } else {
+                      const transform = translateTransform(dx, dy);
+                      updates.push({
+                        id: label.id,
+                        updates: getShapeTransformUpdates(label, transform),
+                      });
+                    }
+                  }
+                }
+              }
+
+              // Recalculate miter joins for walls/beams with miter angles
+              const movedWalls = updates
+                .map(u => drawingShapes.find(s => s.id === u.id))
+                .filter(Boolean) as Shape[];
+              const miterUpdates = getMiterRecalcUpdates(updates, movedWalls, drawingShapes);
+              for (const mu of miterUpdates) {
+                const existing = updates.find(u => u.id === mu.id);
+                if (existing) { existing.updates = { ...(existing.updates as any), ...(mu.updates as any) }; }
+                else { updates.push(mu); }
+              }
+
+              updateShapes(updates);
+
+              // Check if any affected shapes are gridlines
+              const affectedShapes = updates.map(u => drawingShapes.find(s => s.id === u.id)).filter(Boolean) as Shape[];
+              triggerGridDimensionRegenIfNeeded(affectedShapes);
+            }
+
+            clearDrawingPoints();
+            setDrawingPreview(null);
+            setActiveTool('select');
+            return true;
+          }
+          return true;
+        }
+
+        // ==================================================================
+        // ALIGN — pick source point, then destination point; translate
+        // selected shapes so the source point lands on the destination.
+        // ==================================================================
+        case 'align': {
+          if (selectedShapeIds.length === 0) {
+            // No selection yet: click to select a shape
+            if (findShapeAtPoint) {
+              const id = findShapeAtPoint(worldPos);
+              if (id) {
+                selectShape(id, shiftKey);
+              }
+            }
+            return true;
+          }
+          if (numPts === 0) {
+            // First click: source (base) point
+            addDrawingPoint(worldPos);
+            return true;
+          }
+          // Second click: destination point — execute alignment
+          const sourcePoint = pts[0];
+          const destPoint = worldPos;
+          const adx = destPoint.x - sourcePoint.x;
+          const ady = destPoint.y - sourcePoint.y;
+          const alignTransform = translateTransform(adx, ady);
+
+          const alignSelected = getSelectedShapes();
+          const alignSelectedParametric = getSelectedParametricShapes();
+
+          if (alignSelected.length > 0) {
+            const alignUpdates = alignSelected.map((s) => ({
+              id: s.id,
+              updates: getShapeTransformUpdates(s, alignTransform),
+            }));
+
+            // Also move linked labels that are NOT already in the selection
+            const allShapesNow = useAppStore.getState().shapes;
+            const labelUpdates = getLinkedLabelUpdates(alignSelected, allShapesNow, new Set(selectedShapeIds), alignTransform);
+            alignUpdates.push(...labelUpdates);
+
+            // Recalculate miter joins for walls/beams with miter angles
+            const miterUpdates = getMiterRecalcUpdates(alignUpdates, alignSelected, allShapesNow);
+            for (const mu of miterUpdates) {
+              const existing = alignUpdates.find(u => u.id === mu.id);
+              if (existing) {
+                existing.updates = { ...(existing.updates as any), ...(mu.updates as any) };
+              } else {
+                alignUpdates.push(mu);
+              }
+            }
+
+            updateShapes(alignUpdates);
+          }
+          // Align parametric shapes
+          for (const ps of alignSelectedParametric) {
+            updateProfilePosition(ps.id, {
+              x: ps.position.x + adx,
+              y: ps.position.y + ady,
+            });
+          }
+
+          triggerGridDimensionRegenIfNeeded(alignSelected);
+          clearDrawingPoints();
+          setActiveTool('select');
+          return true;
+        }
+
+        // ==================================================================
+        // TRIM WALLS (Miter Join / Verstek)
+        // ==================================================================
+        case 'trim-walls': {
+          if (numPts === 0) {
+            // First click: select first wall/beam
+            if (findShapeAtPoint) {
+              const id = findShapeAtPoint(worldPos);
+              if (id) {
+                const shape = shapes.find((s) => s.id === id);
+                if (shape && (shape.type === 'wall' || shape.type === 'beam')) {
+                  setModifyRefShapeId(id);
+                  addDrawingPoint(worldPos);
+                }
+              }
+            }
+            return true;
+          }
+          // Second click: select second wall/beam and execute miter join
+          if (findShapeAtPoint && modifyRefShapeId) {
+            const secondId = findShapeAtPoint(worldPos);
+            if (secondId && secondId !== modifyRefShapeId) {
+              const shape1 = shapes.find((s) => s.id === modifyRefShapeId);
+              const shape2 = shapes.find((s) => s.id === secondId);
+              if (shape1 && shape2 &&
+                  (shape1.type === 'wall' || shape1.type === 'beam') &&
+                  (shape2.type === 'wall' || shape2.type === 'beam')) {
+                const result = miterJoinWalls(shape1, shape2);
+                if (result) {
+                  updateShapes([
+                    { id: modifyRefShapeId, updates: result.shape1Update },
+                    { id: secondId, updates: result.shape2Update },
+                  ]);
+                }
+              }
+            }
+          }
+          // Reset state for next pair but keep tool active (don't switch to 'select')
+          clearDrawingPoints();
+          setModifyRefShapeId(null);
           return true;
         }
 
@@ -794,12 +1771,12 @@ export function useModifyTools() {
       }
     },
     [activeTool, drawingPoints, selectedShapeIds, shapes, parametricShapes, addDrawingPoint, clearDrawingPoints,
-     addShapes, updateShapes, selectShape, modifyCopy, modifyMultiple, scaleMode, scaleFactor,
+     addShapes, updateShapes, selectShape, selectShapes, modifyCopy, modifyMultiple, scaleMode, scaleFactor,
      filletRadius, chamferDistance1, chamferDistance2, offsetDistance, rotateAngle, modifyRefShapeId, setModifyRefShapeId,
-     getSelectedShapes, getSelectedParametricShapes, activeDrawingId, activeLayerId,
+     getSelectedShapes, getSelectedParametricShapes, getPlateSystemChildShapes, activeDrawingId, activeLayerId,
      arrayMode, arrayCount, arraySpacing, arrayAngle,
      cloneParametricShapes, updateProfilePosition, updateProfileRotation, updateProfileScale,
-     moveAxisLock]
+     constrainDelta, setActiveTool, setDrawingPreview, selectedGrip, setSelectedGrip, triggerGridDimensionRegenIfNeeded]
   );
 
   /**
@@ -839,7 +1816,7 @@ export function useModifyTools() {
       const pts = drawingPoints;
 
       // For tools that need selection but have none, no preview
-      const needsSelection = ['move', 'copy', 'rotate', 'scale', 'mirror'].includes(activeTool);
+      const needsSelection = ['move', 'copy', 'copy2', 'rotate', 'scale', 'mirror', 'array', 'align'].includes(activeTool);
       if (needsSelection && selectedShapeIds.length === 0) {
         setDrawingPreview(null);
         return;
@@ -852,16 +1829,53 @@ export function useModifyTools() {
 
       switch (activeTool) {
         case 'move':
-        case 'copy': {
+        case 'copy':
+        case 'copy2': {
           if (pts.length === 1) {
-            let dx = worldPos.x - pts[0].x;
-            let dy = worldPos.y - pts[0].y;
-            if (moveAxisLock === 'x') dy = 0;
-            if (moveAxisLock === 'y') dx = 0;
+            let { dx, dy } = constrainDelta(worldPos.x - pts[0].x, worldPos.y - pts[0].y);
+            // If lockedDistance is set (user typing), constrain to that distance in mouse direction
+            if (lockedDistance !== null) {
+              const dist = Math.hypot(dx, dy);
+              if (dist > 0.001) {
+                const ux = dx / dist;
+                const uy = dy / dist;
+                dx = ux * lockedDistance;
+                dy = uy * lockedDistance;
+              }
+            }
+
+            // Endpoint grip move: show stretched ghost instead of translated ghost
+            if (selectedGrip && activeTool === 'move' && (selectedGrip.gripIndex === 0 || selectedGrip.gripIndex === 1)) {
+              const shape = shapes.find(s => s.id === selectedGrip.shapeId);
+              if (shape) {
+                const endpointKey = selectedGrip.gripIndex === 0 ? 'start' : 'end';
+                const currentEndpoint = (shape as any)[endpointKey] as Point;
+                const ghost = {
+                  ...shape,
+                  id: `preview-${shape.id}`,
+                  [endpointKey]: { x: currentEndpoint.x + dx, y: currentEndpoint.y + dy },
+                } as Shape;
+                setDrawingPreview({
+                  type: 'modifyPreview',
+                  shapes: [ghost],
+                  basePoint: pts[0],
+                  currentPoint: { x: pts[0].x + dx, y: pts[0].y + dy },
+                });
+                break;
+              }
+            }
+
             const transform = translateTransform(dx, dy);
-            const regularGhosts = selected.map((s) => transformShape(s, transform));
+            const childBeamsPreview = getPlateSystemChildShapes(selected);
+            const allForPreview = [...selected, ...childBeamsPreview];
+            const regularGhosts = allForPreview.map((s) => transformShape(s, transform));
             const paramGhosts = parametricGhosts.map((s) => transformShape(s, transform));
-            setDrawingPreview({ type: 'modifyPreview', shapes: [...regularGhosts, ...paramGhosts] });
+            setDrawingPreview({
+              type: 'modifyPreview',
+              shapes: [...regularGhosts, ...paramGhosts],
+              basePoint: pts[0],
+              currentPoint: { x: pts[0].x + dx, y: pts[0].y + dy },
+            });
           }
           break;
         }
@@ -880,7 +1894,9 @@ export function useModifyTools() {
             const endAngle = Math.atan2(worldPos.y - center.y, worldPos.x - center.x);
             const angle = endAngle - startAngle;
             const transform = rotateTransform(center, angle);
-            const regularGhosts = selected.map((s) => transformShape(s, transform));
+            const childBeamsRotPreview = getPlateSystemChildShapes(selected);
+            const allForRotPreview = [...selected, ...childBeamsRotPreview];
+            const regularGhosts = allForRotPreview.map((s) => transformShape(s, transform));
             const paramGhosts = parametricGhosts.map((s) => transformShape(s, transform));
             setDrawingPreview({
               type: 'rotateGuide',
@@ -909,7 +1925,9 @@ export function useModifyTools() {
               const newDist = Math.hypot(worldPos.x - origin.x, worldPos.y - origin.y);
               const factor = refDist > 0.001 ? newDist / refDist : 1;
               const transform = scaleTransform(origin, factor);
-              const regularGhosts = selected.map((s) => transformShape(s, transform));
+              const childBeamsScalePreview = getPlateSystemChildShapes(selected);
+              const allForScalePreview = [...selected, ...childBeamsScalePreview];
+              const regularGhosts = allForScalePreview.map((s) => transformShape(s, transform));
               const paramGhosts = parametricGhosts.map((s) => transformShape(s, transform));
               setDrawingPreview({
                 type: 'scaleGuide',
@@ -926,51 +1944,224 @@ export function useModifyTools() {
         case 'mirror': {
           if (pts.length === 1) {
             const transform = mirrorTransform(pts[0], worldPos);
-            const regularGhosts = selected.map((s) => transformShape(s, transform));
+            const childBeamsMirrorPreview = getPlateSystemChildShapes(selected);
+            const allForMirrorPreview = [...selected, ...childBeamsMirrorPreview];
+            const regularGhosts = allForMirrorPreview.map((s) => transformShape(s, transform));
             const paramGhosts = parametricGhosts.map((s) => transformShape(s, transform));
             setDrawingPreview({ type: 'mirrorAxis', start: pts[0], end: worldPos, shapes: [...regularGhosts, ...paramGhosts] });
           }
           break;
         }
         case 'array': {
-          if (arrayMode === 'linear' && pts.length === 1) {
+          const childBeamsArrayPreview = getPlateSystemChildShapes(selected);
+          const allForArrayPreview = [...selected, ...childBeamsArrayPreview];
+          if (pts.length === 1 && (allForArrayPreview.length > 0 || parametricGhosts.length > 0)) {
             const basePoint = pts[0];
-            const dx = worldPos.x - basePoint.x;
-            const dy = worldPos.y - basePoint.y;
+            const { dx, dy } = constrainDelta(worldPos.x - basePoint.x, worldPos.y - basePoint.y);
             const dist = Math.hypot(dx, dy);
             if (dist > 0.001) {
-              const ux = dx / dist;
-              const uy = dy / dist;
               const ghosts: Shape[] = [];
-              for (let i = 1; i < arrayCount; i++) {
-                const offset = arraySpacing * i;
-                const transform = translateTransform(ux * offset, uy * offset);
-                for (const s of selected) {
-                  ghosts.push(transformShape(s, transform));
+              if (arrayMode === 'linear') {
+                // Linear: distribute arrayCount copies from base to cursor
+                for (let i = 1; i < arrayCount; i++) {
+                  const frac = i / (arrayCount - 1);
+                  const transform = translateTransform(dx * frac, dy * frac);
+                  for (const s of allForArrayPreview) {
+                    ghosts.push(transformShape(s, transform));
+                  }
+                  for (const s of parametricGhosts) {
+                    ghosts.push(transformShape(s, transform));
+                  }
                 }
-                for (const s of parametricGhosts) {
-                  ghosts.push(transformShape(s, transform));
+              } else {
+                // Radial: base = center, distribute around arrayAngle
+                const center = basePoint;
+                const totalAngleRad = (arrayAngle * Math.PI) / 180;
+                const angleStep = totalAngleRad / arrayCount;
+                for (let i = 1; i < arrayCount; i++) {
+                  const angle = angleStep * i;
+                  const transform = rotateTransform(center, angle);
+                  for (const s of allForArrayPreview) {
+                    ghosts.push(transformShape(s, transform));
+                  }
+                  for (const s of parametricGhosts) {
+                    ghosts.push(transformShape(s, transform));
+                  }
                 }
               }
-              setDrawingPreview({ type: 'modifyPreview', shapes: ghosts });
+              setDrawingPreview({
+                type: 'modifyPreview',
+                shapes: ghosts,
+                basePoint: pts[0],
+                currentPoint: worldPos,
+              });
             }
-          } else if (arrayMode === 'radial' && pts.length === 0 && (selected.length > 0 || parametricGhosts.length > 0)) {
-            // Preview radial array around cursor as center
-            const center = worldPos;
-            const totalAngleRad = (arrayAngle * Math.PI) / 180;
-            const angleStep = totalAngleRad / arrayCount;
+          }
+          break;
+        }
+        case 'elastic': {
+          if (pts.length === 0) {
+            // No points yet: nothing to preview
+            setDrawingPreview(null);
+          } else if (pts.length === 1) {
+            // Phase 1→2: Draw green selection box from first click to cursor
+            setDrawingPreview({
+              type: 'elasticBox',
+              start: pts[0],
+              end: worldPos,
+            });
+          } else if (pts.length === 2) {
+            // Phase 2→3: Box is set, waiting for base point.
+            // Keep showing the selection box as frozen.
+            setDrawingPreview({
+              type: 'elasticBox',
+              start: pts[0],
+              end: pts[1],
+            });
+          } else if (pts.length === 3) {
+            // Phase 3→4: base point set, show stretch preview
+            const boxP1 = pts[0];
+            const boxP2 = pts[1];
+            const basePoint = pts[2];
+
+            const boxMinX = Math.min(boxP1.x, boxP2.x);
+            const boxMinY = Math.min(boxP1.y, boxP2.y);
+            const boxMaxX = Math.max(boxP1.x, boxP2.x);
+            const boxMaxY = Math.max(boxP1.y, boxP2.y);
+
+            const dx = worldPos.x - basePoint.x;
+            const dy = worldPos.y - basePoint.y;
+
+            const isInsideBox = (p: Point) =>
+              p.x >= boxMinX && p.x <= boxMaxX && p.y >= boxMinY && p.y <= boxMaxY;
+
+            const drawingShapes = shapes.filter(s => s.drawingId === activeDrawingId && s.visible && !s.locked);
+            const lineLikeTypes = ['line', 'beam', 'gridline', 'wall', 'level'];
+
             const ghosts: Shape[] = [];
-            for (let i = 1; i < arrayCount; i++) {
-              const angle = angleStep * i;
-              const transform = rotateTransform(center, angle);
-              for (const s of selected) {
-                ghosts.push(transformShape(s, transform));
+
+            for (const shape of drawingShapes) {
+              const bounds = getShapeBounds(shape);
+              if (!bounds) continue;
+
+              const fullyInside =
+                bounds.minX >= boxMinX && bounds.maxX <= boxMaxX &&
+                bounds.minY >= boxMinY && bounds.maxY <= boxMaxY;
+
+              if (fullyInside) {
+                const transform = translateTransform(dx, dy);
+                ghosts.push(transformShape(shape, transform));
+                continue;
               }
-              for (const s of parametricGhosts) {
-                ghosts.push(transformShape(s, transform));
+
+              if (lineLikeTypes.includes(shape.type)) {
+                const s = shape as any;
+                const startInside = isInsideBox(s.start);
+                const endInside = isInsideBox(s.end);
+
+                if (startInside || endInside) {
+                  // Create a ghost with stretched endpoints
+                  const ghostStart = startInside
+                    ? { x: s.start.x + dx, y: s.start.y + dy }
+                    : { ...s.start };
+                  const ghostEnd = endInside
+                    ? { x: s.end.x + dx, y: s.end.y + dy }
+                    : { ...s.end };
+                  ghosts.push({ ...shape, id: `preview-${shape.id}`, start: ghostStart, end: ghostEnd } as any);
+                }
+                continue;
+              }
+
+              if (shape.type === 'polyline' || shape.type === 'spline') {
+                const s = shape as any;
+                const anyInside = s.points.some((p: Point) => isInsideBox(p));
+                if (anyInside) {
+                  const newPoints = s.points.map((p: Point) =>
+                    isInsideBox(p) ? { x: p.x + dx, y: p.y + dy } : { ...p }
+                  );
+                  ghosts.push({ ...shape, id: `preview-${shape.id}`, points: newPoints } as any);
+                }
+                continue;
+              }
+
+              // Hatch / slab: stretch individual boundary points
+              if (shape.type === 'hatch' || shape.type === 'slab') {
+                const s = shape as any;
+                const anyInside = s.points.some((p: Point) => isInsideBox(p));
+                if (anyInside) {
+                  const newPoints = s.points.map((p: Point) =>
+                    isInsideBox(p) ? { x: p.x + dx, y: p.y + dy } : { ...p }
+                  );
+                  ghosts.push({ ...shape, id: `preview-${shape.id}`, points: newPoints } as any);
+                }
+                continue;
+              }
+
+              // Plate-system / space / foundation-zone: stretch contour points
+              if (shape.type === 'plate-system' || shape.type === 'space' || shape.type === 'foundation-zone') {
+                const s = shape as any;
+                const pts2 = s.contourPoints as Point[] | undefined;
+                if (pts2 && pts2.some((p: Point) => isInsideBox(p))) {
+                  const newPoints = pts2.map((p: Point) =>
+                    isInsideBox(p) ? { x: p.x + dx, y: p.y + dy } : { ...p }
+                  );
+                  ghosts.push({ ...shape, id: `preview-${shape.id}`, contourPoints: newPoints } as any);
+                }
+                continue;
+              }
+
+              // Section-callout: stretch start/end like line-like
+              if (shape.type === 'section-callout') {
+                const s = shape as any;
+                const startInside = isInsideBox(s.start);
+                const endInside = isInsideBox(s.end);
+                if (startInside || endInside) {
+                  const ghostStart = startInside ? { x: s.start.x + dx, y: s.start.y + dy } : { ...s.start };
+                  const ghostEnd = endInside ? { x: s.end.x + dx, y: s.end.y + dy } : { ...s.end };
+                  ghosts.push({ ...shape, id: `preview-${shape.id}`, start: ghostStart, end: ghostEnd } as any);
+                }
+                continue;
+              }
+
+              // Dimension: stretch individual dimension points
+              if (shape.type === 'dimension') {
+                const s = shape as any;
+                if (s.points && s.points.length > 0) {
+                  const anyInside = s.points.some((p: Point) => isInsideBox(p));
+                  if (anyInside) {
+                    const newPoints = s.points.map((p: Point) =>
+                      isInsideBox(p) ? { x: p.x + dx, y: p.y + dy } : { ...p }
+                    );
+                    ghosts.push({ ...shape, id: `preview-${shape.id}`, points: newPoints } as any);
+                  }
+                }
+                continue;
               }
             }
-            setDrawingPreview({ type: 'modifyPreview', shapes: ghosts });
+
+            setDrawingPreview({
+              type: 'modifyPreview',
+              shapes: ghosts,
+              basePoint,
+              currentPoint: worldPos,
+            });
+          }
+          break;
+        }
+        case 'align': {
+          if (pts.length === 1) {
+            // After source point is set: show ghost shapes translated from source to cursor
+            const adx = worldPos.x - pts[0].x;
+            const ady = worldPos.y - pts[0].y;
+            const alignTransform = translateTransform(adx, ady);
+            const regularGhosts = selected.map((s) => transformShape(s, alignTransform));
+            const paramGhosts = parametricGhosts.map((s) => transformShape(s, alignTransform));
+            setDrawingPreview({
+              type: 'modifyPreview',
+              shapes: [...regularGhosts, ...paramGhosts],
+              basePoint: pts[0],
+              currentPoint: worldPos,
+            });
           }
           break;
         }
@@ -979,9 +2170,9 @@ export function useModifyTools() {
           break;
       }
     },
-    [activeTool, drawingPoints, selectedShapeIds, getSelectedShapes, getSelectedParametricShapes,
+    [activeTool, drawingPoints, selectedShapeIds, getSelectedShapes, getSelectedParametricShapes, getPlateSystemChildShapes,
      parametricShapesToGhosts, setDrawingPreview, scaleMode, arrayMode, arrayCount, arraySpacing, arrayAngle,
-     moveAxisLock]
+     constrainDelta, lockedDistance, shapes, activeDrawingId, selectedGrip]
   );
 
   /**

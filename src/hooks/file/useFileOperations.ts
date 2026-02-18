@@ -1,5 +1,4 @@
 import { useCallback } from 'react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useAppStore, generateId } from '../../state/appStore';
 import {
   showOpenDialog,
@@ -10,17 +9,24 @@ import {
   writeProjectFile,
   exportToSVG,
   exportToDXF,
-  exportToIFC,
   showError,
   showInfo,
+  showConfirm,
   showImportDxfDialog,
   parseDXF,
+  parseDXFAsUnderlay,
   parseDXFInsUnits,
+  isTauriEnvironment,
+  readTextFileUniversal,
+  writeTextFileUniversal,
+  clearBrowserFileHandle,
   type ProjectFile,
 } from '../../services/file/fileService';
+import { generateIFC } from '../../services/ifc/ifcGenerator';
+import { addRecentFile } from '../../services/file/recentFiles';
 import { logger } from '../../services/log/logService';
-import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import { DEFAULT_PROJECT_INFO } from '../../types/projectInfo';
+
 
 export function useFileOperations() {
   const setFilePath = useAppStore(s => s.setFilePath);
@@ -31,6 +37,7 @@ export function useFileOperations() {
 
   const handleNew = useCallback(async () => {
     useAppStore.getState().createNewDocument();
+    clearBrowserFileHandle();
   }, []);
 
   const handleOpen = useCallback(async () => {
@@ -41,8 +48,18 @@ export function useFileOperations() {
 
     if (extension === 'dxf') {
       try {
-        const content = await readTextFile(filePath);
+        const content = await readTextFileUniversal(filePath);
         const fileName = filePath.split(/[/\\]/).pop()?.replace('.dxf', '') || 'Untitled';
+
+        // Auto-prompt for large DXF files (>5MB)
+        let useUnderlay = false;
+        if (content.length > 5_000_000) {
+          useUnderlay = await showConfirm(
+            'Dit is een groot DXF bestand. Importeer als snelle underlay?\n\n' +
+            'OK = Underlay (snel, 1 achtergrondafbeelding)\n' +
+            'Annuleren = Shapes (trager, bewerkbare entiteiten)'
+          );
+        }
 
         const s = useAppStore.getState();
         const prevDocId = s.activeDocumentId;
@@ -57,19 +74,26 @@ export function useFileOperations() {
           projectInfo: { ...DEFAULT_PROJECT_INFO },
         });
 
-        // Now parse DXF using the new document's layer/drawing IDs
         const newState = useAppStore.getState();
-        const { shapes, blockDefinitions } = parseDXF(content, newState.activeLayerId, newState.activeDrawingId);
-        if (shapes.length === 0) {
-          await showInfo('No supported entities found in the DXF file.\n\nSupported entities: LINE, CIRCLE, ARC, ELLIPSE, POLYLINE, LWPOLYLINE, SPLINE, TEXT, MTEXT, POINT, SOLID, 3DFACE, TRACE, INSERT');
-          return;
-        }
 
-        // Add the parsed shapes and block definitions to the new document
-        const store = useAppStore.getState();
-        store.addShapes(shapes);
-        if (blockDefinitions.length > 0) {
-          store.addBlockDefinitions(blockDefinitions);
+        if (useUnderlay) {
+          const underlay = parseDXFAsUnderlay(content, newState.activeLayerId, newState.activeDrawingId, fileName);
+          if (!underlay) {
+            await showInfo('Could not rasterize DXF file. No supported entities found.');
+            return;
+          }
+          useAppStore.getState().addShapes([underlay]);
+          logger.info(`Opened DXF as underlay: ${fileName}`, 'File');
+        } else {
+          // Now parse DXF using the new document's layer/drawing IDs
+          const shapes = parseDXF(content, newState.activeLayerId, newState.activeDrawingId);
+          if (shapes.length === 0) {
+            await showInfo('No supported entities found in the DXF file.\n\nSupported entities: LINE, CIRCLE, ARC, ELLIPSE, POLYLINE, LWPOLYLINE, SPLINE, TEXT, MTEXT, POINT, SOLID, 3DFACE, TRACE');
+            return;
+          }
+
+          // Add the parsed shapes to the new document
+          useAppStore.getState().addShapes(shapes);
         }
 
         // Detect and apply DXF units
@@ -82,6 +106,7 @@ export function useFileOperations() {
           useAppStore.getState().closeDocument(prevDocId);
         }
         logger.info(`Opened DXF file: ${fileName}`, 'File');
+        addRecentFile(filePath, fileName).catch(() => {});
       } catch (err) {
         await showError(`Failed to open DXF: ${err}`);
       }
@@ -114,6 +139,12 @@ export function useFileOperations() {
         projectName: fileName,
         isModified: false,
         projectInfo: project.projectInfo || { ...DEFAULT_PROJECT_INFO },
+        // Restore per-document fields from project file (backward compatible)
+        ...(project.parametricShapes ? { parametricShapes: project.parametricShapes } : {}),
+        ...(project.textStyles ? { textStyles: project.textStyles } : {}),
+        ...(project.customTitleBlockTemplates ? { customTitleBlockTemplates: project.customTitleBlockTemplates } : {}),
+        ...(project.customSheetTemplates ? { customSheetTemplates: project.customSheetTemplates } : {}),
+        ...(project.projectPatterns ? { projectPatterns: project.projectPatterns } : {}),
       });
 
       // Restore snap settings from project
@@ -136,9 +167,9 @@ export function useFileOperations() {
       if (project.unitSettings) {
         useAppStore.getState().setUnitSettings(project.unitSettings);
       }
-      // Restore block definitions (backward compatible)
-      if (project.blockDefinitions && project.blockDefinitions.length > 0) {
-        useAppStore.getState().addBlockDefinitions(project.blockDefinitions);
+      // Restore wall types (backward compatible — global/shared state)
+      if (project.wallTypes && project.wallTypes.length > 0) {
+        useAppStore.getState().setWallTypes(project.wallTypes);
       }
 
       // Close the previous empty untitled tab
@@ -146,6 +177,7 @@ export function useFileOperations() {
         useAppStore.getState().closeDocument(prevDocId);
       }
       logger.info(`Opened project: ${fileName}`, 'File');
+      addRecentFile(filePath, fileName).catch(() => {});
     } catch (err) {
       await showError(`Failed to open file: ${err}`);
     }
@@ -189,7 +221,12 @@ export function useFileOperations() {
           erpnext: { ...s.projectInfo.erpnext, apiSecret: '' },
         },
         unitSettings: s.unitSettings,
-        blockDefinitions: s.blockDefinitions.length > 0 ? s.blockDefinitions : undefined,
+        parametricShapes: s.parametricShapes.length > 0 ? s.parametricShapes : undefined,
+        textStyles: s.textStyles.length > 0 ? s.textStyles : undefined,
+        customTitleBlockTemplates: s.customTitleBlockTemplates.length > 0 ? s.customTitleBlockTemplates : undefined,
+        customSheetTemplates: s.customSheetTemplates.length > 0 ? s.customSheetTemplates : undefined,
+        projectPatterns: s.projectPatterns.length > 0 ? s.projectPatterns : undefined,
+        wallTypes: s.wallTypes.length > 0 ? s.wallTypes : undefined,
       };
 
       await writeProjectFile(filePath, project);
@@ -199,6 +236,7 @@ export function useFileOperations() {
       const fileName = filePath.split(/[/\\]/).pop()?.replace('.o2d', '') || 'Untitled';
       setProjectName(fileName);
       logger.info(`Project saved: ${fileName}`, 'File');
+      addRecentFile(filePath, fileName).catch(() => {});
     } catch (err) {
       await showError(`Failed to save file: ${err}`);
     }
@@ -237,7 +275,12 @@ export function useFileOperations() {
           erpnext: { ...s.projectInfo.erpnext, apiSecret: '' },
         },
         unitSettings: s.unitSettings,
-        blockDefinitions: s.blockDefinitions.length > 0 ? s.blockDefinitions : undefined,
+        parametricShapes: s.parametricShapes.length > 0 ? s.parametricShapes : undefined,
+        textStyles: s.textStyles.length > 0 ? s.textStyles : undefined,
+        customTitleBlockTemplates: s.customTitleBlockTemplates.length > 0 ? s.customTitleBlockTemplates : undefined,
+        customSheetTemplates: s.customSheetTemplates.length > 0 ? s.customSheetTemplates : undefined,
+        projectPatterns: s.projectPatterns.length > 0 ? s.projectPatterns : undefined,
+        wallTypes: s.wallTypes.length > 0 ? s.wallTypes : undefined,
       };
 
       await writeProjectFile(filePath, project);
@@ -247,6 +290,7 @@ export function useFileOperations() {
       const fileName = filePath.split(/[/\\]/).pop()?.replace('.o2d', '') || 'Untitled';
       setProjectName(fileName);
       logger.info(`Project saved as: ${fileName}`, 'File');
+      addRecentFile(filePath, fileName).catch(() => {});
     } catch (err) {
       await showError(`Failed to save file: ${err}`);
     }
@@ -267,17 +311,24 @@ export function useFileOperations() {
       let content: string;
 
       if (extension === 'ifc') {
-        const customPatterns = [...s.userPatterns, ...s.projectPatterns];
-        content = exportToIFC(s.shapes, s.layers, customPatterns);
+        // Use the full parametric IFC generator for proper structural elements
+        const result = generateIFC(
+          s.shapes,
+          s.wallTypes,
+          s.slabTypes,
+          s.projectStructure,
+          s.drawings
+        );
+        content = result.content;
       } else if (extension === 'dxf') {
-        content = exportToDXF(s.shapes, s.unitSettings, s.blockDefinitions);
+        content = exportToDXF(s.shapes, s.unitSettings);
       } else if (extension === 'json') {
         content = JSON.stringify({ shapes: s.shapes, layers: s.layers }, null, 2);
       } else {
-        content = exportToSVG(s.shapes, undefined, undefined, s.blockDefinitions);
+        content = exportToSVG(s.shapes);
       }
 
-      await writeTextFile(filePath, content);
+      await writeTextFileUniversal(filePath, content);
       await showInfo(`Exported successfully to ${filePath}`);
     } catch (err) {
       await showError(`Failed to export: ${err}`);
@@ -290,7 +341,7 @@ export function useFileOperations() {
     const filePath = await showExportDialog('svg', s.projectName);
     if (!filePath) return;
     try {
-      await writeTextFile(filePath, exportToSVG(s.shapes, undefined, undefined, s.blockDefinitions));
+      await writeTextFileUniversal(filePath, exportToSVG(s.shapes), 'image/svg+xml');
       await showInfo(`Exported successfully to ${filePath}`);
     } catch (err) { await showError(`Failed to export: ${err}`); }
   }, []);
@@ -301,7 +352,7 @@ export function useFileOperations() {
     const filePath = await showExportDialog('dxf', s.projectName);
     if (!filePath) return;
     try {
-      await writeTextFile(filePath, exportToDXF(s.shapes, s.unitSettings, s.blockDefinitions));
+      await writeTextFileUniversal(filePath, exportToDXF(s.shapes, s.unitSettings));
       await showInfo(`Exported successfully to ${filePath}`);
     } catch (err) { await showError(`Failed to export: ${err}`); }
   }, []);
@@ -309,13 +360,23 @@ export function useFileOperations() {
   const handleExportIFC = useCallback(async () => {
     const s = useAppStore.getState();
     if (s.shapes.length === 0) { await showInfo('Nothing to export. Draw some shapes first.'); return; }
-    const filePath = await showExportDialog('ifc', s.projectName);
-    if (!filePath) return;
+
     try {
-      const customPatterns = [...s.userPatterns, ...s.projectPatterns];
-      await writeTextFile(filePath, exportToIFC(s.shapes, s.layers, customPatterns));
-      await showInfo(`Exported successfully to ${filePath}`);
-    } catch (err) { await showError(`Failed to export: ${err}`); }
+      // Use the full parametric IFC generator (walls, beams, slabs, etc.)
+      const result = generateIFC(
+        s.shapes,
+        s.wallTypes,
+        s.slabTypes,
+        s.projectStructure,
+        s.drawings
+      );
+      const content = result.content;
+
+      const filePath = await showExportDialog('ifc', s.projectName);
+      if (!filePath) return;
+      await writeTextFileUniversal(filePath, content, 'application/x-step');
+      await showInfo(`Exported IFC successfully to ${filePath}\n\n${result.entityCount} entities, ${(result.fileSize / 1024).toFixed(1)} KB`);
+    } catch (err) { await showError(`Failed to export IFC: ${err}`); }
   }, []);
 
   const handleExportJSON = useCallback(async () => {
@@ -324,7 +385,7 @@ export function useFileOperations() {
     const filePath = await showExportDialog('json', s.projectName);
     if (!filePath) return;
     try {
-      await writeTextFile(filePath, JSON.stringify({ shapes: s.shapes, layers: s.layers }, null, 2));
+      await writeTextFileUniversal(filePath, JSON.stringify({ shapes: s.shapes, layers: s.layers }, null, 2), 'application/json');
       await showInfo(`Exported successfully to ${filePath}`);
     } catch (err) { await showError(`Failed to export: ${err}`); }
   }, []);
@@ -334,37 +395,178 @@ export function useFileOperations() {
     if (!filePath) return;
 
     try {
-      const content = await readTextFile(filePath);
+      const content = await readTextFileUniversal(filePath);
       const s = useAppStore.getState();
-      const { shapes, blockDefinitions } = parseDXF(content, s.activeLayerId, s.activeDrawingId);
+      const shapes = parseDXF(content, s.activeLayerId, s.activeDrawingId);
       if (shapes.length === 0) {
-        await showInfo('No supported entities found in the DXF file.\n\nSupported entities: LINE, CIRCLE, ARC, ELLIPSE, POLYLINE, LWPOLYLINE, SPLINE, TEXT, MTEXT, POINT, SOLID, 3DFACE, TRACE, INSERT');
+        await showInfo('No supported entities found in the DXF file.\n\nSupported entities: LINE, CIRCLE, ARC, ELLIPSE, POLYLINE, LWPOLYLINE, SPLINE, TEXT, MTEXT, POINT, SOLID, 3DFACE, TRACE');
         return;
       }
 
       addShapes(shapes);
-      if (blockDefinitions.length > 0) {
-        useAppStore.getState().addBlockDefinitions(blockDefinitions);
-      }
 
       // Detect and apply DXF units
       const dxfUnit = parseDXFInsUnits(content);
       if (dxfUnit) {
         useAppStore.getState().setLengthUnit(dxfUnit);
       }
-      logger.info(`Imported DXF: ${shapes.length} entities (${blockDefinitions.length} block definitions)`, 'File');
+      logger.info(`Imported DXF: ${shapes.length} entities`, 'File');
     } catch (err) {
       await showError(`Failed to import DXF: ${err}`);
     }
   }, [addShapes]);
 
+  const handleImportDXFAsUnderlay = useCallback(async () => {
+    const filePath = await showImportDxfDialog();
+    if (!filePath) return;
+
+    try {
+      const content = await readTextFileUniversal(filePath);
+      const fileName = filePath.split(/[/\\]/).pop()?.replace('.dxf', '') || 'DXF';
+      const s = useAppStore.getState();
+      const underlay = parseDXFAsUnderlay(content, s.activeLayerId, s.activeDrawingId, fileName);
+      if (!underlay) {
+        await showInfo('Could not rasterize DXF file. No supported entities found.');
+        return;
+      }
+
+      addShapes([underlay]);
+
+      // Detect and apply DXF units
+      const dxfUnit = parseDXFInsUnits(content);
+      if (dxfUnit) {
+        useAppStore.getState().setLengthUnit(dxfUnit);
+      }
+      logger.info(`Imported DXF as underlay: ${fileName}`, 'File');
+    } catch (err) {
+      await showError(`Failed to import DXF as underlay: ${err}`);
+    }
+  }, [addShapes]);
+
+  /**
+   * Open a file by its absolute path (used by the Recent Files list).
+   * Reuses the same logic as handleOpen but skips the file-picker dialog.
+   */
+  const handleOpenPath = useCallback(async (filePath: string) => {
+    const extension = filePath.split('.').pop()?.toLowerCase();
+
+    if (extension === 'dxf') {
+      try {
+        const content = await readTextFileUniversal(filePath);
+        const fileName = filePath.split(/[/\\]/).pop()?.replace('.dxf', '') || 'Untitled';
+
+        const s = useAppStore.getState();
+        const prevDocId = s.activeDocumentId;
+        const isEmptyUntitled = !s.isModified && !s.currentFilePath
+          && s.shapes.length === 0 && s.projectName.startsWith('Untitled');
+
+        const docId = generateId();
+        s.openDocument(docId, {
+          projectName: fileName,
+          isModified: false,
+          projectInfo: { ...DEFAULT_PROJECT_INFO },
+        });
+
+        const newState = useAppStore.getState();
+        const shapes = parseDXF(content, newState.activeLayerId, newState.activeDrawingId);
+        if (shapes.length === 0) {
+          await showInfo('No supported entities found in the DXF file.');
+          return;
+        }
+
+        useAppStore.getState().addShapes(shapes);
+
+        const dxfUnit = parseDXFInsUnits(content);
+        if (dxfUnit) {
+          useAppStore.getState().setLengthUnit(dxfUnit);
+        }
+
+        if (isEmptyUntitled) {
+          useAppStore.getState().closeDocument(prevDocId);
+        }
+        logger.info(`Opened DXF file: ${fileName}`, 'File');
+        addRecentFile(filePath, fileName).catch(() => {});
+      } catch (err) {
+        await showError(`Failed to open DXF: ${err}`);
+      }
+      return;
+    }
+
+    try {
+      const project = await readProjectFile(filePath);
+      const fileName = filePath.split(/[/\\]/).pop()?.replace('.o2d', '') || 'Untitled';
+
+      const s = useAppStore.getState();
+      const prevDocId = s.activeDocumentId;
+      const isEmptyUntitled = !s.isModified && !s.currentFilePath
+        && s.shapes.length === 0 && s.projectName.startsWith('Untitled');
+
+      const docId = generateId();
+      s.openDocument(docId, {
+        shapes: project.shapes,
+        layers: project.layers,
+        activeLayerId: project.activeLayerId,
+        drawings: project.drawings || [],
+        sheets: project.sheets || [],
+        activeDrawingId: project.activeDrawingId || (project.drawings?.[0]?.id ?? ''),
+        activeSheetId: project.activeSheetId ?? null,
+        drawingViewports: project.drawingViewports || {},
+        sheetViewports: project.sheetViewports || {},
+        filePath,
+        projectName: fileName,
+        isModified: false,
+        projectInfo: project.projectInfo || { ...DEFAULT_PROJECT_INFO },
+        // Restore per-document fields from project file (backward compatible)
+        ...(project.parametricShapes ? { parametricShapes: project.parametricShapes } : {}),
+        ...(project.textStyles ? { textStyles: project.textStyles } : {}),
+        ...(project.customTitleBlockTemplates ? { customTitleBlockTemplates: project.customTitleBlockTemplates } : {}),
+        ...(project.customSheetTemplates ? { customSheetTemplates: project.customSheetTemplates } : {}),
+        ...(project.projectPatterns ? { projectPatterns: project.projectPatterns } : {}),
+      });
+
+      if (project.settings) {
+        const store = useAppStore.getState();
+        store.setGridSize(project.settings.gridSize);
+        if (store.gridVisible !== project.settings.gridVisible) store.toggleGrid();
+        if (store.snapEnabled !== project.settings.snapEnabled) store.toggleSnap();
+      }
+
+      if (project.filledRegionTypes && project.filledRegionTypes.length > 0) {
+        useAppStore.getState().setProjectFilledRegionTypes(project.filledRegionTypes);
+      }
+      if (project.projectInfo) {
+        useAppStore.getState().setProjectInfo(project.projectInfo);
+      }
+      if (project.unitSettings) {
+        useAppStore.getState().setUnitSettings(project.unitSettings);
+      }
+      // Restore wall types (backward compatible — global/shared state)
+      if (project.wallTypes && project.wallTypes.length > 0) {
+        useAppStore.getState().setWallTypes(project.wallTypes);
+      }
+
+      if (isEmptyUntitled) {
+        useAppStore.getState().closeDocument(prevDocId);
+      }
+      logger.info(`Opened project: ${fileName}`, 'File');
+      addRecentFile(filePath, fileName).catch(() => {});
+    } catch (err) {
+      await showError(`Failed to open file: ${err}`);
+    }
+  }, []);
+
   const handlePrint = useCallback(() => {
     setPrintDialogOpen(true);
   }, [setPrintDialogOpen]);
 
-  const handleExit = useCallback(() => {
-    getCurrentWindow().close();
+  const handleExit = useCallback(async () => {
+    if (isTauriEnvironment()) {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      getCurrentWindow().close();
+    } else {
+      window.close();
+    }
   }, []);
 
-  return { handleNew, handleOpen, handleSave, handleSaveAs, handleExport, handleExportSVG, handleExportDXF, handleExportIFC, handleExportJSON, handleImportDXF, handlePrint, handleExit };
+  return { handleNew, handleOpen, handleOpenPath, handleSave, handleSaveAs, handleExport, handleExportSVG, handleExportDXF, handleExportIFC, handleExportJSON, handleImportDXF, handleImportDXFAsUnderlay, handlePrint, handleExit };
 }

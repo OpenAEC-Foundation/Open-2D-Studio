@@ -427,13 +427,16 @@ export function InsulationIcon({ size = 24, className }: IconProps) {
 // Structural Engineering Icons
 // ============================================================================
 
-/** Beam Icon - Horizontal beam with supports */
+/** Beam Icon - Structural frame: column + beam (portal frame) */
 export function BeamIcon({ size = 24, className }: IconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <rect x="2" y="9" width="20" height="4" />
-      <line x1="2" y1="9" x2="2" y2="13" strokeWidth="2.5" />
-      <line x1="22" y1="9" x2="22" y2="13" strokeWidth="2.5" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Left column (vertical rectangle) */}
+      <rect x="3" y="6" width="4" height="16" fill="currentColor" fillOpacity="0.15" />
+      {/* Right column (vertical rectangle) */}
+      <rect x="17" y="6" width="4" height="16" fill="currentColor" fillOpacity="0.15" />
+      {/* Horizontal beam across top */}
+      <rect x="3" y="2" width="18" height="4" fill="currentColor" fillOpacity="0.15" />
     </svg>
   );
 }
@@ -659,15 +662,70 @@ export function RebarIcon({ size = 24, className }: IconProps) {
   );
 }
 
+/** Pile Icon - Plan view: plus sign with circle at center */
+export function PileIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Large plus sign */}
+      <line x1="12" y1="2" x2="12" y2="22" />
+      <line x1="2" y1="12" x2="22" y2="12" />
+      {/* Circle at center */}
+      <circle cx="12" cy="12" r="6" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+/** CPT Icon - Cone Penetration Test marker (inverted triangle with "CPT" text) */
+export function CPTIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Inverted triangle (cone tip pointing down) */}
+      <polygon points="12,20 4,6 20,6" fill="none" />
+      {/* CPT text inside */}
+      <text x="12" y="13" textAnchor="middle" fontSize="5" fill="currentColor" stroke="none" fontWeight="bold">CPT</text>
+    </svg>
+  );
+}
+
 /** Grid Line Icon - Structural grid */
 export function GridLineIcon({ size = 24, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
       {/* Circle with label at top */}
-      <circle cx="12" cy="5" r="4" />
-      <text x="12" y="7" fontSize="5" fill="currentColor" stroke="none" fontWeight="bold" fontFamily="sans-serif" textAnchor="middle">A</text>
+      <circle cx="12" cy="7" r="5.5" />
+      <text x="12" y="9" fontSize="6" fill="currentColor" stroke="none" fontWeight="bold" fontFamily="sans-serif" textAnchor="middle">A</text>
       {/* Vertical grid line */}
-      <line x1="12" y1="9" x2="12" y2="22" strokeDasharray="4 2" />
+      <line x1="12" y1="12.5" x2="12" y2="22" strokeDasharray="4 2" />
+    </svg>
+  );
+}
+
+/** Level Icon - horizontal level marker with triangle */
+export function LevelIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Triangle marker at left */}
+      <polygon points="2,12 8,8 8,16" fill="currentColor" stroke="none" />
+      {/* Horizontal dashed line */}
+      <line x1="8" y1="12" x2="21" y2="12" strokeDasharray="4 2" />
+      {/* Label text */}
+      <text x="14" y="9" fontSize="5" fill="currentColor" stroke="none" fontWeight="bold" fontFamily="sans-serif" textAnchor="middle">+3.0</text>
+    </svg>
+  );
+}
+
+/** Section/Detail Icon - Section cut with reference circle */
+export function SectionDetailIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Detail rectangle boundary */}
+      <rect x="3" y="3" width="13" height="13" strokeDasharray="3 1.5" />
+      {/* Reference circle with label */}
+      <circle cx="18" cy="18" r="4" strokeWidth="1.5" />
+      {/* Label A */}
+      <text x="18" y="20" fontSize="5" fill="currentColor" stroke="none" fontWeight="bold" fontFamily="sans-serif" textAnchor="middle">A</text>
+      {/* Connection line */}
+      <line x1="16" y1="16" x2="14.5" y2="14.5" strokeWidth="1" />
     </svg>
   );
 }
@@ -896,6 +954,20 @@ export function LeaderIcon({ size = 24, className }: IconProps) {
       <polyline points="4,18 10,10 16,10" />
       <line x1="16" y1="10" x2="21" y2="10" />
       <polygon points="4,18 6,15 7,17" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/**
+ * Label Icon - Text annotation (structural label)
+ */
+export function LabelIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Landing line under text */}
+      <line x1="4" y1="14" x2="20" y2="14" />
+      {/* Text label "C1" */}
+      <text x="12" y="12" fontSize="8" fill="currentColor" stroke="none" fontWeight="bold" fontFamily="sans-serif" textAnchor="middle">C1</text>
     </svg>
   );
 }
@@ -1174,6 +1246,26 @@ export function PartialEllipseIcon({ size = 24, className }: IconProps) {
 }
 
 /**
+ * Miter Join Icon - Two walls meeting at a clean 45-degree miter joint
+ */
+export function MiterJoinIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Horizontal wall (thick outline) */}
+      <line x1="2" y1="10" x2="14" y2="10" strokeWidth="2" />
+      <line x1="2" y1="16" x2="14" y2="16" strokeWidth="2" />
+      {/* Vertical wall (thick outline) */}
+      <line x1="14" y1="4" x2="14" y2="22" strokeWidth="2" />
+      <line x1="20" y1="4" x2="20" y2="22" strokeWidth="2" />
+      {/* Miter bisector line (diagonal cut) */}
+      <line x1="14" y1="10" x2="20" y2="16" strokeWidth="1.5" strokeDasharray="2 1.5" />
+      {/* Corner dot */}
+      <circle cx="14" cy="10" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/**
  * Pick Lines Icon - Mouse pointer selecting existing geometry
  */
 export function PickLinesIcon({ size = 24, className }: IconProps) {
@@ -1187,6 +1279,56 @@ export function PickLinesIcon({ size = 24, className }: IconProps) {
       <path d="M4 4 L4 14 L7 11 L10 17 L12 16 L9 10 L13 10 Z" fill="currentColor" strokeWidth="0.5" />
       {/* Highlight on selected line */}
       <line x1="14" y1="8" x2="20" y2="14" strokeWidth="2.5" stroke="#3b82f6" />
+    </svg>
+  );
+}
+
+/** Space Icon - Room/area with crosshair (IfcSpace) */
+export function SpaceIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Room outline */}
+      <rect x="3" y="3" width="18" height="18" strokeDasharray="3 2" />
+      {/* Light fill to suggest area */}
+      <rect x="3" y="3" width="18" height="18" fill="currentColor" opacity="0.1" stroke="none" />
+      {/* Crosshair at center */}
+      <line x1="12" y1="8" x2="12" y2="16" strokeWidth="1" />
+      <line x1="8" y1="12" x2="16" y2="12" strokeWidth="1" />
+      {/* Label text "A" */}
+      <text x="15" y="10" fontSize="6" fill="currentColor" stroke="none" fontWeight="bold">A</text>
+    </svg>
+  );
+}
+
+/**
+ * Plate System Icon - Rectangle boundary with parallel joist lines inside
+ */
+export function PlateSystemIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Outer boundary (contour) */}
+      <rect x="2" y="4" width="20" height="16" />
+      {/* Parallel joist lines */}
+      <line x1="7" y1="4" x2="7" y2="20" strokeWidth="1.5" />
+      <line x1="12" y1="4" x2="12" y2="20" strokeWidth="1.5" />
+      <line x1="17" y1="4" x2="17" y2="20" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+/** Spot Elevation Icon - Cross marker with elevation text (IfcSpotElevation) */
+export function SpotElevationIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Cross/plus marker at point */}
+      <line x1="4" y1="14" x2="10" y2="14" />
+      <line x1="7" y1="11" x2="7" y2="17" />
+      {/* Circle around cross */}
+      <circle cx="7" cy="14" r="4.5" strokeWidth="1" />
+      {/* Leader line to label */}
+      <line x1="11.5" y1="14" x2="14" y2="8" strokeWidth="1" />
+      {/* Elevation text */}
+      <text x="15" y="9" fontSize="6" fill="currentColor" stroke="none" fontWeight="bold" fontFamily="sans-serif">+3.0</text>
     </svg>
   );
 }

@@ -139,6 +139,15 @@ export function formatDimensionValue(
   return value.toFixed(precision ?? 2);
 }
 
+/**
+ * Format dimension value for DimAssociate style:
+ * Plain integer, no thousands separator, no decimals.
+ * Example: 3500 -> "3500" (NOT "3,500.00")
+ */
+export function formatDimAssociateValue(value: number): string {
+  return Math.round(value).toString();
+}
+
 // ============================================================================
 // Dimension Line Geometry
 // ============================================================================
@@ -228,8 +237,9 @@ export function calculateAlignedDimensionGeometry(
   };
 
   // Adjust text angle so it's always readable (not upside down)
+  // Use >= so that exactly-vertical (PI/2) dimensions get flipped to read from the right side
   let textAngle = angle;
-  if (textAngle > Math.PI / 2) textAngle -= Math.PI;
+  if (textAngle >= Math.PI / 2) textAngle -= Math.PI;
   if (textAngle < -Math.PI / 2) textAngle += Math.PI;
 
   return {
@@ -264,9 +274,9 @@ export function calculateRadiusDimensionGeometry(
     y: (dimStart.y + dimEnd.y) / 2,
   };
 
-  // Adjust text angle
+  // Adjust text angle so vertical dimensions read from the right side
   let textAngle = angle;
-  if (textAngle > Math.PI / 2) textAngle -= Math.PI;
+  if (textAngle >= Math.PI / 2) textAngle -= Math.PI;
   if (textAngle < -Math.PI / 2) textAngle += Math.PI;
 
   return {
@@ -296,9 +306,9 @@ export function calculateDiameterDimensionGeometry(
   // Text at center
   const textPosition = center;
 
-  // Adjust text angle
+  // Adjust text angle so vertical dimensions read from the right side
   let textAngle = angle;
-  if (textAngle > Math.PI / 2) textAngle -= Math.PI;
+  if (textAngle >= Math.PI / 2) textAngle -= Math.PI;
   if (textAngle < -Math.PI / 2) textAngle += Math.PI;
 
   return {

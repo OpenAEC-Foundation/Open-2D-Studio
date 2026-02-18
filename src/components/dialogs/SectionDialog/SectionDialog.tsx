@@ -17,17 +17,18 @@ import {
   getAllProfileTemplates,
 } from '../../../services/parametric/profileTemplates';
 import {
-  getPresetsForType,
   getAvailableStandards,
   getCategoriesForStandard,
   searchPresets,
   getPresetById,
+  getPresetsForMaterial,
 } from '../../../services/parametric/profileLibrary';
 import { generateProfileGeometry } from '../../../services/parametric/geometryGenerators';
 import type {
   ProfileType,
   ParameterValues,
   ParameterDefinition,
+  ProfileMaterial,
 } from '../../../types/parametric';
 
 interface SectionDialogProps {
@@ -44,6 +45,9 @@ export function SectionDialog({ isOpen, onClose, onInsert }: SectionDialogProps)
   const [selectedPresetId, setSelectedPresetId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [useCustom, setUseCustom] = useState(false);
+
+  // Material tab state
+  const [selectedMaterialTab, setSelectedMaterialTab] = useState<ProfileMaterial>('steel');
 
   // Parameter values (custom or from preset)
   const [parameters, setParameters] = useState<ParameterValues>({});
@@ -82,10 +86,21 @@ export function SectionDialog({ isOpen, onClose, onInsert }: SectionDialogProps)
     }
   }, [selectedPresetId]);
 
-  // Get available presets for current profile type
+  // Get presets for the selected material tab
+  const materialPresets = useMemo(() => {
+    return getPresetsForMaterial(selectedMaterialTab);
+  }, [selectedMaterialTab]);
+
+  // Get available presets for current profile type within material
   const allPresets = useMemo(() => {
-    return getPresetsForType(selectedProfileType);
-  }, [selectedProfileType]);
+    return materialPresets.filter(p => p.profileType === selectedProfileType);
+  }, [materialPresets, selectedProfileType]);
+
+  // Get profile types that exist for this material
+  const materialProfileTypes = useMemo(() => {
+    const types = new Set(materialPresets.map(p => p.profileType));
+    return getAllProfileTemplates().filter(t => types.has(t.id));
+  }, [materialPresets]);
 
   // Filter presets by standard and category (or global search)
   const filteredPresets = useMemo(() => {
@@ -115,6 +130,12 @@ export function SectionDialog({ isOpen, onClose, onInsert }: SectionDialogProps)
     }
     return groups;
   }, [searchQuery, filteredPresets]);
+
+  // Get available standards for current material tab + profile type
+  const materialStandards = useMemo(() => {
+    const standards = new Set(allPresets.map(p => p.standard));
+    return Array.from(standards);
+  }, [allPresets]);
 
   // Get available categories for current standard
   const categories = useMemo(() => {
@@ -308,6 +329,35 @@ export function SectionDialog({ isOpen, onClose, onInsert }: SectionDialogProps)
           </div>
         </div>
 
+        {/* Material Tabs */}
+        <div className="px-3 py-1 border-b border-cad-border bg-cad-surface flex gap-1 overflow-x-auto">
+          {([
+            { key: 'steel' as ProfileMaterial, label: 'Steel' },
+            { key: 'cold-formed-steel' as ProfileMaterial, label: 'Cold-Formed' },
+            { key: 'concrete' as ProfileMaterial, label: 'Concrete' },
+            { key: 'timber' as ProfileMaterial, label: 'Timber' },
+            { key: 'aluminum' as ProfileMaterial, label: 'Aluminum' },
+            { key: 'other' as ProfileMaterial, label: 'Other' },
+          ]).map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => {
+                setSelectedMaterialTab(tab.key);
+                setSelectedPresetId('');
+                setSelectedCategory('');
+                setSearchQuery('');
+              }}
+              className={`px-2.5 py-1 text-[10px] font-medium whitespace-nowrap transition-colors border-b-2 ${
+                selectedMaterialTab === tab.key
+                  ? 'border-cad-accent text-cad-accent'
+                  : 'border-transparent text-cad-text-dim hover:text-cad-text hover:border-cad-border'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
         {/* Content */}
         <div className="flex-1 flex overflow-hidden">
           {/* Left: Profile Type & Presets */}
@@ -315,7 +365,7 @@ export function SectionDialog({ isOpen, onClose, onInsert }: SectionDialogProps)
             {/* Filters (hidden during search) */}
             {!searchQuery && (
               <>
-                {/* Profile Type Selection */}
+                {/* Profile Type Selection (filtered by material) */}
                 <div className="p-3 border-b border-cad-border">
                   <label className="block text-xs text-cad-text-dim mb-1">Profile Type:</label>
                   <select
@@ -327,7 +377,7 @@ export function SectionDialog({ isOpen, onClose, onInsert }: SectionDialogProps)
                     }}
                     className="w-full px-2 py-1.5 text-sm bg-cad-input border border-cad-border text-cad-text"
                   >
-                    {getAllProfileTemplates().map(t => (
+                    {(materialProfileTypes.length > 0 ? materialProfileTypes : getAllProfileTemplates()).map(t => (
                       <option key={t.id} value={t.id}>{t.name}</option>
                     ))}
                   </select>
@@ -347,7 +397,7 @@ export function SectionDialog({ isOpen, onClose, onInsert }: SectionDialogProps)
                         }}
                         className="w-full px-2 py-1 text-xs bg-cad-input border border-cad-border text-cad-text"
                       >
-                        {getAvailableStandards().map(std => (
+                        {(materialStandards.length > 0 ? materialStandards : getAvailableStandards()).map(std => (
                           <option key={std} value={std}>{std}</option>
                         ))}
                       </select>

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import { useAppStore } from '../../state/appStore';
 import { CADRenderer } from '../../engine/renderer/CADRenderer';
 import { useCanvasEvents } from '../../hooks/canvas/useCanvasEvents';
@@ -6,11 +6,323 @@ import { useContextMenu } from '../../hooks/canvas/useContextMenu';
 import { useDrawingKeyboard } from '../../hooks/keyboard/useDrawingKeyboard';
 import { DynamicInput } from './DynamicInput/DynamicInput';
 import { TextEditor } from '../editors/TextEditor/TextEditor';
-import { TitleBlockFieldEditor } from '../editors/TitleBlockFieldEditor/TitleBlockFieldEditor';
 import { ContextMenu } from '../shared/ContextMenu';
-import type { TextShape, Point } from '../../types/geometry';
+import type { TextShape, GridlineShape, Point } from '../../types/geometry';
 import { MM_TO_PIXELS } from '../../engine/renderer/types';
-import { screenToWorld } from '../../engine/geometry/GeometryUtils';
+import { screenToWorld, worldToScreen } from '../../engine/geometry/GeometryUtils';
+import { setRotationGizmoVisible } from '../../engine/renderer/rotationGizmoState';
+import { parseSpacingPattern, createGridlinesFromPattern } from '../../utils/gridlineUtils';
+import { regenerateGridDimensions } from '../../utils/gridDimensionUtils';
+
+function GridlineLabelInput({ shape, bubbleEnd, viewport, onSave, onCancel, drawingScale }: {
+  shape: GridlineShape;
+  bubbleEnd: 'start' | 'end';
+  viewport: { offsetX: number; offsetY: number; zoom: number };
+  onSave: (newLabel: string) => void;
+  onCancel: () => void;
+  drawingScale?: number;
+}) {
+  const [value, setValue] = useState(shape.label);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Scale bubbleRadius to match rendering (annotation reference scale = 0.01)
+  const sf = drawingScale && drawingScale > 0 ? 0.01 / drawingScale : 1;
+  const bubbleRadius = shape.bubbleRadius * sf;
+
+  const angle = Math.atan2(shape.end.y - shape.start.y, shape.end.x - shape.start.x);
+  const dx = Math.cos(angle), dy = Math.sin(angle);
+  const worldPos = bubbleEnd === 'start'
+    ? { x: shape.start.x - dx * bubbleRadius, y: shape.start.y - dy * bubbleRadius }
+    : { x: shape.end.x + dx * bubbleRadius, y: shape.end.y + dy * bubbleRadius };
+  const screenPos = worldToScreen(worldPos.x, worldPos.y, viewport);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  return (
+    <input
+      ref={inputRef}
+      value={value}
+      onChange={e => setValue(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === 'Enter') onSave(value);
+        if (e.key === 'Escape') onCancel();
+        e.stopPropagation();
+      }}
+      onBlur={() => onSave(value)}
+      className="absolute text-center bg-cad-surface border border-blue-500 text-cad-text rounded z-50"
+      style={{
+        left: screenPos.x - 20,
+        top: screenPos.y - 12,
+        width: 40,
+        height: 24,
+        fontSize: 12,
+      }}
+    />
+  );
+}
+
+/** View rotation control - single button with angle input */
+function ViewRotationControl() {
+  const [showInput, setShowInput] = useState(false);
+  const [inputValue, setInputValue] = useState('');
+  const rotation = useAppStore(s => s.viewport.rotation || 0);
+  const rotationDeg = Math.round(rotation * 180 / Math.PI);
+
+  const handleSubmit = () => {
+    const angle = parseFloat(inputValue);
+    if (!isNaN(angle)) {
+      // Set absolute rotation: rotate from current to target
+      useAppStore.getState().rotateView(angle - rotationDeg);
+    }
+    setShowInput(false);
+    setInputValue('');
+  };
+
+  return (
+    <div className="absolute top-3 right-3 flex items-center gap-1" style={{ zIndex: 20 }}>
+      {showInput && (
+        <input
+          type="text"
+          className="w-14 h-8 px-1 text-xs text-center bg-gray-800/90 border border-gray-500 text-white rounded backdrop-blur-sm"
+          value={inputValue}
+          onChange={e => setInputValue(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleSubmit(); if (e.key === 'Escape') { setShowInput(false); setInputValue(''); } }}
+          onBlur={handleSubmit}
+          autoFocus
+          placeholder="0°"
+        />
+      )}
+      <div
+        className="w-10 h-10 rounded-full bg-gray-800/80 border border-gray-600 flex items-center justify-center backdrop-blur-sm cursor-pointer hover:bg-gray-700"
+        onClick={() => { setShowInput(true); setInputValue(String(rotationDeg)); }}
+        title={`View rotation: ${rotationDeg}° (click to enter angle)`}
+      >
+        <svg width="28" height="28" viewBox="0 0 28 28">
+          <circle cx="14" cy="14" r="12" fill="none" stroke="#6b7280" strokeWidth="1" />
+          <line
+            x1="14" y1="2" x2="14" y2="8"
+            stroke="#ef4444" strokeWidth="2"
+            transform={`rotate(${rotationDeg}, 14, 14)`}
+          />
+          <circle cx="14" cy="14" r="2" fill="#9ca3af" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * GridlinePlusButton - Small blue "+" button that appears at the bottom end of a selected gridline.
+ * Clicking it opens a spacing pattern popup to create multiple gridlines at specified spacings.
+ */
+function GridlinePlusButton({ gridline, viewport, drawingScale }: {
+  gridline: GridlineShape;
+  viewport: { offsetX: number; offsetY: number; zoom: number };
+  drawingScale?: number;
+}) {
+  const [showPopup, setShowPopup] = useState(false);
+  const [pattern, setPattern] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const addShapes = useAppStore(s => s.addShapes);
+
+  // Compute the "bottom" end of the gridline (the end with lower Y in world coords,
+  // which maps to lower screen position since canvas Y is flipped)
+  // For vertical gridlines, "bottom" = smaller Y (lower end on screen)
+  // We position the button just past the end of the visible line (past the extension + bubble)
+  const sf = drawingScale && drawingScale > 0 ? 0.01 / drawingScale : 1;
+  const gridlineExtension = useAppStore(s => s.gridlineExtension) * sf;
+  const bubbleR = gridline.bubbleRadius * sf;
+
+  const angle = Math.atan2(gridline.end.y - gridline.start.y, gridline.end.x - gridline.start.x);
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+
+  // Position the "+" button at the "end" side of the gridline (past the bubble)
+  // The bubble outer edge is at: end + dx * (ext + 2*bubbleR)
+  const buttonWorldPos: Point = {
+    x: gridline.end.x + dx * (gridlineExtension + bubbleR * 2 + 30 * sf),
+    y: gridline.end.y + dy * (gridlineExtension + bubbleR * 2 + 30 * sf),
+  };
+
+  const screenPos = worldToScreen(buttonWorldPos.x, buttonWorldPos.y, viewport);
+
+  useEffect(() => {
+    if (showPopup) {
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [showPopup]);
+
+  const handleCreate = () => {
+    const newGridlines = createGridlinesFromPattern(gridline, pattern);
+    if (newGridlines.length > 0) {
+      addShapes(newGridlines);
+      setPattern('');
+      setShowPopup(false);
+
+      // Auto-dimension: regenerate grid dimensions if enabled
+      if (useAppStore.getState().autoGridDimension) {
+        setTimeout(() => regenerateGridDimensions(), 50);
+      }
+    }
+  };
+
+  const isValid = pattern.trim() !== '' && parseSpacingPattern(pattern) !== null;
+
+  return (
+    <>
+      {/* Blue "+" circle button */}
+      <button
+        className="absolute flex items-center justify-center rounded-full bg-blue-500 hover:bg-blue-400 text-white shadow-lg border-2 border-blue-300 transition-colors"
+        style={{
+          left: screenPos.x - 12,
+          top: screenPos.y - 12,
+          width: 24,
+          height: 24,
+          fontSize: 16,
+          lineHeight: '1',
+          zIndex: 45,
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          setShowPopup(!showPopup);
+        }}
+        title="Add gridlines with spacing pattern"
+      >
+        +
+      </button>
+
+      {/* Spacing pattern popup */}
+      {showPopup && (
+        <div
+          className="absolute bg-cad-surface border border-cad-border rounded shadow-xl p-3 space-y-2"
+          style={{
+            left: screenPos.x + 16,
+            top: screenPos.y - 8,
+            width: 240,
+            zIndex: 50,
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="text-xs font-semibold text-cad-text">Spacing Pattern</div>
+          <div className="text-[10px] text-cad-text-dim">
+            Enter distances separated by spaces. Use NxD for repeats (e.g. 3x5000).
+          </div>
+          <div className="flex gap-1">
+            <input
+              ref={inputRef}
+              type="text"
+              value={pattern}
+              onChange={(e) => setPattern(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); handleCreate(); }
+                if (e.key === 'Escape') { e.preventDefault(); setShowPopup(false); setPattern(''); }
+              }}
+              placeholder="5000 3000 3x5400"
+              className="flex-1 bg-cad-bg border border-cad-border rounded px-2 py-1 text-xs text-cad-text"
+            />
+            <button
+              onClick={handleCreate}
+              disabled={!isValid}
+              className="px-2 py-1 text-xs bg-blue-500/20 border border-blue-500/50 text-blue-400 hover:bg-blue-500/30 rounded disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              Create
+            </button>
+          </div>
+          <button
+            onClick={() => { setShowPopup(false); setPattern(''); }}
+            className="w-full h-6 text-[10px] text-cad-text-secondary hover:bg-cad-hover rounded"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Floating toolbar shown above the plate system boundary when in edit mode */
+function PlateSystemEditToolbar() {
+  const plateSystemEditMode = useAppStore(s => s.plateSystemEditMode);
+  const editingPlateSystemId = useAppStore(s => s.editingPlateSystemId);
+  const subTool = useAppStore(s => s.plateSystemSubTool);
+  const setSubTool = useAppStore(s => s.setPlateSystemSubTool);
+  const viewport = useAppStore(s => s.viewport);
+
+  const editingShape = useAppStore(s => {
+    if (!s.editingPlateSystemId) return null;
+    return s.shapes.find(sh => sh.id === s.editingPlateSystemId && sh.type === 'plate-system') as import('../../types/geometry').PlateSystemShape | undefined ?? null;
+  });
+
+  if (!plateSystemEditMode || !editingPlateSystemId || !editingShape) return null;
+
+  // Find top-center of the contour in screen coordinates
+  const pts = editingShape.contourPoints;
+  if (!pts || pts.length < 3) return null;
+
+  let minY = Infinity;
+  let cx = 0;
+  for (const p of pts) {
+    if (p.y < minY) minY = p.y;
+    cx += p.x;
+  }
+  cx /= pts.length;
+
+  // World -> screen
+  const screenX = cx * viewport.zoom + viewport.offsetX;
+  const screenY = minY * viewport.zoom + viewport.offsetY;
+
+  const tools: { id: typeof subTool; label: string; title: string }[] = [
+    { id: 'select', label: 'Select', title: 'Select / drag vertices, edges, openings' },
+    { id: 'add-point', label: '+Pt', title: 'Click on edge to insert vertex' },
+    { id: 'arc-edge', label: 'Arc', title: 'Click edge to toggle straight/arc' },
+    { id: 'add-opening', label: '+Open', title: 'Click inside contour to place opening' },
+    { id: 'delete', label: 'Del', title: 'Click vertex or opening to delete' },
+  ];
+
+  return (
+    <div
+      className="absolute flex items-center gap-0.5 pointer-events-auto z-40"
+      style={{
+        left: screenX,
+        top: Math.max(4, screenY - 40),
+        transform: 'translateX(-50%)',
+      }}
+      onMouseDown={e => e.stopPropagation()}
+      onClick={e => e.stopPropagation()}
+    >
+      {/* Edit label */}
+      <div className="px-1.5 py-1 bg-cyan-900/85 text-cyan-300 text-[10px] font-bold rounded-l select-none">
+        Edit
+      </div>
+
+      {/* Sub-tool buttons */}
+      {tools.map((t) => (
+        <button
+          key={t.id}
+          className={`px-2 py-1 text-[10px] border-y border-r transition-colors select-none ${
+            subTool === t.id
+              ? 'bg-cyan-600/90 border-cyan-400 text-white font-bold'
+              : 'bg-gray-800/85 border-gray-600/60 text-gray-300 hover:bg-gray-700/90 hover:text-white'
+          } ${t.id === 'select' ? 'border-l border-l-cyan-700' : ''}`}
+          onClick={() => setSubTool(t.id)}
+          title={t.title}
+        >
+          {t.label}
+        </button>
+      ))}
+
+      {/* TAB hint */}
+      <div className="px-1.5 py-1 bg-gray-800/75 text-gray-500 text-[9px] rounded-r select-none ml-0.5">
+        TAB
+      </div>
+    </div>
+  );
+}
 
 export function Canvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -28,6 +340,26 @@ export function Canvas() {
   const updatePlacementPreview = useAppStore(s => s.updatePlacementPreview);
   const confirmPlacement = useAppStore(s => s.confirmPlacement);
   const setViewport = useAppStore(s => s.setViewport);
+  const endGridlineLabelEdit = useAppStore(s => s.endGridlineLabelEdit);
+
+  // Gridline label editing state
+  const editingGridlineLabel = useAppStore(s => s.editingGridlineLabel);
+  const editingGridlineShape = useAppStore(s => {
+    if (!s.editingGridlineLabel) return null;
+    return (s.shapes.find(sh => sh.id === s.editingGridlineLabel!.shapeId && sh.type === 'gridline') as GridlineShape | undefined) || null;
+  });
+  const viewportForOverlay = useAppStore(s => s.viewport);
+  const activeDrawingScale = useAppStore(s => {
+    const drawing = s.drawings.find(d => d.id === s.activeDrawingId);
+    return drawing?.scale;
+  });
+
+  // Selected gridline for "+" button overlay (only when exactly one gridline is selected)
+  const selectedGridline = useAppStore(s => {
+    if (s.selectedShapeIds.length !== 1) return null;
+    const shape = s.shapes.find(sh => sh.id === s.selectedShapeIds[0] && sh.type === 'gridline');
+    return (shape as GridlineShape | undefined) || null;
+  });
 
   // Initialize renderer
   useEffect(() => {
@@ -87,10 +419,6 @@ export function Canvas() {
     hasCenteredRef.current = true;
   });
 
-  // Get title block editing state (needs React re-render for overlay)
-  const hoveredTitleBlockFieldId = useAppStore(s => s.hoveredTitleBlockFieldId);
-  const editorMode = useAppStore(s => s.editorMode);
-
   // Get text shape being edited (needs React re-render for overlay)
   const editingTextShape = useAppStore(s => {
     if (!s.textEditingId) return null;
@@ -120,6 +448,20 @@ export function Canvas() {
     endTextEditing();
   }, [deleteShape, endTextEditing]);
 
+  // Handle gridline label save
+  const handleGridlineLabelSave = useCallback((newLabel: string) => {
+    const editing = useAppStore.getState().editingGridlineLabel;
+    if (editing && newLabel.trim()) {
+      updateShape(editing.shapeId, { label: newLabel.trim() });
+    }
+    endGridlineLabelEdit();
+  }, [updateShape, endGridlineLabelEdit]);
+
+  // Handle gridline label cancel
+  const handleGridlineLabelCancel = useCallback(() => {
+    endGridlineLabelEdit();
+  }, [endGridlineLabelEdit]);
+
   // rAF render loop — reads state directly from Zustand, no deps array
   useEffect(() => {
     const renderer = rendererRef.current;
@@ -134,6 +476,8 @@ export function Canvas() {
     // This ensures the canvas re-renders after the image is ready
     renderer.setOnImageLoadCallback(() => { dirty = true; });
 
+    let renderErrorLogged = false;
+
     const tick = () => {
       if (dirty) {
         // Skip rendering if a transaction is suppressing renders
@@ -144,6 +488,8 @@ export function Canvas() {
         }
 
         dirty = false;
+
+        try {
         const s = useAppStore.getState();
 
         if (s.editorMode === 'sheet') {
@@ -157,7 +503,7 @@ export function Canvas() {
               layers: s.layers,
               viewport: s.viewport,
               selectedViewportId: s.viewportEditState.selectedViewportId,
-              viewportDragging: s.viewportEditState.isDragging || s.viewportEditState.isMoving,
+              viewportDragging: s.viewportEditState.isDragging,
               drawingViewports: s.drawingViewports,
               cropRegionEditing: s.cropRegionEditState?.isEditing || false,
               cropRegionViewportId: s.cropRegionEditState?.viewportId || null,
@@ -173,20 +519,11 @@ export function Canvas() {
                 projectPatterns: s.projectPatterns,
               },
               showLineweight: s.showLineweight,
-              hoveredTitleBlockFieldId: s.hoveredTitleBlockFieldId,
-              editingTitleBlockFieldId: s.titleBlockEditingFieldId,
-              customTitleBlockTemplates: s.customTitleBlockTemplates,
-              viewportMovePreview: s.viewportEditState.isMoving && s.viewportEditState.selectedViewportId && s.viewportEditState.moveSnappedPos
-                ? (() => {
-                    const vp = activeSheet!.viewports.find(v => v.id === s.viewportEditState.selectedViewportId);
-                    if (!vp) return null;
-                    return {
-                      viewportId: s.viewportEditState.selectedViewportId!,
-                      dx: s.viewportEditState.moveSnappedPos!.x - vp.x,
-                      dy: s.viewportEditState.moveSnappedPos!.y - vp.y,
-                    };
-                  })()
-                : null,
+              wallTypes: s.wallTypes,
+              materialHatchSettings: s.materialHatchSettings,
+              gridlineExtension: s.gridlineExtension,
+              seaLevelDatum: s.projectStructure?.seaLevelDatum ?? 0,
+              hiddenIfcCategories: s.hiddenIfcCategories ?? [],
             });
           }
         } else {
@@ -195,14 +532,26 @@ export function Canvas() {
           const filteredLayers = s.layers.filter(layer => layer.drawingId === s.activeDrawingId);
           const activeDrawing = s.drawings.find(d => d.id === s.activeDrawingId) || null;
 
+          // Sync rotation gizmo state for the renderer
+          setRotationGizmoVisible(s.showRotationGizmo);
+
+          // Apply selection filter: when active, only highlight shapes of the filtered type
+          const effectiveSelectedIds = s.selectionFilter
+            ? s.selectedShapeIds.filter(id => {
+                const shape = filteredShapes.find(sh => sh.id === id);
+                return shape && shape.type === s.selectionFilter;
+              })
+            : s.selectedShapeIds;
+
           renderer.render({
             shapes: filteredShapes,
             parametricShapes: filteredParametricShapes,
-            selectedShapeIds: s.selectedShapeIds,
+            selectedShapeIds: effectiveSelectedIds,
             hoveredShapeId: s.hoveredShapeId,
             viewport: s.viewport,
             drawingScale: activeDrawing?.scale,
             gridVisible: s.gridVisible,
+            axesVisible: s.axesVisible,
             gridSize: s.gridSize,
             drawingPreview: s.drawingPreview,
             currentStyle: s.currentStyle,
@@ -226,9 +575,18 @@ export function Canvas() {
             cursor2D: s.cursor2D,
             cursor2DVisible: s.cursor2DVisible,
             showLineweight: s.showLineweight,
-            blockDefinitions: s.blockDefinitions,
-            showRotationGizmo: s.showRotationGizmo,
+            wallTypes: s.wallTypes,
+            materialHatchSettings: s.materialHatchSettings,
+            gridlineExtension: s.gridlineExtension,
+            seaLevelDatum: s.projectStructure?.seaLevelDatum ?? 0,
+            hiddenIfcCategories: s.hiddenIfcCategories ?? [],
           });
+        }
+        } catch (err) {
+          if (!renderErrorLogged) {
+            console.error('[Canvas] Render error:', err);
+            renderErrorLogged = true;
+          }
         }
       }
       rafId = requestAnimationFrame(tick);
@@ -243,13 +601,8 @@ export function Canvas() {
   }, []);
 
   // Handle mouse events
-  const { handleMouseDown, handleMouseMove, handleMouseUp, handleWheel, handleClick, handleDoubleClick, handleContextMenu: baseHandleContextMenu, isPanning, titleBlockEditing } =
+  const { handleMouseDown, handleMouseMove, handleMouseUp, handleWheel, handleClick, handleDoubleClick, handleContextMenu: baseHandleContextMenu, isPanning, consumeRightDrag } =
     useCanvasEvents(canvasRef);
-
-  // Get editing field screen rect for the overlay (must be after useCanvasEvents)
-  // Subscribe to titleBlockEditingFieldId to trigger re-render when editing starts/stops
-  const titleBlockEditingFieldId = useAppStore(s => s.titleBlockEditingFieldId);
-  const editingFieldScreenRect = titleBlockEditingFieldId ? titleBlockEditing.getEditingFieldScreenRect() : null;
 
   // Context menu state
   const { menuState, openMenu, closeMenu, getMenuItems } = useContextMenu();
@@ -260,6 +613,14 @@ export function Canvas() {
   // Extended context menu handler that opens our React menu
   const handleContextMenu = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
+      // If a right-drag just finished (2D cursor placement), suppress context menu entirely.
+      // This must be checked BEFORE any other logic to prevent the menu from opening
+      // after a right-drag in select mode.
+      if (consumeRightDrag()) {
+        e.preventDefault();
+        return;
+      }
+
       const s = useAppStore.getState();
 
       // Shift+Right-Click: place 2D cursor
@@ -309,7 +670,7 @@ export function Canvas() {
       // Fall back to base handler for other cases
       baseHandleContextMenu(e);
     },
-    [baseHandleContextMenu, openMenu, setCursor2D]
+    [baseHandleContextMenu, openMenu, setCursor2D, consumeRightDrag]
   );
 
   // Attach wheel listener with passive: false to allow preventDefault
@@ -375,10 +736,6 @@ export function Canvas() {
     if (isPanning) {
       return 'cursor-grabbing';
     }
-    // Show text cursor when hovering a title block field in sheet mode
-    if (editorMode === 'sheet' && hoveredTitleBlockFieldId) {
-      return 'cursor-text';
-    }
     switch (activeTool) {
       case 'pan':
         return 'cursor-grab';
@@ -389,10 +746,11 @@ export function Canvas() {
     }
   };
 
+
   return (
     <div
       ref={containerRef}
-      className={`flex-1 relative overflow-hidden ${whiteBackground ? 'bg-white' : 'bg-cad-bg'}`}
+      className={`h-full w-full relative overflow-hidden ${whiteBackground ? 'bg-white' : 'bg-cad-bg'}`}
     >
       <canvas
         ref={canvasRef}
@@ -417,19 +775,29 @@ export function Canvas() {
         />
       )}
 
-      {/* Title Block Field Editor Overlay */}
-      {editingFieldScreenRect && (
-        <TitleBlockFieldEditor
-          x={editingFieldScreenRect.x}
-          y={editingFieldScreenRect.y}
-          width={editingFieldScreenRect.width}
-          height={editingFieldScreenRect.height}
-          fieldRect={editingFieldScreenRect.fieldRect}
-          zoom={useAppStore.getState().viewport.zoom}
-          onSave={titleBlockEditing.saveFieldValue}
-          onCancel={titleBlockEditing.cancelFieldEditing}
+      {/* Gridline Label Editor Overlay */}
+      {editingGridlineLabel && editingGridlineShape && (
+        <GridlineLabelInput
+          shape={editingGridlineShape}
+          bubbleEnd={editingGridlineLabel.bubbleEnd}
+          viewport={viewportForOverlay}
+          onSave={handleGridlineLabelSave}
+          onCancel={handleGridlineLabelCancel}
+          drawingScale={activeDrawingScale}
         />
       )}
+
+      {/* Gridline "+" Button Overlay - shows when a single gridline is selected */}
+      {selectedGridline && activeTool === 'select' && (
+        <GridlinePlusButton
+          gridline={selectedGridline}
+          viewport={viewportForOverlay}
+          drawingScale={activeDrawingScale}
+        />
+      )}
+
+      {/* Plate System Edit Mode Toolbar Overlay */}
+      <PlateSystemEditToolbar />
 
       {/* Origin indicator - CAD convention: X right, Y up */}
       <div className="absolute bottom-4 left-4 pointer-events-none">
@@ -449,6 +817,9 @@ export function Canvas() {
           <text x="38" y="53" fill="#ef4444" fontSize="12" fontWeight="bold">X</text>
         </svg>
       </div>
+
+      {/* View Rotation Control */}
+      <ViewRotationControl />
 
       {/* Context Menu */}
       {menuState.isOpen && (

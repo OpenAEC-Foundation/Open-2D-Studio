@@ -1,6 +1,100 @@
 import { useEffect } from 'react';
 import { useAppStore } from '../../state/appStore';
 import { getShapeBounds } from '../../engine/geometry/GeometryUtils';
+import { getNextSectionLabel } from '../drawing/useSectionCalloutDrawing';
+import type { Point, Shape } from '../../types/geometry';
+
+/**
+ * Compute the default rotation center for a shape.
+ * - Line-like shapes (line, beam, wall, gridline, level, section-callout): start point
+ * - Center-based shapes (circle, arc, ellipse): center
+ * - Position-based shapes (text, point, pile, cpt, image, spot-elevation): position
+ * - Polygon shapes (polyline, spline, hatch, slab, space, plate-system, foundation-zone): centroid of points
+ * - Rectangle: center of the rectangle
+ * - Dimension: first reference point
+ */
+function getShapeRotationCenter(shape: Shape): Point | null {
+  switch (shape.type) {
+    // Line-like shapes: use start point
+    case 'line':
+    case 'beam':
+    case 'wall':
+    case 'gridline':
+    case 'level':
+    case 'section-callout':
+      return { x: shape.start.x, y: shape.start.y };
+
+    // Center-based shapes: use center
+    case 'circle':
+    case 'arc':
+    case 'ellipse':
+      return { x: shape.center.x, y: shape.center.y };
+
+    // Position-based shapes: use position
+    case 'text':
+    case 'point':
+    case 'pile':
+    case 'cpt':
+    case 'image':
+    case 'spot-elevation':
+      return { x: shape.position.x, y: shape.position.y };
+
+    // Rectangle: use center
+    case 'rectangle':
+      return {
+        x: shape.topLeft.x + shape.width / 2,
+        y: shape.topLeft.y + shape.height / 2,
+      };
+
+    // Polygon shapes: compute centroid
+    case 'polyline':
+    case 'spline': {
+      if (shape.points.length === 0) return null;
+      const sumX = shape.points.reduce((s, p) => s + p.x, 0);
+      const sumY = shape.points.reduce((s, p) => s + p.y, 0);
+      return { x: sumX / shape.points.length, y: sumY / shape.points.length };
+    }
+    case 'hatch': {
+      if (shape.points.length === 0) return null;
+      const sumX = shape.points.reduce((s, p) => s + p.x, 0);
+      const sumY = shape.points.reduce((s, p) => s + p.y, 0);
+      return { x: sumX / shape.points.length, y: sumY / shape.points.length };
+    }
+    case 'slab': {
+      if (shape.points.length === 0) return null;
+      const sumX = shape.points.reduce((s, p) => s + p.x, 0);
+      const sumY = shape.points.reduce((s, p) => s + p.y, 0);
+      return { x: sumX / shape.points.length, y: sumY / shape.points.length };
+    }
+    case 'space': {
+      if (shape.contourPoints.length === 0) return null;
+      const sumX = shape.contourPoints.reduce((s, p) => s + p.x, 0);
+      const sumY = shape.contourPoints.reduce((s, p) => s + p.y, 0);
+      return { x: sumX / shape.contourPoints.length, y: sumY / shape.contourPoints.length };
+    }
+    case 'plate-system': {
+      if (shape.contourPoints.length === 0) return null;
+      const sumX = shape.contourPoints.reduce((s, p) => s + p.x, 0);
+      const sumY = shape.contourPoints.reduce((s, p) => s + p.y, 0);
+      return { x: sumX / shape.contourPoints.length, y: sumY / shape.contourPoints.length };
+    }
+    case 'foundation-zone': {
+      if (shape.contourPoints.length === 0) return null;
+      const sumX = shape.contourPoints.reduce((s, p) => s + p.x, 0);
+      const sumY = shape.contourPoints.reduce((s, p) => s + p.y, 0);
+      return { x: sumX / shape.contourPoints.length, y: sumY / shape.contourPoints.length };
+    }
+
+    // Dimension: first point
+    case 'dimension': {
+      if (shape.points.length === 0) return null;
+      return { x: shape.points[0].x, y: shape.points[0].y };
+    }
+
+    default:
+      return null;
+  }
+}
 
 // Common viewport scales (as ratios, e.g., 0.01 = 1:100)
 const VIEWPORT_SCALES = [
@@ -21,6 +115,7 @@ const TWO_KEY_SHORTCUTS: Record<string, string> = {
   'md': 'select',
   'mv': 'move',
   'co': 'copy',
+  'cc': 'copy2',
   'ro': 'rotate',
   'mm': 'mirror',
   're': 'scale',
@@ -44,7 +139,23 @@ const TWO_KEY_SHORTCUTS: Record<string, string> = {
   'dd': 'dimension-diameter',
   'se': 'section',  // Structural section
   'be': 'beam',     // Structural beam
+  'gl': 'gridline', // Structural grid line
+  'pi': 'pile',     // Foundation pile
+  'ct': 'cpt',      // CPT (Cone Penetration Test) marker
+  'wa': 'wall',     // Structural wall
+  'al': 'align',    // Align tool
+  'ay': 'array',    // Array tool
+  'tw': 'trim-walls', // Trim walls/beams miter join
+  'sl': 'slab',     // Floor slab
+  'ps': 'plate-system', // Plate system (timber floor, HSB wall, ceiling)
+  'lv': 'level',    // Floor level
+  'lb': 'label',    // Structural label
   'im': 'image',    // Image import
+  'rm': 'space',    // IfcSpace (room)
+  'sv': 'spot-elevation',  // Spot elevation marker
+  'cs': 'create-similar',  // Create Similar
+  'tl': 'toggle-thin-lines',  // Toggle thin/thick line display
+  'za': 'zoom-all',           // Zoom to fit all shapes
 };
 
 const TWO_KEY_TIMEOUT = 750; // ms to wait for second key
@@ -88,8 +199,20 @@ export function useKeyboardShortcuts() {
     activeDocumentId,
     documentOrder,
     // Dialogs
-    openSectionDialog,
     openBeamDialog,
+    setPendingGridline,
+    setPendingLevel,
+    openPileDialog,
+    setPendingPile,
+    setPendingCPT,
+    setPendingWall,
+    lastUsedWallTypeId,
+    setLastUsedWallTypeId,
+    wallTypes,
+    setPendingSlab,
+    setPendingSectionCallout,
+    setPendingSpace,
+    openPlateSystemDialog,
     setFindReplaceDialogOpen,
     findReplaceDialogOpen,
     // Clipboard
@@ -110,6 +233,18 @@ export function useKeyboardShortcuts() {
     resetCursor2D,
     setCursor2DToSelected,
     snapSelectionToCursor2D,
+    // Modify constraint
+    modifyConstrainAxis,
+    setModifyConstrainAxis,
+    toggleModifyOrtho,
+    drawingPoints,
+    // Display toggle
+    toggleShowLineweight,
+    // Plate system edit mode
+    plateSystemEditMode,
+    editingPlateSystemId,
+    setPlateSystemEditMode,
+    shapes,
   } = useAppStore();
 
   useEffect(() => {
@@ -177,15 +312,23 @@ export function useKeyboardShortcuts() {
         }
       }
 
-      // Axis lock toggle for move/copy tools (X/Y keys during active move/copy)
-      if (!ctrl && !shift && (key === 'x' || key === 'y')) {
-        const s = useAppStore.getState();
-        if ((s.activeTool === 'move' || s.activeTool === 'copy') && s.drawingPoints.length >= 1) {
-          e.preventDefault();
-          clearPending();
-          s.toggleMoveAxisLock(key);
-          return;
-        }
+      // Shift toggles sticky ortho for move/copy/copy2/array (when base point is set)
+      if (key === 'shift' &&
+          (activeTool === 'move' || activeTool === 'copy' || activeTool === 'copy2' || activeTool === 'array') && drawingPoints.length >= 1) {
+        e.preventDefault();
+        toggleModifyOrtho();
+        return;
+      }
+
+      // X/Y axis constraint for move/copy/array (when base point is set)
+      if (!ctrl && !shift && (key === 'x' || key === 'y') &&
+          (activeTool === 'move' || activeTool === 'copy' || activeTool === 'copy2' || activeTool === 'array') && drawingPoints.length >= 1) {
+        e.preventDefault();
+        clearPending();
+        const axis = key as 'x' | 'y';
+        // Toggle: pressing same axis again removes constraint
+        setModifyConstrainAxis(modifyConstrainAxis === axis ? null : axis);
+        return;
       }
 
       // Two-key sequence handling (two-key style)
@@ -201,18 +344,244 @@ export function useKeyboardShortcuts() {
               const mode = tool.replace('dimension-', '') as any;
               setDimensionMode(mode);
               setActiveTool('dimension');
-            } else if (tool === 'section') {
-              // Section opens a dialog, not a tool
-              if (editorMode === 'drawing') {
-                openSectionDialog();
-              }
-            } else if (tool === 'beam') {
-              // Beam opens a dialog, not a tool
+            } else if (tool === 'section' || tool === 'beam') {
+              // Column/Beam opens a combined dialog
               if (editorMode === 'drawing') {
                 openBeamDialog();
               }
+            } else if (tool === 'gridline') {
+              // Gridline starts drawing directly with defaults
+              if (editorMode === 'drawing') {
+                setPendingGridline({ label: '1', bubblePosition: 'both', bubbleRadius: 300, fontSize: 250 });
+                setActiveTool('gridline');
+              }
+            } else if (tool === 'level') {
+              // Level starts drawing directly with defaults
+              if (editorMode === 'drawing') {
+                setPendingLevel({ label: '0', labelPosition: 'end', bubbleRadius: 400, fontSize: 250, elevation: 0, peil: 0 });
+                setActiveTool('level');
+              }
+            } else if (tool === 'pile') {
+              // Pile opens a dialog
+              if (editorMode === 'drawing') {
+                openPileDialog();
+              }
+            } else if (tool === 'cpt') {
+              // CPT starts placement with defaults
+              if (editorMode === 'drawing') {
+                setPendingCPT({
+                  name: 'CPT-01',
+                  fontSize: 150,
+                  markerSize: 300,
+                });
+                setActiveTool('cpt');
+              }
+            } else if (tool === 'wall') {
+              // Wall starts drawing directly — use last-used wall type or default
+              if (editorMode === 'drawing') {
+                const defaultTypeId = lastUsedWallTypeId ?? 'beton-200';
+                const wt = wallTypes.find(w => w.id === defaultTypeId);
+                setPendingWall({
+                  thickness: wt?.thickness ?? 200,
+                  wallTypeId: defaultTypeId,
+                  justification: 'center',
+                  showCenterline: true,
+                  startCap: 'butt',
+                  endCap: 'butt',
+                  continueDrawing: true,
+                  shapeMode: 'line',
+                  spaceBounding: true,
+                });
+                setActiveTool('wall');
+              }
+            } else if (tool === 'slab') {
+              // Slab starts drawing directly with defaults
+              if (editorMode === 'drawing') {
+                setPendingSlab({
+                  thickness: 200,
+                  level: '0',
+                  elevation: 0,
+                  material: 'concrete',
+                  shapeMode: 'line',
+                });
+                setActiveTool('slab');
+              }
+            } else if (tool === 'space') {
+              // Space (IfcSpace) starts detecting directly with defaults
+              if (editorMode === 'drawing') {
+                setPendingSpace({
+                  name: 'Room',
+                  fillColor: '#00ff00',
+                  fillOpacity: 0.1,
+                });
+                setActiveTool('space');
+              }
+            } else if (tool === 'plate-system') {
+              // Plate System opens a dialog
+              if (editorMode === 'drawing') {
+                openPlateSystemDialog();
+              }
+            } else if (tool === 'spot-elevation') {
+              // Spot Elevation starts drawing directly
+              if (editorMode === 'drawing') {
+                setActiveTool('spot-elevation');
+              }
+            } else if (tool === 'create-similar') {
+              // Create Similar: activate the tool matching the selected shape type
+              if (editorMode === 'drawing') {
+                const s = useAppStore.getState();
+                if (s.selectedShapeIds.length > 0) {
+                  const selShape = s.shapes.find(sh => sh.id === s.selectedShapeIds[0]);
+                  if (selShape) {
+                    // For text shapes with leader, activate leader tool instead
+                    const txt = selShape as any;
+                    const isLeader = selShape.type === 'text' && (txt.leaderPoints?.length > 0 || txt.leaders?.length > 0);
+
+                    const typeToTool: Record<string, string> = {
+                      line: 'line', rectangle: 'rectangle', circle: 'circle',
+                      arc: 'arc', polyline: 'polyline', ellipse: 'ellipse',
+                      spline: 'spline', text: 'text', dimension: 'dimension',
+                      hatch: 'hatch', gridline: 'gridline', level: 'level', wall: 'wall',
+                      slab: 'slab', beam: 'beam', pile: 'pile', cpt: 'cpt', space: 'space',
+                      'plate-system': 'plate-system', 'section-callout': 'section-callout',
+                      'spot-elevation': 'spot-elevation',
+                    };
+                    const mappedTool = isLeader ? 'leader' : typeToTool[selShape.type];
+                    if (mappedTool === 'gridline') {
+                      const gl = selShape as any;
+                      setPendingGridline({ label: gl.label || '1', bubblePosition: gl.bubblePosition || 'both', bubbleRadius: gl.bubbleRadius || 450, fontSize: gl.fontSize || 315 });
+                    } else if (mappedTool === 'level') {
+                      const lv = selShape as any;
+                      setPendingLevel({ label: lv.label || '0', labelPosition: 'end', bubbleRadius: lv.bubbleRadius || 400, fontSize: lv.fontSize || 250, elevation: lv.elevation ?? 0, peil: lv.peil ?? 0, description: lv.description });
+                    } else if (mappedTool === 'wall') {
+                      const wl = selShape as any;
+                      setPendingWall({
+                        thickness: wl.thickness || 200, wallTypeId: wl.wallTypeId,
+                        justification: wl.justification || 'center',
+                        showCenterline: wl.showCenterline ?? true, startCap: wl.startCap || 'butt',
+                        endCap: wl.endCap || 'butt',
+                        continueDrawing: true,
+                        shapeMode: 'line',
+                        spaceBounding: wl.spaceBounding ?? true,
+                      });
+                      if (wl.wallTypeId) {
+                        setLastUsedWallTypeId(wl.wallTypeId);
+                      }
+                    } else if (mappedTool === 'slab') {
+                      const sb = selShape as any;
+                      setPendingSlab({
+                        thickness: sb.thickness || 200,
+                        level: sb.level || '0',
+                        elevation: sb.elevation ?? 0,
+                        material: sb.material || 'concrete',
+                        shapeMode: 'line',
+                      });
+                    } else if (mappedTool === 'beam') {
+                      const bm = selShape as any;
+                      useAppStore.getState().setPendingBeam({
+                        profileType: bm.profileType || 'i-beam',
+                        parameters: bm.profileParameters || {},
+                        presetId: bm.presetId,
+                        presetName: bm.presetName,
+                        flangeWidth: bm.flangeWidth || 200,
+                        material: bm.material || 'steel',
+                        justification: bm.justification || 'center',
+                        showCenterline: bm.showCenterline ?? true,
+                        showLabel: bm.showLabel ?? false,
+                        continueDrawing: true,
+                        viewMode: bm.viewMode || 'plan',
+                        shapeMode: 'line',
+                      });
+                    } else if (mappedTool === 'pile') {
+                      const pl = selShape as any;
+                      setPendingPile({
+                        label: pl.label || 'P1',
+                        diameter: pl.diameter || 300,
+                        fontSize: pl.fontSize || 150,
+                        showCross: pl.showCross ?? true,
+                      });
+                    } else if (mappedTool === 'cpt') {
+                      const cp = selShape as any;
+                      setPendingCPT({
+                        name: cp.name || 'CPT-01',
+                        fontSize: cp.fontSize || 150,
+                        markerSize: cp.markerSize || 300,
+                      });
+                    } else if (mappedTool === 'plate-system') {
+                      // Plate system: open the dialog for configuration
+                      openPlateSystemDialog();
+                    } else if (mappedTool === 'section-callout') {
+                      const sc = selShape as any;
+                      setPendingSectionCallout({
+                        label: sc.label || getNextSectionLabel(),
+                        bubbleRadius: sc.bubbleRadius || 400,
+                        fontSize: sc.fontSize || 250,
+                        flipDirection: sc.flipDirection ?? false,
+                        viewDepth: sc.viewDepth ?? 5000,
+                      });
+                    } else if (mappedTool === 'dimension') {
+                      const dm = selShape as any;
+                      // Set dimension mode to match the selected dimension's type
+                      if (dm.dimensionType) {
+                        setDimensionMode(dm.dimensionType);
+                      }
+                    } else if (mappedTool === 'leader') {
+                      // Copy leader config from the selected text shape
+                      if (txt.leaderConfig) {
+                        useAppStore.getState().updateDefaultLeaderConfig(txt.leaderConfig);
+                      }
+                    }
+                    // Copy style for basic geometry shapes
+                    if (mappedTool && ['line', 'rectangle', 'circle', 'arc', 'polyline', 'ellipse', 'spline'].includes(mappedTool)) {
+                      useAppStore.getState().setCurrentStyle(selShape.style);
+                    }
+                    if (mappedTool) {
+                      setActiveTool(mappedTool as any);
+                    }
+                  }
+                }
+              }
+            } else if (tool === 'toggle-thin-lines') {
+              // Toggle thin/thick line display
+              toggleShowLineweight();
+            } else if (tool === 'zoom-all') {
+              // Zoom to fit all shapes in viewport
+              zoomToFit();
             } else {
               setActiveTool(tool as any);
+              // If activating 'move' with a grip-selected endpoint, auto-set base point
+              if (tool === 'move') {
+                const st = useAppStore.getState();
+                if (st.selectedGrip && st.selectedShapeIds.length > 0) {
+                  const gripShape = st.shapes.find(sh => sh.id === st.selectedGrip!.shapeId);
+                  if (gripShape) {
+                    const endpointKey = st.selectedGrip.gripIndex === 0 ? 'start' : 'end';
+                    const endpoint = (gripShape as any)[endpointKey];
+                    if (endpoint) {
+                      st.addDrawingPoint(endpoint);
+                    }
+                  }
+                }
+              }
+              // If activating 'rotate' with shapes selected, auto-set rotation
+              // center to the first selected shape's start point (for line-like
+              // shapes) or center/position, and add a horizontal reference ray
+              // so rotation begins immediately on mouse move.
+              if (tool === 'rotate') {
+                const st = useAppStore.getState();
+                if (st.selectedShapeIds.length > 0) {
+                  const firstShape = st.shapes.find(sh => sh.id === st.selectedShapeIds[0]);
+                  if (firstShape) {
+                    const center = getShapeRotationCenter(firstShape);
+                    if (center) {
+                      // Point 1: rotation center
+                      st.addDrawingPoint(center);
+                      // Point 2: horizontal reference ray (start angle = 0)
+                      st.addDrawingPoint({ x: center.x + 1000, y: center.y });
+                    }
+                  }
+                }
+              }
             }
             return;
           }
@@ -222,6 +591,12 @@ export function useKeyboardShortcuts() {
         // Check if this key could be the start of a two-key combo
         const possibleCombos = Object.keys(TWO_KEY_SHORTCUTS).filter(k => k[0] === key);
         if (possibleCombos.length > 0) {
+          // Special case: 'g' with shapes selected → execute move immediately
+          // (skip 750ms two-key timeout since 'gl' is rarely wanted with a selection)
+          if (key === 'g' && useAppStore.getState().selectedShapeIds.length > 0) {
+            executeSingleKey('g');
+            return;
+          }
           pendingKey = key;
           pendingTimer = setTimeout(() => {
             // Timer expired — no second key, so execute single-key action
@@ -246,14 +621,65 @@ export function useKeyboardShortcuts() {
       if (key === 'escape') {
         if (printDialogOpen) return;
         clearPending();
-        // Cancel viewport move if active
-        const s = useAppStore.getState();
-        if (s.viewportEditState.isMoving) {
-          s.cancelViewportMove();
+        // Plate system edit mode: cascaded ESC
+        if (plateSystemEditMode) {
+          const s = useAppStore.getState();
+          // 1) If sub-tool is not 'select', go back to select
+          if (s.plateSystemSubTool !== 'select') {
+            s.setPlateSystemSubTool('select');
+            return;
+          }
+          // 2) If an opening is selected, deselect it
+          if (s.selectedOpeningId) {
+            s.setSelectedOpeningId(null);
+            return;
+          }
+          // 3) Exit edit mode
+          setPlateSystemEditMode(false);
+          deselectAll();
           return;
         }
         setActiveTool('select');
         return;
+      }
+
+      // TAB (no modifiers): toggle plate system edit mode
+      if (key === 'tab' && !ctrl && !shift) {
+        // If already in plate system edit mode, exit it
+        if (plateSystemEditMode) {
+          e.preventDefault();
+          setPlateSystemEditMode(false);
+          // Select the parent plate system when exiting edit mode
+          if (editingPlateSystemId) {
+            const s = useAppStore.getState();
+            const parentExists = s.shapes.find(sh => sh.id === editingPlateSystemId);
+            if (parentExists) {
+              s.selectShapes([editingPlateSystemId]);
+            }
+          }
+          return;
+        }
+        // If a plate system is selected (or a child beam of one), enter edit mode
+        if (activeTool === 'select' && selectedShapeIds.length > 0) {
+          const s = useAppStore.getState();
+          const selectedShape = s.shapes.find(sh => sh.id === selectedShapeIds[0]);
+          if (selectedShape) {
+            if (selectedShape.type === 'plate-system') {
+              e.preventDefault();
+              setPlateSystemEditMode(true, selectedShape.id);
+              return;
+            }
+            // If a child beam is selected, enter edit mode for its parent system
+            if (selectedShape.type === 'beam') {
+              const beam = selectedShape as import('../../types/geometry').BeamShape;
+              if (beam.plateSystemId) {
+                e.preventDefault();
+                setPlateSystemEditMode(true, beam.plateSystemId);
+                return;
+              }
+            }
+          }
+        }
       }
 
       // Non-tool single keys
@@ -261,12 +687,40 @@ export function useKeyboardShortcuts() {
         switch (key) {
           case 'delete':
           case 'backspace':
+            // Delete selected opening in plate system edit mode
+            if (plateSystemEditMode && editingPlateSystemId) {
+              const s = useAppStore.getState();
+              if (s.selectedOpeningId) {
+                const ps = s.shapes.find(sh => sh.id === editingPlateSystemId) as import('../../types/geometry').PlateSystemShape | undefined;
+                if (ps?.openings) {
+                  s.updateShape(editingPlateSystemId, {
+                    openings: ps.openings.filter(o => o.id !== s.selectedOpeningId),
+                  } as any);
+                  s.setSelectedOpeningId(null);
+                }
+                break;
+              }
+            }
             if (editorMode === 'sheet' && viewportEditState.selectedViewportId && activeSheetId) {
               deleteSheetViewport(activeSheetId, viewportEditState.selectedViewportId);
             } else if (selectedShapeIds.length > 0) {
               deleteSelectedShapes();
             }
             break;
+          // Number keys 1-5: plate system sub-tool shortcuts
+          case '1':
+          case '2':
+          case '3':
+          case '4':
+          case '5': {
+            if (plateSystemEditMode) {
+              const subTools = ['select', 'add-point', 'arc-edge', 'add-opening', 'delete'] as const;
+              const idx = parseInt(key) - 1;
+              useAppStore.getState().setPlateSystemSubTool(subTools[idx]);
+              break;
+            }
+            break;
+          }
           case '=':
           case '+':
             zoomIn();
@@ -410,36 +864,38 @@ export function useKeyboardShortcuts() {
       // Single-letter shortcuts for tools, visibility and locking
       switch (k) {
         case 'g': {
+          setActiveTool('move');
+          // Auto-set base point for immediate move
           const s = useAppStore.getState();
-          if (s.editorMode === 'sheet') {
-            // Sheet mode: start viewport move with base point at viewport center
-            if (s.viewportEditState.selectedViewportId && s.activeSheetId) {
-              const sheet = s.sheets.find(sh => sh.id === s.activeSheetId);
-              const vp = sheet?.viewports.find(v => v.id === s.viewportEditState.selectedViewportId);
-              if (vp && !vp.locked) {
-                s.startViewportMove({ x: vp.x + vp.width / 2, y: vp.y + vp.height / 2 });
+          if (s.selectedShapeIds.length > 0) {
+            // If a grip (endpoint) is selected via box selection, use that endpoint as base point
+            if (s.selectedGrip) {
+              const gripShape = s.shapes.find(sh => sh.id === s.selectedGrip!.shapeId);
+              if (gripShape) {
+                const endpointKey = s.selectedGrip.gripIndex === 0 ? 'start' : 'end';
+                const endpoint = (gripShape as any)[endpointKey];
+                if (endpoint) {
+                  s.addDrawingPoint(endpoint);
+                  break;
+                }
               }
             }
-          } else {
-            // Drawing mode: activate move tool with auto base point
-            setActiveTool('move');
-            if (s.selectedShapeIds.length > 0) {
-              const idSet = new Set(s.selectedShapeIds);
-              const selected = s.shapes.filter(sh => idSet.has(sh.id));
-              if (selected.length > 0) {
-                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-                for (const sh of selected) {
-                  const b = getShapeBounds(sh);
-                  if (b) {
-                    minX = Math.min(minX, b.minX);
-                    minY = Math.min(minY, b.minY);
-                    maxX = Math.max(maxX, b.maxX);
-                    maxY = Math.max(maxY, b.maxY);
-                  }
+            // Default: use center of selected shapes
+            const idSet = new Set(s.selectedShapeIds);
+            const selected = s.shapes.filter(sh => idSet.has(sh.id));
+            if (selected.length > 0) {
+              let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+              for (const sh of selected) {
+                const b = getShapeBounds(sh);
+                if (b) {
+                  minX = Math.min(minX, b.minX);
+                  minY = Math.min(minY, b.minY);
+                  maxX = Math.max(maxX, b.maxX);
+                  maxY = Math.max(maxY, b.maxY);
                 }
-                if (minX !== Infinity) {
-                  s.addDrawingPoint({ x: (minX + maxX) / 2, y: (minY + maxY) / 2 });
-                }
+              }
+              if (minX !== Infinity) {
+                s.addDrawingPoint({ x: (minX + maxX) / 2, y: (minY + maxY) / 2 });
               }
             }
           }
@@ -451,7 +907,10 @@ export function useKeyboardShortcuts() {
         case 'i':
           isolateSelectedShapes();
           break;
-        case 'l':
+        case 'e':
+          setActiveTool('elastic');
+          break;
+      case 'l':
           lockSelectedShapes();
           break;
       }
@@ -495,8 +954,10 @@ export function useKeyboardShortcuts() {
     switchDocument,
     activeDocumentId,
     documentOrder,
-    openSectionDialog,
     openBeamDialog,
+    setPendingPile,
+    setPendingSectionCallout,
+    setPendingSpace,
     setFindReplaceDialogOpen,
     findReplaceDialogOpen,
     copySelectedShapes,
@@ -512,5 +973,14 @@ export function useKeyboardShortcuts() {
     resetCursor2D,
     setCursor2DToSelected,
     snapSelectionToCursor2D,
+    modifyConstrainAxis,
+    setModifyConstrainAxis,
+    toggleModifyOrtho,
+    drawingPoints,
+    toggleShowLineweight,
+    plateSystemEditMode,
+    editingPlateSystemId,
+    setPlateSystemEditMode,
+    shapes,
   ]);
 }

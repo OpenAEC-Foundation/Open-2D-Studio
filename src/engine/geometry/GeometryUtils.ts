@@ -3,7 +3,7 @@
  * Calibration seed: [77,111,106,116,97,98,97,32,75,97,114,105,109,105]
  */
 
-import type { Point, Shape, RectangleShape, TextShape, ArcShape, EllipseShape, HatchShape, BeamShape, ImageShape, BlockDefinition, BlockInstanceShape } from '../../types/geometry';
+import type { Point, Shape, RectangleShape, TextShape, ArcShape, EllipseShape, HatchShape, BeamShape, ImageShape, GridlineShape, PileShape, WallShape, SlabShape, LevelShape, SectionCalloutShape, SpaceShape, PlateSystemShape, SpotElevationShape, CPTShape, FoundationZoneShape } from '../../types/geometry';
 import type { ParametricShape, ProfileParametricShape } from '../../types/parametric';
 import { isPointNearSpline } from './SplineUtils';
 import type { DimensionShape } from '../../types/dimension';
@@ -13,6 +13,7 @@ import {
   calculateDiameterDimensionGeometry,
   calculateAngularDimensionGeometry,
 } from './DimensionUtils';
+import { CAD_DEFAULT_FONT } from '../../constants/cadDefaults';
 
 /**
  * Shape bounding box
@@ -22,6 +23,22 @@ export interface ShapeBounds {
   minY: number;
   maxX: number;
   maxY: number;
+}
+
+/**
+ * Reference drawing scale for annotation sizing (1:100 = 0.01).
+ * Bubble/text sizes are defined at this reference scale and adjusted
+ * at render time so they appear at a constant paper size.
+ */
+const ANNOTATION_REFERENCE_SCALE = 0.01;
+
+/**
+ * Compute the annotation scale factor for gridline/level/section-callout bubbles.
+ * Returns 1 when drawingScale is undefined or equals the reference scale.
+ */
+function annotationScaleFactor(drawingScale?: number): number {
+  if (!drawingScale || drawingScale <= 0) return 1;
+  return ANNOTATION_REFERENCE_SCALE / drawingScale;
 }
 
 /**
@@ -63,6 +80,40 @@ export function isPointNearBeam(point: Point, shape: BeamShape, tolerance: numbe
   const { start, end, flangeWidth } = shape;
   const halfWidth = flangeWidth / 2;
 
+  // --- Arc beam hit testing ---
+  if (shape.bulge && Math.abs(shape.bulge) > 0.0001) {
+    const arc = bulgeToArc(start, end, shape.bulge);
+    const { center, radius, startAngle, endAngle, clockwise } = arc;
+
+    // Inner/outer radii (beam is always centered on its centerline)
+    const innerR = radius - halfWidth;
+    const outerR = radius + halfWidth;
+
+    const dx = point.x - center.x;
+    const dy = point.y - center.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    // Check if within the arc sweep angle AND between inner/outer radii
+    const ptAngle = Math.atan2(dy, dx);
+    const inSweep = isAngleInArc(ptAngle, startAngle, endAngle, clockwise);
+
+    if (inSweep && dist >= innerR - tolerance && dist <= outerR + tolerance) {
+      return true;
+    }
+
+    // Check proximity to the two radial end-cap line segments
+    const innerStart: Point = { x: center.x + innerR * Math.cos(startAngle), y: center.y + innerR * Math.sin(startAngle) };
+    const outerStart: Point = { x: center.x + outerR * Math.cos(startAngle), y: center.y + outerR * Math.sin(startAngle) };
+    const innerEnd: Point = { x: center.x + innerR * Math.cos(endAngle), y: center.y + innerR * Math.sin(endAngle) };
+    const outerEnd: Point = { x: center.x + outerR * Math.cos(endAngle), y: center.y + outerR * Math.sin(endAngle) };
+
+    if (isPointNearLine(point, innerStart, outerStart, tolerance)) return true;
+    if (isPointNearLine(point, innerEnd, outerEnd, tolerance)) return true;
+
+    return false;
+  }
+
+  // --- Straight beam hit testing ---
   // Calculate beam direction and perpendicular
   const dx = end.x - start.x;
   const dy = end.y - start.y;
@@ -97,6 +148,386 @@ export function isPointNearBeam(point: Point, shape: BeamShape, tolerance: numbe
 }
 
 /**
+ * Check if a point is near a gridline shape (line + bubbles)
+ */
+export function isPointNearGridline(point: Point, shape: GridlineShape, tolerance: number, drawingScale?: number): boolean {
+  const { start, end, bubblePosition } = shape;
+  const sf = annotationScaleFactor(drawingScale);
+  const bubbleRadius = shape.bubbleRadius * sf;
+
+  // Check if near the dash-dot line
+  if (isPointNearLine(point, start, end, tolerance)) {
+    return true;
+  }
+
+  // Check if near any bubble circle
+  const angle = Math.atan2(end.y - start.y, end.x - start.x);
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+
+  if (bubblePosition === 'start' || bubblePosition === 'both') {
+    const cx = start.x - dx * bubbleRadius;
+    const cy = start.y - dy * bubbleRadius;
+    const dist = Math.sqrt((point.x - cx) ** 2 + (point.y - cy) ** 2);
+    if (Math.abs(dist - bubbleRadius) < tolerance || dist < bubbleRadius) {
+      return true;
+    }
+  }
+
+  if (bubblePosition === 'end' || bubblePosition === 'both') {
+    const cx = end.x + dx * bubbleRadius;
+    const cy = end.y + dy * bubbleRadius;
+    const dist = Math.sqrt((point.x - cx) ** 2 + (point.y - cy) ** 2);
+    if (Math.abs(dist - bubbleRadius) < tolerance || dist < bubbleRadius) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Check if a point is near a level shape (dashed line + triangle markers)
+ */
+export function isPointNearLevel(point: Point, shape: LevelShape, tolerance: number, drawingScale?: number): boolean {
+  const { start, end, labelPosition } = shape;
+  const sf = annotationScaleFactor(drawingScale);
+  const bubbleRadius = shape.bubbleRadius * sf;
+
+  // Check if near the dashed line
+  if (isPointNearLine(point, start, end, tolerance)) {
+    return true;
+  }
+
+  // Check if near triangle markers at start/end
+  const angle = Math.atan2(end.y - start.y, end.x - start.x);
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+
+  if (labelPosition === 'start' || labelPosition === 'both') {
+    const cx = start.x - dx * bubbleRadius;
+    const cy = start.y - dy * bubbleRadius;
+    const dist = Math.sqrt((point.x - cx) ** 2 + (point.y - cy) ** 2);
+    if (dist <= bubbleRadius * 1.2) {
+      return true;
+    }
+  }
+
+  if (labelPosition === 'end' || labelPosition === 'both') {
+    const cx = end.x + dx * bubbleRadius;
+    const cy = end.y + dy * bubbleRadius;
+    const dist = Math.sqrt((point.x - cx) ** 2 + (point.y - cy) ** 2);
+    if (dist <= bubbleRadius * 1.2) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Check if a point is near a pile shape (circle + cross)
+ */
+export function isPointNearPile(point: Point, shape: PileShape, tolerance: number): boolean {
+  const { position, diameter } = shape;
+  const radius = diameter / 2;
+  const dist = Math.sqrt((point.x - position.x) ** 2 + (point.y - position.y) ** 2);
+  // Near circle edge or inside circle
+  return Math.abs(dist - radius) < tolerance || dist < radius;
+}
+
+/**
+ * Check if a point is near a spot elevation shape (marker or label)
+ */
+export function isPointNearSpotElevation(point: Point, shape: SpotElevationShape, tolerance: number, drawingScale?: number): boolean {
+  const { position, labelPosition, markerSize } = shape;
+  const sf = drawingScale ? (0.01 / drawingScale) : 1;
+  const ms = (markerSize || 200) * sf;
+  // Near marker position
+  const distMarker = Math.sqrt((point.x - position.x) ** 2 + (point.y - position.y) ** 2);
+  if (distMarker < ms + tolerance) return true;
+  // Near label position
+  const distLabel = Math.sqrt((point.x - labelPosition.x) ** 2 + (point.y - labelPosition.y) ** 2);
+  if (distLabel < ms * 2 + tolerance) return true;
+  // Near leader line (if applicable)
+  if (shape.showLeader) {
+    const dx = labelPosition.x - position.x;
+    const dy = labelPosition.y - position.y;
+    const lineLen = Math.sqrt(dx * dx + dy * dy);
+    if (lineLen > 0.001) {
+      const t = Math.max(0, Math.min(1, ((point.x - position.x) * dx + (point.y - position.y) * dy) / (lineLen * lineLen)));
+      const closestX = position.x + t * dx;
+      const closestY = position.y + t * dy;
+      const distLine = Math.sqrt((point.x - closestX) ** 2 + (point.y - closestY) ** 2);
+      if (distLine < tolerance) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if a point is near a CPT marker shape
+ */
+export function isPointNearCPT(point: Point, shape: CPTShape, tolerance: number, drawingScale?: number): boolean {
+  const { position, markerSize } = shape;
+  const sf = drawingScale ? (0.01 / drawingScale) : 1;
+  const ms = (markerSize || 300) * sf;
+  // Check if point is within the triangle bounding box (generous)
+  const dx = Math.abs(point.x - position.x);
+  const dy = Math.abs(point.y - position.y);
+  return dx < ms * 0.6 + tolerance && dy < ms * 0.7 + tolerance;
+}
+
+/**
+ * Check if a point is near (inside) a foundation zone polygon
+ */
+export function isPointNearFoundationZone(point: Point, shape: FoundationZoneShape, tolerance: number): boolean {
+  const { contourPoints } = shape;
+  if (contourPoints.length < 3) return false;
+
+  // Point-in-polygon test (ray casting)
+  let inside = false;
+  for (let i = 0, j = contourPoints.length - 1; i < contourPoints.length; j = i++) {
+    const xi = contourPoints[i].x, yi = contourPoints[i].y;
+    const xj = contourPoints[j].x, yj = contourPoints[j].y;
+
+    const intersect = ((yi > point.y) !== (yj > point.y)) &&
+      (point.x < (xj - xi) * (point.y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  if (inside) return true;
+
+  // Also check if near any edge
+  for (let i = 0; i < contourPoints.length; i++) {
+    const j = (i + 1) % contourPoints.length;
+    if (isPointNearLine(point, contourPoints[i], contourPoints[j], tolerance)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if a point is near a wall shape (rectangular plan view)
+ */
+export function isPointNearWall(point: Point, shape: WallShape, tolerance: number): boolean {
+  const { start, end, thickness, justification } = shape;
+
+  // --- Arc wall hit testing ---
+  if (shape.bulge && Math.abs(shape.bulge) > 0.0001) {
+    const arc = bulgeToArc(start, end, shape.bulge);
+    const { center, radius, startAngle, endAngle, clockwise } = arc;
+
+    // Determine inner/outer radii based on justification
+    let innerR: number;
+    let outerR: number;
+    if (justification === 'left') {
+      // Wall extends to visual left (-perp direction from chord)
+      innerR = radius;
+      outerR = radius + thickness;
+    } else if (justification === 'right') {
+      // Wall extends to visual right (+perp direction from chord)
+      innerR = radius - thickness;
+      outerR = radius;
+    } else {
+      // Center justified
+      innerR = radius - thickness / 2;
+      outerR = radius + thickness / 2;
+    }
+
+    const dx = point.x - center.x;
+    const dy = point.y - center.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    // Check if within the arc sweep angle AND between inner/outer radii
+    const ptAngle = Math.atan2(dy, dx);
+    const inSweep = isAngleInArc(ptAngle, startAngle, endAngle, clockwise);
+
+    if (inSweep && dist >= innerR - tolerance && dist <= outerR + tolerance) {
+      return true;
+    }
+
+    // Check proximity to the two radial end-cap line segments
+    const innerStart: Point = { x: center.x + innerR * Math.cos(startAngle), y: center.y + innerR * Math.sin(startAngle) };
+    const outerStart: Point = { x: center.x + outerR * Math.cos(startAngle), y: center.y + outerR * Math.sin(startAngle) };
+    const innerEnd: Point = { x: center.x + innerR * Math.cos(endAngle), y: center.y + innerR * Math.sin(endAngle) };
+    const outerEnd: Point = { x: center.x + outerR * Math.cos(endAngle), y: center.y + outerR * Math.sin(endAngle) };
+
+    if (isPointNearLine(point, innerStart, outerStart, tolerance)) return true;
+    if (isPointNearLine(point, innerEnd, outerEnd, tolerance)) return true;
+
+    return false;
+  }
+
+  // --- Straight wall hit testing ---
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const length = Math.sqrt(dx * dx + dy * dy);
+  if (length === 0) return false;
+
+  const ux = dx / length;
+  const uy = dy / length;
+  const px = -uy;
+  const py = ux;
+
+  // Determine how much thickness goes to each side based on justification
+  // px, py is the math-CCW perpendicular (visual right in screen Y-down coords).
+  // +perp = visual right, -perp = visual left when looking from start to end.
+  let leftThick: number;
+  let rightThick: number;
+  if (justification === 'left') {
+    // Wall extends to visual left (-perp direction)
+    leftThick = 0;
+    rightThick = thickness;
+  } else if (justification === 'right') {
+    // Wall extends to visual right (+perp direction)
+    leftThick = thickness;
+    rightThick = 0;
+  } else {
+    leftThick = thickness / 2;
+    rightThick = thickness / 2;
+  }
+
+  const corners: Point[] = [
+    { x: start.x + px * leftThick, y: start.y + py * leftThick },
+    { x: end.x + px * leftThick, y: end.y + py * leftThick },
+    { x: end.x - px * rightThick, y: end.y - py * rightThick },
+    { x: start.x - px * rightThick, y: start.y - py * rightThick },
+  ];
+
+  // Check if near any edge
+  for (let i = 0; i < corners.length; i++) {
+    const j = (i + 1) % corners.length;
+    if (isPointNearLine(point, corners[i], corners[j], tolerance)) {
+      return true;
+    }
+  }
+
+  // Check if inside the wall rectangle
+  return isPointInPolygon(point, corners);
+}
+
+/**
+ * Check if a point is near a slab shape (closed polygon hit test)
+ */
+export function isPointNearSlab(point: Point, shape: SlabShape, tolerance: number): boolean {
+  const { points } = shape;
+  if (points.length < 3) return false;
+
+  // Check if near any edge of the polygon
+  for (let i = 0; i < points.length; i++) {
+    const j = (i + 1) % points.length;
+    if (isPointNearLine(point, points[i], points[j], tolerance)) {
+      return true;
+    }
+  }
+
+  // Check if inside the polygon
+  return isPointInPolygon(point, points);
+}
+
+/**
+ * Check if a point is near a space shape (IfcSpace - filled polygon hit test)
+ */
+export function isPointNearSpace(point: Point, shape: SpaceShape, tolerance: number): boolean {
+  const { contourPoints } = shape;
+  if (contourPoints.length < 3) return false;
+
+  // Check if near any edge of the contour polygon
+  for (let i = 0; i < contourPoints.length; i++) {
+    const j = (i + 1) % contourPoints.length;
+    if (isPointNearLine(point, contourPoints[i], contourPoints[j], tolerance)) {
+      return true;
+    }
+  }
+
+  // Check if inside the contour polygon
+  return isPointInPolygon(point, contourPoints);
+}
+
+/**
+ * Check if a point is near a plate system shape (contour polygon hit test).
+ * Supports arc edges via contourBulges.
+ */
+export function isPointNearPlateSystem(point: Point, shape: PlateSystemShape, tolerance: number): boolean {
+  const { contourPoints, contourBulges } = shape;
+  if (contourPoints.length < 3) return false;
+
+  // Check if near any edge of the contour polygon (line or arc)
+  for (let i = 0; i < contourPoints.length; i++) {
+    const j = (i + 1) % contourPoints.length;
+    const b = contourBulges?.[i] ?? 0;
+    if (b !== 0 && Math.abs(b) > 0.0001) {
+      if (isPointNearBulgeArc(point, contourPoints[i], contourPoints[j], b, tolerance)) {
+        return true;
+      }
+    } else {
+      if (isPointNearLine(point, contourPoints[i], contourPoints[j], tolerance)) {
+        return true;
+      }
+    }
+  }
+
+  // Check if inside the contour polygon
+  return isPointInPolygon(point, contourPoints);
+}
+
+/**
+ * Check if a point is near a section callout shape (cut line + bubbles + arrows)
+ */
+export function isPointNearSectionCallout(point: Point, shape: SectionCalloutShape, tolerance: number, drawingScale?: number): boolean {
+  const { start, end, flipDirection } = shape;
+  const sf = annotationScaleFactor(drawingScale);
+  const bubbleRadius = shape.bubbleRadius * sf;
+
+  // Check if near the cut line
+  if (isPointNearLine(point, start, end, tolerance)) {
+    return true;
+  }
+
+  // Check if near bubble circles at endpoints
+  const angle = Math.atan2(end.y - start.y, end.x - start.x);
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+
+  // Start bubble
+  const startBubbleX = start.x - dx * bubbleRadius;
+  const startBubbleY = start.y - dy * bubbleRadius;
+  const startDist = Math.sqrt((point.x - startBubbleX) ** 2 + (point.y - startBubbleY) ** 2);
+  if (Math.abs(startDist - bubbleRadius) < tolerance || startDist < bubbleRadius) {
+    return true;
+  }
+
+  // End bubble
+  const endBubbleX = end.x + dx * bubbleRadius;
+  const endBubbleY = end.y + dy * bubbleRadius;
+  const endDist = Math.sqrt((point.x - endBubbleX) ** 2 + (point.y - endBubbleY) ** 2);
+  if (Math.abs(endDist - bubbleRadius) < tolerance || endDist < bubbleRadius) {
+    return true;
+  }
+
+  // Check if near the direction arrows (perpendicular lines at endpoints)
+  const perpSign = flipDirection ? -1 : 1;
+  const perpX = -dy * perpSign;
+  const perpY = dx * perpSign;
+  const arrowLen = bubbleRadius * 1.5;
+
+  // Arrow at start
+  const arrowStartEnd = { x: start.x + perpX * arrowLen, y: start.y + perpY * arrowLen };
+  if (isPointNearLine(point, start, arrowStartEnd, tolerance)) {
+    return true;
+  }
+
+  // Arrow at end
+  const arrowEndEnd = { x: end.x + perpX * arrowLen, y: end.y + perpY * arrowLen };
+  if (isPointNearLine(point, end, arrowEndEnd, tolerance)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Check if a point is near an image shape (treat as rectangle hit test)
  */
 export function isPointNearImage(point: Point, shape: ImageShape, tolerance: number): boolean {
@@ -125,7 +556,7 @@ export function isPointNearImage(point: Point, shape: ImageShape, tolerance: num
  * Check if a point is near a shape (for hit testing)
  * @param drawingScale - Optional drawing scale for text annotation scaling
  */
-export function isPointNearShape(point: Point, shape: Shape, tolerance: number = 5, drawingScale?: number, blockDefinitions?: Map<string, BlockDefinition>): boolean {
+export function isPointNearShape(point: Point, shape: Shape, tolerance: number = 5, drawingScale?: number): boolean {
   switch (shape.type) {
     case 'line':
       return isPointNearLine(point, shape.start, shape.end, tolerance);
@@ -144,15 +575,35 @@ export function isPointNearShape(point: Point, shape: Shape, tolerance: number =
     case 'text':
       return isPointNearText(point, shape, tolerance, drawingScale);
     case 'dimension':
-      return isPointNearDimension(point, shape, tolerance);
+      return isPointNearDimension(point, shape, tolerance, drawingScale);
     case 'hatch':
       return isPointNearHatch(point, shape, tolerance);
     case 'beam':
       return isPointNearBeam(point, shape, tolerance);
+    case 'gridline':
+      return isPointNearGridline(point, shape as GridlineShape, tolerance, drawingScale);
+    case 'level':
+      return isPointNearLevel(point, shape as LevelShape, tolerance, drawingScale);
+    case 'pile':
+      return isPointNearPile(point, shape as PileShape, tolerance);
+    case 'cpt':
+      return isPointNearCPT(point, shape as CPTShape, tolerance, drawingScale);
+    case 'foundation-zone':
+      return isPointNearFoundationZone(point, shape as FoundationZoneShape, tolerance);
+    case 'wall':
+      return isPointNearWall(point, shape as WallShape, tolerance);
+    case 'slab':
+      return isPointNearSlab(point, shape as SlabShape, tolerance);
+    case 'space':
+      return isPointNearSpace(point, shape as SpaceShape, tolerance);
+    case 'plate-system':
+      return isPointNearPlateSystem(point, shape as PlateSystemShape, tolerance);
+    case 'section-callout':
+      return isPointNearSectionCallout(point, shape as SectionCalloutShape, tolerance, drawingScale);
+    case 'spot-elevation':
+      return isPointNearSpotElevation(point, shape as SpotElevationShape, tolerance, drawingScale);
     case 'image':
       return isPointNearImage(point, shape, tolerance);
-    case 'block-instance':
-      return isPointNearBlockInstance(point, shape, tolerance, drawingScale, blockDefinitions);
     default:
       return false;
   }
@@ -492,7 +943,7 @@ export function bulgeArcBounds(p1: Point, p2: Point, bulge: number): { minX: num
   return { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
 }
 
-function isAngleInArc(angle: number, startAngle: number, endAngle: number, clockwise: boolean): boolean {
+export function isAngleInArc(angle: number, startAngle: number, endAngle: number, clockwise: boolean): boolean {
   const norm = (a: number): number => { let n = a % (Math.PI * 2); if (n < 0) n += Math.PI * 2; return n; };
   const a = norm(angle);
   const s = norm(startAngle);
@@ -695,16 +1146,67 @@ export function isPointNearText(point: Point, shape: TextShape, tolerance: numbe
 }
 
 /**
+ * Check if a point is inside the bounding box of dimension text.
+ * Computes the text width using canvas measurement and checks whether the
+ * click point (inverse-rotated into the text's local frame) falls within
+ * the box defined by font metrics.
+ */
+function isPointInDimensionTextBox(
+  point: Point,
+  textPosition: Point,
+  textAngle: number,
+  dimension: DimensionShape,
+  textHeight: number,
+  tolerance: number
+): boolean {
+  // Build display text (same as DimensionRenderer.drawDimensionText)
+  let displayText = dimension.value;
+  if (dimension.prefix) displayText = dimension.prefix + displayText;
+  if (dimension.suffix) displayText = displayText + dimension.suffix;
+
+  // Measure text width
+  const ctx = getMeasureCtx();
+  ctx.font = `${textHeight}px ${CAD_DEFAULT_FONT}`;
+  const metrics = ctx.measureText(displayText);
+  const halfWidth = metrics.width / 2 + tolerance;
+  const halfHeight = textHeight / 2 + tolerance;
+
+  // Apply textOffset if present
+  const pos = dimension.textOffset
+    ? { x: textPosition.x + dimension.textOffset.x, y: textPosition.y + dimension.textOffset.y }
+    : textPosition;
+
+  // Inverse-rotate the point into the text's local coordinate system
+  const cos = Math.cos(-textAngle);
+  const sin = Math.sin(-textAngle);
+  const dx = point.x - pos.x;
+  const dy = point.y - pos.y;
+  const localX = dx * cos - dy * sin;
+  const localY = dx * sin + dy * cos;
+
+  return localX >= -halfWidth && localX <= halfWidth &&
+         localY >= -halfHeight && localY <= halfHeight;
+}
+
+/**
  * Check if a point is near a dimension shape
+ * @param drawingScale - Optional drawing scale for correct text bounding box sizing
  */
 export function isPointNearDimension(
   point: Point,
   dimension: DimensionShape,
-  tolerance: number
+  tolerance: number,
+  drawingScale?: number
 ): boolean {
   const { dimensionType, points, dimensionLineOffset, dimensionStyle, linearDirection } = dimension;
 
   if (points.length < 2) return false;
+
+  // Scale text height to match the rendered size.
+  // dimensionStyle.textHeight is in paper mm; the renderer multiplies by (1/drawingScale).
+  const scaledTextHeight = drawingScale && drawingScale > 0
+    ? dimensionStyle.textHeight / drawingScale
+    : dimensionStyle.textHeight;
 
   switch (dimensionType) {
     case 'aligned':
@@ -729,12 +1231,11 @@ export function isPointNearDimension(
         }
       }
 
-      // Check near text position
-      const textDist = Math.sqrt(
-        (point.x - geometry.textPosition.x) ** 2 +
-        (point.y - geometry.textPosition.y) ** 2
-      );
-      if (textDist <= tolerance + dimensionStyle.textHeight * 2) {
+      // Check if click is inside the dimension text bounding box
+      if (isPointInDimensionTextBox(
+        point, geometry.textPosition, geometry.textAngle,
+        dimension, scaledTextHeight, tolerance
+      )) {
         return true;
       }
 
@@ -782,12 +1283,12 @@ export function isPointNearDimension(
         }
       }
 
-      // Check near text
-      const textDist = Math.sqrt(
-        (point.x - geometry.textPosition.x) ** 2 +
-        (point.y - geometry.textPosition.y) ** 2
-      );
-      if (textDist <= tolerance + dimensionStyle.textHeight * 2) {
+      // Check if click is inside the dimension text bounding box
+      // Angular dimensions use horizontal text (angle = 0)
+      if (isPointInDimensionTextBox(
+        point, geometry.textPosition, 0,
+        dimension, scaledTextHeight, tolerance
+      )) {
         return true;
       }
 
@@ -806,12 +1307,11 @@ export function isPointNearDimension(
         return true;
       }
 
-      // Check near text
-      const textDist = Math.sqrt(
-        (point.x - geometry.textPosition.x) ** 2 +
-        (point.y - geometry.textPosition.y) ** 2
-      );
-      if (textDist <= tolerance + dimensionStyle.textHeight * 2) {
+      // Check if click is inside the dimension text bounding box
+      if (isPointInDimensionTextBox(
+        point, geometry.textPosition, geometry.textAngle,
+        dimension, scaledTextHeight, tolerance
+      )) {
         return true;
       }
 
@@ -830,12 +1330,11 @@ export function isPointNearDimension(
         return true;
       }
 
-      // Check near text
-      const textDist = Math.sqrt(
-        (point.x - geometry.textPosition.x) ** 2 +
-        (point.y - geometry.textPosition.y) ** 2
-      );
-      if (textDist <= tolerance + dimensionStyle.textHeight * 2) {
+      // Check if click is inside the dimension text bounding box
+      if (isPointInDimensionTextBox(
+        point, geometry.textPosition, geometry.textAngle,
+        dimension, scaledTextHeight, tolerance
+      )) {
         return true;
       }
 
@@ -845,47 +1344,6 @@ export function isPointNearDimension(
     default:
       return false;
   }
-}
-
-/**
- * Check if a point is near a block instance (inverse-transform and test child entities)
- */
-export function isPointNearBlockInstance(
-  point: Point,
-  shape: BlockInstanceShape,
-  tolerance: number,
-  drawingScale?: number,
-  blockDefinitions?: Map<string, BlockDefinition>,
-): boolean {
-  if (!blockDefinitions) return false;
-  const def = blockDefinitions.get(shape.blockDefinitionId);
-  if (!def) return false;
-
-  // Inverse-transform the test point into block-local coordinates
-  const dx = point.x - shape.position.x;
-  const dy = point.y - shape.position.y;
-  const cos = Math.cos(-shape.rotation);
-  const sin = Math.sin(-shape.rotation);
-  const rx = dx * cos - dy * sin;
-  const ry = dx * sin + dy * cos;
-  const sx = shape.scaleX !== 0 ? rx / shape.scaleX : rx;
-  const sy = shape.scaleY !== 0 ? ry / shape.scaleY : ry;
-  const localPoint: Point = {
-    x: sx + def.basePoint.x,
-    y: sy + def.basePoint.y,
-  };
-
-  // Scale tolerance inversely
-  const avgScale = (Math.abs(shape.scaleX) + Math.abs(shape.scaleY)) / 2;
-  const localTolerance = avgScale !== 0 ? tolerance / avgScale : tolerance;
-
-  // Test against each entity in the definition
-  for (const entity of def.entities) {
-    if (isPointNearShape(localPoint, entity, localTolerance, drawingScale, blockDefinitions)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /**
@@ -1072,7 +1530,7 @@ export function isPointNearParametricShape(
  * Get bounding box of a shape
  * @param drawingScale - Optional drawing scale for text annotation scaling
  */
-export function getShapeBounds(shape: Shape, drawingScale?: number, blockDefinitions?: Map<string, BlockDefinition>): ShapeBounds | null {
+export function getShapeBounds(shape: Shape, drawingScale?: number, gridlineExtension?: number): ShapeBounds | null {
   switch (shape.type) {
     case 'line':
       return {
@@ -1309,6 +1767,18 @@ export function getShapeBounds(shape: Shape, drawingScale?: number, blockDefinit
       const { start, end, flangeWidth } = shape;
       const halfWidth = flangeWidth / 2;
 
+      // Arc beam bounding box
+      if (shape.bulge && Math.abs(shape.bulge) > 0.0001) {
+        const ab = bulgeArcBounds(start, end, shape.bulge);
+        return {
+          minX: ab.minX - halfWidth,
+          minY: ab.minY - halfWidth,
+          maxX: ab.maxX + halfWidth,
+          maxY: ab.maxY + halfWidth,
+        };
+      }
+
+      // Straight beam bounding box
       // Calculate beam direction perpendicular
       const dx = end.x - start.x;
       const dy = end.y - start.y;
@@ -1335,6 +1805,186 @@ export function getShapeBounds(shape: Shape, drawingScale?: number, blockDefinit
         maxY: Math.max(...bys),
       };
     }
+    case 'gridline': {
+      const glShape = shape as GridlineShape;
+      const glSf = annotationScaleFactor(drawingScale);
+      const r = (glShape.bubbleRadius || 0) * glSf;
+      const glExt = (gridlineExtension ?? 500) * glSf;
+      return {
+        minX: Math.min(glShape.start.x, glShape.end.x) - r - glExt,
+        minY: Math.min(glShape.start.y, glShape.end.y) - r - glExt,
+        maxX: Math.max(glShape.start.x, glShape.end.x) + r + glExt,
+        maxY: Math.max(glShape.start.y, glShape.end.y) + r + glExt,
+      };
+    }
+    case 'level': {
+      const lvShape = shape as LevelShape;
+      const lvSf = annotationScaleFactor(drawingScale);
+      const lvR = (lvShape.bubbleRadius || 0) * lvSf;
+      return {
+        minX: Math.min(lvShape.start.x, lvShape.end.x) - lvR,
+        minY: Math.min(lvShape.start.y, lvShape.end.y) - lvR,
+        maxX: Math.max(lvShape.start.x, lvShape.end.x) + lvR,
+        maxY: Math.max(lvShape.start.y, lvShape.end.y) + lvR,
+      };
+    }
+    case 'pile': {
+      const pileShape = shape as PileShape;
+      const pileR = pileShape.diameter / 2;
+      return {
+        minX: pileShape.position.x - pileR,
+        minY: pileShape.position.y - pileR,
+        maxX: pileShape.position.x + pileR,
+        maxY: pileShape.position.y + pileR + pileShape.fontSize * 1.5,
+      };
+    }
+    case 'cpt': {
+      const cptShape = shape as CPTShape;
+      const cptSf = annotationScaleFactor(drawingScale);
+      const cptMs = (cptShape.markerSize || 300) * cptSf;
+      const cptLabelH = cptShape.fontSize * cptSf * 1.5;
+      return {
+        minX: cptShape.position.x - cptMs * 0.6,
+        minY: cptShape.position.y - cptMs * 0.7,
+        maxX: cptShape.position.x + cptMs * 0.6,
+        maxY: cptShape.position.y + cptMs * 0.7 + cptLabelH,
+      };
+    }
+    case 'foundation-zone': {
+      const fzShape = shape as FoundationZoneShape;
+      if (fzShape.contourPoints.length === 0) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+      const fzXs = fzShape.contourPoints.map(p => p.x);
+      const fzYs = fzShape.contourPoints.map(p => p.y);
+      return {
+        minX: Math.min(...fzXs),
+        minY: Math.min(...fzYs),
+        maxX: Math.max(...fzXs),
+        maxY: Math.max(...fzYs),
+      };
+    }
+    case 'wall': {
+      const wallShape = shape as WallShape;
+      // Arc wall bounding box
+      if (wallShape.bulge && Math.abs(wallShape.bulge) > 0.0001) {
+        const ab = bulgeArcBounds(wallShape.start, wallShape.end, wallShape.bulge);
+        const halfT = wallShape.thickness / 2;
+        return {
+          minX: ab.minX - halfT,
+          minY: ab.minY - halfT,
+          maxX: ab.maxX + halfT,
+          maxY: ab.maxY + halfT,
+        };
+      }
+      // Straight wall bounding box
+      const wdx = wallShape.end.x - wallShape.start.x;
+      const wdy = wallShape.end.y - wallShape.start.y;
+      const wLen = Math.sqrt(wdx * wdx + wdy * wdy);
+      if (wLen === 0) return null;
+      // Perpendicular unit vector: math-CCW = visual right in screen Y-down coords
+      const wpx = -wdy / wLen;
+      const wpy = wdx / wLen;
+      // Determine how much thickness goes to each side based on justification
+      // +perp = visual right, -perp = visual left when looking from start to end
+      let wLeftThick: number;
+      let wRightThick: number;
+      if (wallShape.justification === 'left') {
+        wLeftThick = 0;
+        wRightThick = wallShape.thickness;
+      } else if (wallShape.justification === 'right') {
+        wLeftThick = wallShape.thickness;
+        wRightThick = 0;
+      } else {
+        wLeftThick = wallShape.thickness / 2;
+        wRightThick = wallShape.thickness / 2;
+      }
+      const wCorners = [
+        { x: wallShape.start.x + wpx * wLeftThick, y: wallShape.start.y + wpy * wLeftThick },
+        { x: wallShape.end.x + wpx * wLeftThick, y: wallShape.end.y + wpy * wLeftThick },
+        { x: wallShape.end.x - wpx * wRightThick, y: wallShape.end.y - wpy * wRightThick },
+        { x: wallShape.start.x - wpx * wRightThick, y: wallShape.start.y - wpy * wRightThick },
+      ];
+      const wxs = wCorners.map(c => c.x);
+      const wys = wCorners.map(c => c.y);
+      return {
+        minX: Math.min(...wxs),
+        minY: Math.min(...wys),
+        maxX: Math.max(...wxs),
+        maxY: Math.max(...wys),
+      };
+    }
+    case 'slab': {
+      const slabShape = shape as SlabShape;
+      if (slabShape.points.length === 0) return null;
+      const sxs = slabShape.points.map(p => p.x);
+      const sys = slabShape.points.map(p => p.y);
+      return {
+        minX: Math.min(...sxs),
+        minY: Math.min(...sys),
+        maxX: Math.max(...sxs),
+        maxY: Math.max(...sys),
+      };
+    }
+    case 'space': {
+      const spaceShape = shape as SpaceShape;
+      if (spaceShape.contourPoints.length === 0) return null;
+      const spxs = spaceShape.contourPoints.map(p => p.x);
+      const spys = spaceShape.contourPoints.map(p => p.y);
+      return {
+        minX: Math.min(...spxs),
+        minY: Math.min(...spys),
+        maxX: Math.max(...spxs),
+        maxY: Math.max(...spys),
+      };
+    }
+    case 'plate-system': {
+      const psShape = shape as PlateSystemShape;
+      if (psShape.contourPoints.length === 0) return null;
+      let psMinX = Infinity, psMinY = Infinity, psMaxX = -Infinity, psMaxY = -Infinity;
+      for (const p of psShape.contourPoints) {
+        if (p.x < psMinX) psMinX = p.x;
+        if (p.y < psMinY) psMinY = p.y;
+        if (p.x > psMaxX) psMaxX = p.x;
+        if (p.y > psMaxY) psMaxY = p.y;
+      }
+      // Expand bounds for arc segments
+      if (psShape.contourBulges) {
+        for (let i = 0; i < psShape.contourPoints.length; i++) {
+          const b = psShape.contourBulges[i] ?? 0;
+          if (b !== 0 && Math.abs(b) > 0.0001) {
+            const j = (i + 1) % psShape.contourPoints.length;
+            const ab = bulgeArcBounds(psShape.contourPoints[i], psShape.contourPoints[j], b);
+            if (ab.minX < psMinX) psMinX = ab.minX;
+            if (ab.minY < psMinY) psMinY = ab.minY;
+            if (ab.maxX > psMaxX) psMaxX = ab.maxX;
+            if (ab.maxY > psMaxY) psMaxY = ab.maxY;
+          }
+        }
+      }
+      return { minX: psMinX, minY: psMinY, maxX: psMaxX, maxY: psMaxY };
+    }
+    case 'section-callout': {
+      const scShape = shape as SectionCalloutShape;
+      const scSf = annotationScaleFactor(drawingScale);
+      const scR = (scShape.bubbleRadius || 0) * scSf;
+      const scArrowLen = scR * 1.5;
+      return {
+        minX: Math.min(scShape.start.x, scShape.end.x) - scR - scArrowLen,
+        minY: Math.min(scShape.start.y, scShape.end.y) - scR - scArrowLen,
+        maxX: Math.max(scShape.start.x, scShape.end.x) + scR + scArrowLen,
+        maxY: Math.max(scShape.start.y, scShape.end.y) + scR + scArrowLen,
+      };
+    }
+    case 'spot-elevation': {
+      const seShape = shape as SpotElevationShape;
+      const seSf = annotationScaleFactor(drawingScale);
+      const seMs = (seShape.markerSize || 200) * seSf;
+      return {
+        minX: Math.min(seShape.position.x, seShape.labelPosition.x) - seMs,
+        minY: Math.min(seShape.position.y, seShape.labelPosition.y) - seMs,
+        maxX: Math.max(seShape.position.x, seShape.labelPosition.x) + seMs * 4,
+        maxY: Math.max(seShape.position.y, seShape.labelPosition.y) + seMs,
+      };
+    }
     case 'image': {
       const rot = shape.rotation || 0;
       if (rot === 0) {
@@ -1359,50 +2009,6 @@ export function getShapeBounds(shape: Shape, drawingScale?: number, blockDefinit
         minY: Math.min(imgCorners[0].y, imgCorners[1].y, imgCorners[2].y, imgCorners[3].y),
         maxX: Math.max(imgCorners[0].x, imgCorners[1].x, imgCorners[2].x, imgCorners[3].x),
         maxY: Math.max(imgCorners[0].y, imgCorners[1].y, imgCorners[2].y, imgCorners[3].y),
-      };
-    }
-    case 'block-instance': {
-      if (!blockDefinitions) return { minX: shape.position.x, minY: shape.position.y, maxX: shape.position.x, maxY: shape.position.y };
-      const def = blockDefinitions.get(shape.blockDefinitionId);
-      if (!def || def.entities.length === 0) return { minX: shape.position.x, minY: shape.position.y, maxX: shape.position.x, maxY: shape.position.y };
-
-      // Compute bounds of all entities in local space
-      let lMinX = Infinity, lMinY = Infinity, lMaxX = -Infinity, lMaxY = -Infinity;
-      for (const entity of def.entities) {
-        const eb = getShapeBounds(entity, drawingScale, blockDefinitions);
-        if (eb) {
-          lMinX = Math.min(lMinX, eb.minX);
-          lMinY = Math.min(lMinY, eb.minY);
-          lMaxX = Math.max(lMaxX, eb.maxX);
-          lMaxY = Math.max(lMaxY, eb.maxY);
-        }
-      }
-      if (lMinX === Infinity) return { minX: shape.position.x, minY: shape.position.y, maxX: shape.position.x, maxY: shape.position.y };
-
-      // Transform the 4 bounding-box corners through the instance transform
-      const localCorners = [
-        { x: lMinX, y: lMinY },
-        { x: lMaxX, y: lMinY },
-        { x: lMaxX, y: lMaxY },
-        { x: lMinX, y: lMaxY },
-      ];
-      const cos = Math.cos(shape.rotation);
-      const sin = Math.sin(shape.rotation);
-      const bp = def.basePoint;
-      const worldCorners = localCorners.map(c => {
-        const lx = (c.x - bp.x) * shape.scaleX;
-        const ly = (c.y - bp.y) * shape.scaleY;
-        return {
-          x: lx * cos - ly * sin + shape.position.x,
-          y: lx * sin + ly * cos + shape.position.y,
-        };
-      });
-
-      return {
-        minX: Math.min(worldCorners[0].x, worldCorners[1].x, worldCorners[2].x, worldCorners[3].x),
-        minY: Math.min(worldCorners[0].y, worldCorners[1].y, worldCorners[2].y, worldCorners[3].y),
-        maxX: Math.max(worldCorners[0].x, worldCorners[1].x, worldCorners[2].x, worldCorners[3].x),
-        maxY: Math.max(worldCorners[0].y, worldCorners[1].y, worldCorners[2].y, worldCorners[3].y),
       };
     }
     default:
@@ -1480,12 +2086,20 @@ export function pointDistance(p1: Point, p2: Point): number {
 export function screenToWorld(
   screenX: number,
   screenY: number,
-  viewport: { offsetX: number; offsetY: number; zoom: number }
+  viewport: { offsetX: number; offsetY: number; zoom: number; rotation?: number }
 ): Point {
-  return {
-    x: (screenX - viewport.offsetX) / viewport.zoom,
-    y: (screenY - viewport.offsetY) / viewport.zoom,
-  };
+  const r = viewport.rotation || 0;
+  const tx = screenX - viewport.offsetX;
+  const ty = screenY - viewport.offsetY;
+  if (r === 0) {
+    return { x: tx / viewport.zoom, y: ty / viewport.zoom };
+  }
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  // Un-rotate by -r: (tx*cos + ty*sin, -tx*sin + ty*cos)
+  const ux = tx * cos + ty * sin;
+  const uy = -tx * sin + ty * cos;
+  return { x: ux / viewport.zoom, y: uy / viewport.zoom };
 }
 
 /**
@@ -1494,11 +2108,20 @@ export function screenToWorld(
 export function worldToScreen(
   worldX: number,
   worldY: number,
-  viewport: { offsetX: number; offsetY: number; zoom: number }
+  viewport: { offsetX: number; offsetY: number; zoom: number; rotation?: number }
 ): Point {
+  const r = viewport.rotation || 0;
+  const sx = worldX * viewport.zoom;
+  const sy = worldY * viewport.zoom;
+  if (r === 0) {
+    return { x: sx + viewport.offsetX, y: sy + viewport.offsetY };
+  }
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  // Rotate by r
   return {
-    x: worldX * viewport.zoom + viewport.offsetX,
-    y: worldY * viewport.zoom + viewport.offsetY,
+    x: sx * cos - sy * sin + viewport.offsetX,
+    y: sx * sin + sy * cos + viewport.offsetY,
   };
 }
 

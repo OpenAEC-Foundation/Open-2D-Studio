@@ -11,10 +11,12 @@
  */
 
 import { useCallback, useMemo, useEffect, useRef } from 'react';
-import { useAppStore } from '../../state/appStore';
-import type { Point, BlockDefinition } from '../../types/geometry';
-import { screenToWorld, isPointNearShape, isPointNearParametricShape } from '../../engine/geometry/GeometryUtils';
+import { useAppStore, generateId } from '../../state/appStore';
+import type { Point, GridlineShape, BeamShape, PlateSystemShape, PlateSystemOpening } from '../../types/geometry';
+import { screenToWorld, isPointNearShape, isPointNearParametricShape, snapToAngle, bulgeToArc, calculateBulgeFrom3Points } from '../../engine/geometry/GeometryUtils';
+import { regeneratePlateSystemBeams } from '../drawing/usePlateSystemDrawing';
 import { QuadTree } from '../../engine/spatial/QuadTree';
+import { isShapeInHiddenCategory } from '../../utils/ifcCategoryUtils';
 
 import { usePanZoom } from '../navigation/usePanZoom';
 import { useBoxSelection } from '../selection/useBoxSelection';
@@ -26,9 +28,17 @@ import { useViewportEditing } from '../editing/useViewportEditing';
 import { useAnnotationEditing } from '../editing/useAnnotationEditing';
 import { useGripEditing } from '../editing/useGripEditing';
 import { useModifyTools } from '../editing/useModifyTools';
-import { useTitleBlockEditing } from '../editing/useTitleBlockEditing';
 import { useBeamDrawing } from '../drawing/useBeamDrawing';
+import { useGridlineDrawing } from '../drawing/useGridlineDrawing';
+import { usePileDrawing } from '../drawing/usePileDrawing';
+import { useCPTDrawing } from '../drawing/useCPTDrawing';
+import { useWallDrawing } from '../drawing/useWallDrawing';
+import { useSlabDrawing } from '../drawing/useSlabDrawing';
+import { useLevelDrawing } from '../drawing/useLevelDrawing';
 import { useLeaderDrawing } from '../drawing/useLeaderDrawing';
+import { useSectionCalloutDrawing } from '../drawing/useSectionCalloutDrawing';
+import { useSpaceDrawing } from '../drawing/useSpaceDrawing';
+import { usePlateSystemDrawing } from '../drawing/usePlateSystemDrawing';
 import { showImportImageDialog } from '../../services/file/fileService';
 import { importImage } from '../../services/file/imageImportService';
 import type { ImageShape } from '../../types/geometry';
@@ -45,9 +55,17 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
   const annotationEditing = useAnnotationEditing();
   const gripEditing = useGripEditing();
   const modifyTools = useModifyTools();
-  const titleBlockEditing = useTitleBlockEditing();
   const beamDrawing = useBeamDrawing();
+  const gridlineDrawing = useGridlineDrawing();
+  const pileDrawing = usePileDrawing();
+  const cptDrawing = useCPTDrawing();
+  const wallDrawing = useWallDrawing();
+  const slabDrawing = useSlabDrawing();
+  const levelDrawing = useLevelDrawing();
   const leaderDrawing = useLeaderDrawing();
+  const sectionCalloutDrawing = useSectionCalloutDrawing();
+  const spaceDrawing = useSpaceDrawing();
+  const plateSystemDrawing = usePlateSystemDrawing();
 
   const {
     viewport,
@@ -56,6 +74,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
     shapes,
     parametricShapes,
     selectShape,
+    selectShapes,
     deselectAll,
     editorMode,
     activeDrawingId,
@@ -69,23 +88,36 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
     insertProfile,
     setSectionPlacementPreview,
     pendingBeam,
+    pendingGridline,
+    pendingPile,
+    pendingCPT,
+    pendingWall,
+    pendingSlab,
+    pendingLevel,
+    pendingSectionCallout,
+    pendingSpace,
+    pendingPlateSystem,
     explodeParametricShapes,
     addShapes,
     selectedShapeIds,
     drawings,
     sourceSnapAngle,
     switchToDrawing,
-    blockDefinitions: blockDefinitionsArray,
+    updateShape,
+    startGridlineLabelEdit,
+    setCursor2D,
+    modifyOrtho,
+    plateSystemEditMode,
+    editingPlateSystemId,
+    setPlateSystemEditMode,
+    plateSystemSubTool,
+    setPlateSystemSubTool,
+    plateSystemOpeningMode,
+    setPlateSystemOpeningMode,
+    selectedOpeningId,
+    setSelectedOpeningId,
+    hiddenIfcCategories,
   } = useAppStore();
-
-  // Build Map for efficient block definition lookups (hit testing, bounds)
-  const blockDefinitionsMap = useMemo(() => {
-    const map = new Map<string, BlockDefinition>();
-    for (const def of blockDefinitionsArray) {
-      map.set(def.id, def);
-    }
-    return map;
-  }, [blockDefinitionsArray]);
 
   // Get the active drawing's scale for text hit detection
   const activeDrawingScale = useMemo(() => {
@@ -95,8 +127,42 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
 
   // Build spatial index for efficient shape lookup
   const quadTree = useMemo(() => {
-    return QuadTree.buildFromShapes(shapes, activeDrawingId, activeDrawingScale, blockDefinitionsMap);
-  }, [shapes, activeDrawingId, activeDrawingScale, blockDefinitionsMap]);
+    return QuadTree.buildFromShapes(shapes, activeDrawingId, activeDrawingScale);
+  }, [shapes, activeDrawingId, activeDrawingScale]);
+
+  // Right-button drag state for 2D cursor placement
+  // lastSnappedPos stores the snapped position from the most recent mousemove during drag,
+  // so mouseUp can use it instead of recalculating (which could produce a different result
+  // due to sub-pixel coordinate differences between mousemove and mouseup events).
+  const rightDragRef = useRef<{ isDragging: boolean; startX: number; startY: number; didDrag: boolean; lastSnappedPos: Point | null }>({
+    isDragging: false, startX: 0, startY: 0, didDrag: false, lastSnappedPos: null,
+  });
+
+  /**
+   * Resolve plate system hit: when a child beam is hit, redirect to parent
+   * plate system unless we are in edit mode for that specific system.
+   */
+  const resolvePlateSystemHit = useCallback(
+    (shapeId: string): string | null => {
+      const shape = shapes.find(s => s.id === shapeId);
+      if (!shape) return shapeId;
+
+      // If shape is a child beam of a plate system
+      if (shape.type === 'beam') {
+        const beam = shape as BeamShape;
+        if (beam.plateSystemId) {
+          // In edit mode for THIS system: allow direct child beam selection
+          if (plateSystemEditMode && editingPlateSystemId === beam.plateSystemId) {
+            return shapeId;
+          }
+          // Not in edit mode (or different system): redirect to parent
+          return beam.plateSystemId;
+        }
+      }
+      return shapeId;
+    },
+    [shapes, plateSystemEditMode, editingPlateSystemId]
+  );
 
   /**
    * Find shape at point using spatial index (only shapes in active drawing)
@@ -128,16 +194,27 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
 
       // Check regular shapes
       const candidates = quadTree.queryPoint(worldPoint, tolerance);
-      // Iterate in reverse to match z-order (last inserted = on top)
+
+      // First pass: check text shapes (labels, annotations) before other shapes.
+      // This ensures labels are independently selectable even when overlapping
+      // with walls/beams they are linked to.
       for (let i = candidates.length - 1; i >= 0; i--) {
         const shape = shapes.find(s => s.id === candidates[i].id);
-        if (shape && isPointNearShape(worldPoint, shape, tolerance, activeDrawingScale, blockDefinitionsMap)) {
-          return shape.id;
+        if (shape && shape.type === 'text' && !isShapeInHiddenCategory(shape, hiddenIfcCategories) && isPointNearShape(worldPoint, shape, tolerance, activeDrawingScale)) {
+          return resolvePlateSystemHit(shape.id);
+        }
+      }
+
+      // Second pass: check all other shapes in reverse z-order
+      for (let i = candidates.length - 1; i >= 0; i--) {
+        const shape = shapes.find(s => s.id === candidates[i].id);
+        if (shape && shape.type !== 'text' && !isShapeInHiddenCategory(shape, hiddenIfcCategories) && isPointNearShape(worldPoint, shape, tolerance, activeDrawingScale)) {
+          return resolvePlateSystemHit(shape.id);
         }
       }
       return null;
     },
-    [quadTree, shapes, parametricShapes, activeDrawingId, viewport.zoom, activeDrawingScale, blockDefinitionsMap]
+    [quadTree, shapes, parametricShapes, activeDrawingId, viewport.zoom, activeDrawingScale, hiddenIfcCategories, resolvePlateSystemHit]
   );
 
   /**
@@ -175,7 +252,9 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       }
 
       // Drawing mode: grip (handle) dragging on selected shapes
-      if (editorMode === 'drawing' && e.button === 0) {
+      // Skip grip editing when a modify tool is active — clicks should go to the modify tool
+      const modifyToolActive = ['move', 'copy', 'copy2', 'rotate', 'scale', 'mirror', 'array', 'trim', 'extend', 'fillet', 'chamfer', 'offset', 'elastic', 'trim-walls'].includes(activeTool);
+      if (editorMode === 'drawing' && e.button === 0 && !modifyToolActive) {
         const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
         if (gripEditing.handleGripMouseDown(worldPos)) {
           return;
@@ -191,8 +270,13 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
           boxSelection.startBoxSelection(screenPos);
         }
       }
+
+      // Right-button press: start tracking for 2D cursor drag
+      if (e.button === 2 && editorMode === 'drawing') {
+        rightDragRef.current = { isDragging: true, startX: e.clientX, startY: e.clientY, didDrag: false, lastSnappedPos: null };
+      }
     },
-    [panZoom, editorMode, viewport, annotationEditing, viewportEditing, boundaryEditing, gripEditing, findShapeAtPoint, boxSelection]
+    [panZoom, editorMode, viewport, annotationEditing, viewportEditing, boundaryEditing, gripEditing, findShapeAtPoint, boxSelection, activeTool]
   );
 
   /**
@@ -208,22 +292,10 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
 
       const screenPos = panZoom.getMousePos(e);
 
-      // Sheet mode: annotation tools, viewport move, or viewport selection
+      // Sheet mode: annotation tools or viewport selection
       if (editorMode === 'sheet') {
-        // Handle title block field clicks first
-        if (titleBlockEditing.handleTitleBlockClick(screenPos)) {
-          return;
-        }
-
         // Handle annotation tool clicks first
         if (annotationEditing.handleAnnotationClick(screenPos, e.shiftKey)) {
-          return;
-        }
-
-        // Handle keyboard-initiated viewport move (G key) — commit on click
-        const s = useAppStore.getState();
-        if (s.viewportEditState.isMoving) {
-          s.commitViewportMove();
           return;
         }
 
@@ -337,6 +409,85 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
         }
       }
 
+      // Handle gridline drawing
+      if (activeTool === 'gridline' && pendingGridline) {
+        deselectAll();
+        if (gridlineDrawing.handleGridlineClick(snappedPos, e.shiftKey)) {
+          snapDetection.clearTracking();
+          return;
+        }
+      }
+
+      // Handle level drawing (two-click)
+      if (activeTool === 'level' && pendingLevel) {
+        deselectAll();
+        if (levelDrawing.handleLevelClick(snappedPos, e.shiftKey)) {
+          snapDetection.clearTracking();
+          return;
+        }
+      }
+
+      // Handle pile placement (single-click)
+      if (activeTool === 'pile' && pendingPile) {
+        deselectAll();
+        if (pileDrawing.handlePileClick(snappedPos)) {
+          return;
+        }
+      }
+
+      // Handle CPT placement (single-click)
+      if (activeTool === 'cpt' && pendingCPT) {
+        deselectAll();
+        if (cptDrawing.handleCPTClick(snappedPos)) {
+          return;
+        }
+      }
+
+      // Handle wall drawing (two-click for line, three-click for arc)
+      if (activeTool === 'wall' && pendingWall) {
+        deselectAll();
+        if (wallDrawing.handleWallClick(snappedPos, e.shiftKey)) {
+          snapDetection.clearTracking();
+          return;
+        }
+      }
+
+      // Handle slab drawing (multi-click polygon)
+      if (activeTool === 'slab' && pendingSlab) {
+        deselectAll();
+        if (slabDrawing.handleSlabClick(snappedPos, e.shiftKey)) {
+          snapDetection.clearTracking();
+          return;
+        }
+      }
+
+      // Handle plate system drawing (multi-click polygon)
+      if (activeTool === 'plate-system' && pendingPlateSystem) {
+        deselectAll();
+        if (plateSystemDrawing.handlePlateSystemClick(snappedPos, e.shiftKey)) {
+          snapDetection.clearTracking();
+          return;
+        }
+      }
+
+      // Handle section callout drawing (two-click)
+      if (activeTool === 'section-callout' && pendingSectionCallout) {
+        deselectAll();
+        if (sectionCalloutDrawing.handleSectionCalloutClick(snappedPos, e.shiftKey)) {
+          snapDetection.clearTracking();
+          return;
+        }
+      }
+
+      // Handle space drawing (single-click to detect room)
+      if (activeTool === 'space' && pendingSpace) {
+        deselectAll();
+        if (spaceDrawing.handleSpaceClick(snappedPos)) {
+          snapDetection.clearTracking();
+          return;
+        }
+      }
+
       // Tool-specific handling
       switch (activeTool) {
         case 'select': {
@@ -347,6 +498,294 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
 
           // Check shapes
           const shapeId = findShapeAtPoint(worldPos);
+
+          // Plate system edit mode: dispatch based on sub-tool
+          if (plateSystemEditMode && editingPlateSystemId) {
+            const editingSystem = shapes.find(s => s.id === editingPlateSystemId) as PlateSystemShape | undefined;
+            if (!editingSystem) break;
+
+            const tolerance = 8 / viewport.zoom;
+            const psContour = editingSystem.contourPoints;
+            const psBulges = editingSystem.contourBulges;
+            const psN = psContour.length;
+
+            // ── Helper: point-in-polygon test ──
+            const isInsideContour = (pt: Point): boolean => {
+              let ins = false;
+              for (let ii = 0, jj = psN - 1; ii < psN; jj = ii++) {
+                const xi = psContour[ii].x, yi = psContour[ii].y;
+                const xj = psContour[jj].x, yj = psContour[jj].y;
+                if (((yi > pt.y) !== (yj > pt.y)) &&
+                    (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi)) {
+                  ins = !ins;
+                }
+              }
+              return ins;
+            };
+
+            // ── Helper: find nearest contour edge index (tolerance) ──
+            const findNearestEdge = (pt: Point): number => {
+              let bestDist = Infinity;
+              let bestIdx = -1;
+              for (let ii = 0; ii < psN; ii++) {
+                const jj = (ii + 1) % psN;
+                const b = psBulges ? (psBulges[ii] ?? 0) : 0;
+                let dist: number;
+                if (Math.abs(b) > 0.0001) {
+                  // Arc edge: distance to arc
+                  const { center, radius, startAngle, endAngle, clockwise } = bulgeToArc(psContour[ii], psContour[jj], b);
+                  const ddx = pt.x - center.x;
+                  const ddy = pt.y - center.y;
+                  dist = Math.abs(Math.sqrt(ddx * ddx + ddy * ddy) - radius);
+                  // Also check angle is within sweep
+                  const ang = Math.atan2(ddy, ddx);
+                  const TWO_PI = Math.PI * 2;
+                  const norm = (a: number) => { let n = a % TWO_PI; if (n < 0) n += TWO_PI; return n; };
+                  const nA = norm(ang), nS = norm(startAngle), nE = norm(endAngle);
+                  let inSweep: boolean;
+                  if (clockwise) {
+                    inSweep = nS >= nE ? (nA <= nS + 0.01 && nA >= nE - 0.01) : (nA <= nS + 0.01 || nA >= nE - 0.01);
+                  } else {
+                    inSweep = nS <= nE ? (nA >= nS - 0.01 && nA <= nE + 0.01) : (nA >= nS - 0.01 || nA <= nE + 0.01);
+                  }
+                  if (!inSweep) dist = Infinity;
+                } else {
+                  // Straight edge: point-to-segment distance
+                  const ex = psContour[jj].x - psContour[ii].x;
+                  const ey = psContour[jj].y - psContour[ii].y;
+                  const eLen = Math.sqrt(ex * ex + ey * ey);
+                  if (eLen < 0.001) { dist = Infinity; } else {
+                    const t = Math.max(0, Math.min(1, ((pt.x - psContour[ii].x) * ex + (pt.y - psContour[ii].y) * ey) / (eLen * eLen)));
+                    const cx = psContour[ii].x + t * ex;
+                    const cy = psContour[ii].y + t * ey;
+                    dist = Math.sqrt((pt.x - cx) ** 2 + (pt.y - cy) ** 2);
+                  }
+                }
+                if (dist < bestDist) { bestDist = dist; bestIdx = ii; }
+              }
+              return bestDist <= tolerance ? bestIdx : -1;
+            };
+
+            // ── Helper: find nearest vertex index (tolerance) ──
+            const findNearestVertex = (pt: Point): number => {
+              let bestDist = Infinity;
+              let bestIdx = -1;
+              for (let ii = 0; ii < psN; ii++) {
+                const d = Math.sqrt((pt.x - psContour[ii].x) ** 2 + (pt.y - psContour[ii].y) ** 2);
+                if (d < bestDist) { bestDist = d; bestIdx = ii; }
+              }
+              return bestDist <= tolerance ? bestIdx : -1;
+            };
+
+            // ── Helper: find clicked opening ──
+            const findClickedOpening = (pt: Point): PlateSystemOpening | null => {
+              if (!editingSystem.openings) return null;
+              for (const opening of editingSystem.openings) {
+                const ddx = pt.x - opening.position.x;
+                const ddy = pt.y - opening.position.y;
+                const rot = opening.rotation ?? 0;
+                const cosR = Math.cos(-rot);
+                const sinR = Math.sin(-rot);
+                const lx = ddx * cosR - ddy * sinR;
+                const ly = ddx * sinR + ddy * cosR;
+                if (Math.abs(lx) <= opening.width / 2 && Math.abs(ly) <= opening.height / 2) return opening;
+              }
+              return null;
+            };
+
+            // ── Sub-tool dispatch ──
+            switch (plateSystemSubTool) {
+              // ────────────────────────── SELECT ──────────────────────────
+              case 'select': {
+                // Check opening click first
+                const clickedOp = findClickedOpening(worldPos);
+                if (clickedOp) {
+                  setSelectedOpeningId(clickedOp.id);
+                  deselectAll();
+                  break;
+                }
+                setSelectedOpeningId(null);
+
+                if (shapeId) {
+                  const clickedShape = shapes.find(s => s.id === shapeId);
+                  const isPartOfSystem =
+                    shapeId === editingPlateSystemId ||
+                    (clickedShape?.type === 'beam' && (clickedShape as BeamShape).plateSystemId === editingPlateSystemId);
+                  if (!isPartOfSystem) {
+                    setPlateSystemEditMode(false);
+                    boundaryEditing.deselectBoundary();
+                    selectShape(shapeId, e.ctrlKey || e.shiftKey);
+                    break;
+                  }
+                  boundaryEditing.deselectBoundary();
+                  selectShape(shapeId, e.ctrlKey || e.shiftKey);
+                } else {
+                  setPlateSystemEditMode(false);
+                  boundaryEditing.deselectBoundary();
+                  if (!e.ctrlKey && !e.shiftKey) deselectAll();
+                }
+                break;
+              }
+
+              // ────────────────────────── ADD POINT ──────────────────────────
+              case 'add-point': {
+                const edgeIdx = findNearestEdge(worldPos);
+                if (edgeIdx < 0) break;
+
+                // Project click onto the edge to get the insertion point
+                const ii = edgeIdx;
+                const jj = (ii + 1) % psN;
+                const b = psBulges ? (psBulges[ii] ?? 0) : 0;
+
+                let insertPt: Point;
+                if (Math.abs(b) > 0.0001) {
+                  // Arc edge: project onto arc
+                  const { center, radius } = bulgeToArc(psContour[ii], psContour[jj], b);
+                  const a = Math.atan2(worldPos.y - center.y, worldPos.x - center.x);
+                  insertPt = { x: center.x + radius * Math.cos(a), y: center.y + radius * Math.sin(a) };
+                } else {
+                  // Straight edge: project onto segment
+                  const ex = psContour[jj].x - psContour[ii].x;
+                  const ey = psContour[jj].y - psContour[ii].y;
+                  const eLen2 = ex * ex + ey * ey;
+                  const t = eLen2 > 0.001 ? Math.max(0.01, Math.min(0.99, ((worldPos.x - psContour[ii].x) * ex + (worldPos.y - psContour[ii].y) * ey) / eLen2)) : 0.5;
+                  insertPt = { x: psContour[ii].x + t * ex, y: psContour[ii].y + t * ey };
+                }
+
+                // Insert vertex into contourPoints after index ii
+                const newContour = [...psContour];
+                newContour.splice(ii + 1, 0, insertPt);
+
+                // Split bulge entry: existing edge at ii becomes two edges
+                const newBulges = psBulges ? [...psBulges] : new Array(psN).fill(0);
+                while (newBulges.length < psN) newBulges.push(0);
+                if (Math.abs(b) > 0.0001) {
+                  // Arc edge: calculate two sub-bulges.
+                  // insertPt is already on the original circle.  Find the true arc
+                  // midpoints of each sub-arc on that same circle.
+                  const { center, radius } = bulgeToArc(psContour[ii], psContour[jj], b);
+                  const angStart = Math.atan2(psContour[ii].y - center.y, psContour[ii].x - center.x);
+                  const angInsert = Math.atan2(insertPt.y - center.y, insertPt.x - center.x);
+                  const angEnd = Math.atan2(psContour[jj].y - center.y, psContour[jj].x - center.x);
+                  // Sub-arc 1 midpoint: halfway between angStart and angInsert on the arc
+                  const mid1Ang = angStart + ((angInsert - angStart + (b > 0 ? 0 : 2 * Math.PI)) % (2 * Math.PI)) / 2 * (b > 0 ? 1 : -1);
+                  const mid1 = { x: center.x + radius * Math.cos(mid1Ang), y: center.y + radius * Math.sin(mid1Ang) };
+                  // Sub-arc 2 midpoint: halfway between angInsert and angEnd on the arc
+                  const mid2Ang = angInsert + ((angEnd - angInsert + (b > 0 ? 0 : 2 * Math.PI)) % (2 * Math.PI)) / 2 * (b > 0 ? 1 : -1);
+                  const mid2 = { x: center.x + radius * Math.cos(mid2Ang), y: center.y + radius * Math.sin(mid2Ang) };
+                  const b1 = calculateBulgeFrom3Points(psContour[ii], mid1, insertPt);
+                  const b2 = calculateBulgeFrom3Points(insertPt, mid2, psContour[jj]);
+                  newBulges.splice(ii, 1, b1, b2);
+                } else {
+                  // Straight edge: two straight edges
+                  newBulges.splice(ii, 1, 0, 0);
+                }
+
+                // Update edgeBeamEnabled array
+                const ebe = editingSystem.edgeBeamEnabled
+                  ? [...editingSystem.edgeBeamEnabled]
+                  : new Array(psN).fill(true);
+                while (ebe.length < psN) ebe.push(true);
+                const prevEnabled = ebe[ii];
+                ebe.splice(ii, 1, prevEnabled, prevEnabled);
+
+                updateShape(editingPlateSystemId, {
+                  contourPoints: newContour,
+                  contourBulges: newBulges,
+                  edgeBeamEnabled: ebe,
+                } as any);
+                setTimeout(() => regeneratePlateSystemBeams(editingPlateSystemId), 0);
+                break;
+              }
+
+              // ────────────────────────── ARC EDGE ──────────────────────────
+              case 'arc-edge': {
+                const edgeIdx = findNearestEdge(worldPos);
+                if (edgeIdx < 0) break;
+
+                // Initialise contourBulges if it doesn't exist
+                const newBulges = psBulges ? [...psBulges] : new Array(psN).fill(0);
+                while (newBulges.length < psN) newBulges.push(0);
+
+                if (Math.abs(newBulges[edgeIdx]) > 0.0001) {
+                  // Currently an arc → make straight
+                  newBulges[edgeIdx] = 0;
+                } else {
+                  // Currently straight → make arc (default bulge 0.3)
+                  newBulges[edgeIdx] = 0.3;
+                }
+
+                updateShape(editingPlateSystemId, { contourBulges: newBulges } as any);
+                setTimeout(() => regeneratePlateSystemBeams(editingPlateSystemId), 0);
+                // Switch to select so user can drag the arc midpoint grip
+                setPlateSystemSubTool('select');
+                break;
+              }
+
+              // ────────────────────────── ADD OPENING ──────────────────────────
+              case 'add-opening': {
+                if (isInsideContour(worldPos)) {
+                  const newOpening: PlateSystemOpening = {
+                    id: generateId(),
+                    position: { x: worldPos.x, y: worldPos.y },
+                    width: 300,
+                    height: 300,
+                    rotation: 0,
+                  };
+                  const existingOpenings = editingSystem.openings ?? [];
+                  updateShape(editingPlateSystemId, {
+                    openings: [...existingOpenings, newOpening],
+                  } as any);
+                  setSelectedOpeningId(newOpening.id);
+                  // Stay in add-opening mode for rapid placement
+                }
+                break;
+              }
+
+              // ────────────────────────── DELETE ──────────────────────────
+              case 'delete': {
+                // Try opening first
+                const clickedOp = findClickedOpening(worldPos);
+                if (clickedOp) {
+                  const remaining = (editingSystem.openings ?? []).filter(o => o.id !== clickedOp.id);
+                  updateShape(editingPlateSystemId, { openings: remaining } as any);
+                  setSelectedOpeningId(null);
+                  setTimeout(() => regeneratePlateSystemBeams(editingPlateSystemId), 0);
+                  break;
+                }
+
+                // Try vertex
+                const vertIdx = findNearestVertex(worldPos);
+                if (vertIdx >= 0 && psN > 3) {
+                  const newContour = psContour.filter((_, i) => i !== vertIdx);
+                  const newBulges = psBulges ? [...psBulges] : new Array(psN).fill(0);
+                  while (newBulges.length < psN) newBulges.push(0);
+                  // Remove the bulge for the deleted vertex and set previous edge to straight
+                  newBulges.splice(vertIdx, 1);
+                  // The edge that now connects the previous vertex to the next
+                  // should be straight to avoid invalid arcs:
+                  const prevEdge = (vertIdx - 1 + newContour.length) % newContour.length;
+                  newBulges[prevEdge] = 0;
+
+                  const ebe = editingSystem.edgeBeamEnabled
+                    ? [...editingSystem.edgeBeamEnabled]
+                    : new Array(psN).fill(true);
+                  while (ebe.length < psN) ebe.push(true);
+                  ebe.splice(vertIdx, 1);
+
+                  updateShape(editingPlateSystemId, {
+                    contourPoints: newContour,
+                    contourBulges: newBulges,
+                    edgeBeamEnabled: ebe,
+                  } as any);
+                  setTimeout(() => regeneratePlateSystemBeams(editingPlateSystemId), 0);
+                }
+                break;
+              }
+            }
+            break;
+          }
+
           if (shapeId) {
             boundaryEditing.deselectBoundary();
             // Ctrl or Shift for additive/toggle selection
@@ -394,6 +833,15 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
           snapDetection.clearTracking();
           break;
 
+        case 'label': {
+          deselectAll();
+          // Label tool: single-click on an element to auto-place label
+          // Uses raw worldPos (no snapping) for hit-testing the element
+          leaderDrawing.handleLabelClick(worldPos, findShapeAtPoint);
+          snapDetection.clearTracking();
+          break;
+        }
+
         case 'image': {
           deselectAll();
           // Open file dialog, import image, place at click point
@@ -438,6 +886,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
 
         case 'move':
         case 'copy':
+        case 'copy2':
         case 'rotate':
         case 'scale':
         case 'mirror':
@@ -447,9 +896,20 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
         case 'fillet':
         case 'chamfer':
         case 'offset':
-          modifyTools.handleModifyClick(snappedPos, e.shiftKey, findShapeAtPoint);
+        case 'elastic':
+        case 'trim-walls': {
+          // Trim tool and trim-walls: use raw world position (no snapping) so clicks hit shapes directly
+          if (activeTool === 'trim' || activeTool === 'trim-walls') {
+            modifyTools.handleModifyClick(worldPos, e.shiftKey, findShapeAtPoint);
+            break;
+          }
+          // Ortho: constrain to 45° angles from base point (toggled by Shift)
+          const modifyBase = shapeDrawing.getLastDrawingPoint();
+          const modifyClickPos = (modifyOrtho && modifyBase) ? snapToAngle(modifyBase, snappedPos) : snappedPos;
+          modifyTools.handleModifyClick(modifyClickPos, e.shiftKey, findShapeAtPoint);
           snapDetection.clearTracking();
           break;
+        }
       }
     },
     [
@@ -459,7 +919,6 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       viewport,
       annotationEditing,
       viewportEditing,
-      titleBlockEditing,
       shapeDrawing,
       textDrawing,
       snapDetection,
@@ -470,8 +929,34 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       deselectAll,
       modifyTools,
       beamDrawing,
+      gridlineDrawing,
+      pileDrawing,
+      cptDrawing,
+      wallDrawing,
       leaderDrawing,
       pendingBeam,
+      pendingGridline,
+      pendingLevel,
+      pendingPile,
+      pendingCPT,
+      pendingWall,
+      levelDrawing,
+      sectionCalloutDrawing,
+      pendingSectionCallout,
+      spaceDrawing,
+      pendingSpace,
+      modifyOrtho,
+      plateSystemEditMode,
+      editingPlateSystemId,
+      setPlateSystemEditMode,
+      plateSystemSubTool,
+      setPlateSystemSubTool,
+      plateSystemOpeningMode,
+      setPlateSystemOpeningMode,
+      selectedOpeningId,
+      setSelectedOpeningId,
+      updateShape,
+      shapes,
     ]
   );
 
@@ -487,6 +972,25 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
         return;
       }
 
+      // Right-button drag: move 2D cursor with snap
+      if (rightDragRef.current.isDragging && editorMode === 'drawing') {
+        const dx = e.clientX - rightDragRef.current.startX;
+        const dy = e.clientY - rightDragRef.current.startY;
+        if (!rightDragRef.current.didDrag && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
+          rightDragRef.current.didDrag = true;
+        }
+        if (rightDragRef.current.didDrag) {
+          const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
+          const snapResult = snapDetection.snapPoint(worldPos);
+          // Save the snapped position so mouseUp can reuse it instead of recalculating
+          // (mouseup event coordinates can differ slightly from the last mousemove,
+          // causing snap to jump to a different point)
+          rightDragRef.current.lastSnappedPos = snapResult.point;
+          setCursor2D(snapResult.point);
+          return;
+        }
+      }
+
       // Sheet mode: annotation dragging
       if (annotationEditing.handleAnnotationMouseMove(screenPos)) {
         return;
@@ -495,19 +999,6 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       // Sheet mode: viewport dragging
       if (viewportEditing.handleViewportMouseMove(screenPos)) {
         return;
-      }
-
-      // Sheet mode: keyboard-initiated viewport move (G key) — update preview
-      if (editorMode === 'sheet') {
-        const s = useAppStore.getState();
-        if (s.viewportEditState.isMoving) {
-          const sheetPos = viewportEditing.screenToSheet(screenPos.x, screenPos.y);
-          s.updateViewportMove(sheetPos);
-          return;
-        }
-
-        // Update title block field hover
-        titleBlockEditing.handleTitleBlockMouseMove(screenPos);
       }
 
       // Drawing mode: boundary dragging
@@ -559,7 +1050,77 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
         return;
       }
 
-      // Leader drawing preview
+      // Gridline drawing preview (snap detection always runs so user can snap before first click)
+      if (activeTool === 'gridline' && pendingGridline && editorMode === 'drawing') {
+        const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
+        const basePoint = gridlineDrawing.getGridlineBasePoint();
+        const snapResult = snapDetection.snapPoint(worldPos, basePoint ?? undefined);
+        gridlineDrawing.updateGridlinePreview(snapResult.point, e.shiftKey);
+        return;
+      }
+
+      // Level drawing preview (snap detection always runs so user can snap before first click)
+      if (activeTool === 'level' && pendingLevel && editorMode === 'drawing') {
+        const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
+        const basePoint = levelDrawing.getLevelBasePoint();
+        const snapResult = snapDetection.snapPoint(worldPos, basePoint ?? undefined);
+        levelDrawing.updateLevelPreview(snapResult.point, e.shiftKey);
+        return;
+      }
+
+      // Pile placement preview (follows cursor)
+      if (activeTool === 'pile' && pendingPile && editorMode === 'drawing') {
+        const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
+        const snapResult = snapDetection.snapPoint(worldPos);
+        pileDrawing.updatePilePreview(snapResult.point);
+        return;
+      }
+
+      // CPT placement preview (follows cursor)
+      if (activeTool === 'cpt' && pendingCPT && editorMode === 'drawing') {
+        const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
+        const snapResult = snapDetection.snapPoint(worldPos);
+        cptDrawing.updateCPTPreview(snapResult.point);
+        return;
+      }
+
+      // Wall drawing preview (snap detection always runs so user can snap before first click)
+      if (activeTool === 'wall' && pendingWall && editorMode === 'drawing') {
+        const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
+        const basePoint = wallDrawing.getWallBasePoint();
+        const snapResult = snapDetection.snapPoint(worldPos, basePoint ?? undefined);
+        wallDrawing.updateWallPreview(snapResult.point, e.shiftKey);
+        return;
+      }
+
+      // Slab drawing preview (snap detection always runs so user can snap before first click)
+      if (activeTool === 'slab' && pendingSlab && editorMode === 'drawing') {
+        const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
+        const basePoint = slabDrawing.getSlabBasePoint();
+        const snapResult = snapDetection.snapPoint(worldPos, basePoint ?? undefined);
+        slabDrawing.updateSlabPreview(snapResult.point, e.shiftKey);
+        return;
+      }
+
+      // Plate system drawing preview (snap detection always runs so user can snap before first click)
+      if (activeTool === 'plate-system' && pendingPlateSystem && editorMode === 'drawing') {
+        const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
+        const basePoint = plateSystemDrawing.getPlateSystemBasePoint();
+        const snapResult = snapDetection.snapPoint(worldPos, basePoint ?? undefined);
+        plateSystemDrawing.updatePlateSystemPreview(snapResult.point, e.shiftKey);
+        return;
+      }
+
+      // Section callout drawing preview (snap detection always runs so user can snap before first click)
+      if (activeTool === 'section-callout' && pendingSectionCallout && editorMode === 'drawing') {
+        const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
+        const basePoint = sectionCalloutDrawing.getSectionCalloutBasePoint();
+        const snapResult = snapDetection.snapPoint(worldPos, basePoint ?? undefined);
+        sectionCalloutDrawing.updateSectionCalloutPreview(snapResult.point, e.shiftKey);
+        return;
+      }
+
+      // Leader drawing preview (leader tool only, not label)
       if (activeTool === 'leader' && leaderDrawing.isLeaderDrawing && editorMode === 'drawing') {
         const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
         const basePoint = leaderDrawing.getLeaderBasePoint();
@@ -568,16 +1129,38 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
         return;
       }
 
+      // Label tool: single-click workflow, just show hover highlight for element picking
+      if (activeTool === 'label' && editorMode === 'drawing') {
+        const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
+        // Clear any lingering snap indicators -- label tool uses hit-testing, not snapping
+        snapDetection.clearTracking();
+        // Show hover highlight so user can see which element they will click on
+        const hoveredShape = findShapeAtPoint(worldPos);
+        setHoveredShapeId(hoveredShape);
+        return;
+      }
+
       // Modify tools - update preview
-      const isModifyToolActive = ['move', 'copy', 'rotate', 'scale', 'mirror', 'array', 'trim', 'extend', 'fillet', 'chamfer', 'offset'].includes(activeTool);
+      const isModifyToolActive = ['move', 'copy', 'copy2', 'rotate', 'scale', 'mirror', 'array', 'trim', 'extend', 'fillet', 'chamfer', 'offset', 'elastic', 'trim-walls'].includes(activeTool);
       if (isModifyToolActive && editorMode === 'drawing') {
         const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
+
+        // Trim tool and trim-walls: skip snap detection entirely, use raw world position
+        if (activeTool === 'trim' || activeTool === 'trim-walls') {
+          modifyTools.updateModifyPreview(worldPos);
+          const hoveredShape = findShapeAtPoint(worldPos);
+          setHoveredShapeId(hoveredShape);
+          return;
+        }
+
         const basePoint = shapeDrawing.getLastDrawingPoint();
         const snapResult = snapDetection.snapPoint(worldPos, basePoint);
-        modifyTools.updateModifyPreview(snapResult.point);
+        // Ortho: constrain to 45° angles from base point (toggled by Shift)
+        const modifyPos = (modifyOrtho && basePoint) ? snapToAngle(basePoint, snapResult.point) : snapResult.point;
+        modifyTools.updateModifyPreview(modifyPos);
 
         // Hover highlight for trim/extend/fillet/offset
-        if (['trim', 'extend', 'fillet', 'chamfer', 'offset'].includes(activeTool)) {
+        if (['extend', 'fillet', 'chamfer', 'offset'].includes(activeTool)) {
           const hoveredShape = findShapeAtPoint(worldPos);
           setHoveredShapeId(hoveredShape);
         } else {
@@ -587,7 +1170,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       }
 
       // Drawing tools - always detect snaps when hovering (even before first click)
-      const isDrawingTool = ['line', 'rectangle', 'circle', 'arc', 'polyline', 'spline', 'ellipse', 'hatch', 'dimension', 'leader'].includes(activeTool);
+      const isDrawingTool = ['line', 'rectangle', 'circle', 'arc', 'polyline', 'spline', 'ellipse', 'hatch', 'dimension', 'leader', 'label'].includes(activeTool);
 
       if (isDrawingTool && editorMode === 'drawing') {
         const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
@@ -620,7 +1203,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
         setHoveredShapeId(null);
       }
     },
-    [panZoom, annotationEditing, viewportEditing, titleBlockEditing, editorMode, viewport, boundaryEditing, gripEditing, boxSelection, shapeDrawing, snapDetection, activeTool, dimensionMode, pickLinesMode, findShapeAtPoint, setHoveredShapeId, canvasRef, modifyTools, beamDrawing, leaderDrawing, pendingBeam, sourceSnapAngle]
+    [panZoom, annotationEditing, viewportEditing, editorMode, viewport, boundaryEditing, gripEditing, boxSelection, shapeDrawing, snapDetection, activeTool, dimensionMode, pickLinesMode, findShapeAtPoint, setHoveredShapeId, canvasRef, modifyTools, beamDrawing, gridlineDrawing, levelDrawing, pileDrawing, cptDrawing, wallDrawing, leaderDrawing, sectionCalloutDrawing, plateSystemDrawing, pendingBeam, pendingGridline, pendingLevel, pendingPile, pendingCPT, pendingWall, pendingSectionCallout, pendingPlateSystem, sourceSnapAngle, setCursor2D, modifyOrtho]
   );
 
   /**
@@ -628,6 +1211,25 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
    */
   const handleMouseUp = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
+      // End right-button drag for 2D cursor — use the last snapped position from mousemove
+      // instead of recalculating, because mouseup coordinates can differ slightly from the
+      // last mousemove (sub-pixel rounding, tiny mouse movement) causing snap to jump.
+      if (e.button === 2 && rightDragRef.current.isDragging) {
+        if (rightDragRef.current.didDrag && editorMode === 'drawing') {
+          if (rightDragRef.current.lastSnappedPos) {
+            // Reuse the snapped position that was calculated and displayed during the last mousemove
+            setCursor2D(rightDragRef.current.lastSnappedPos);
+          } else {
+            // Fallback: if somehow no mousemove fired during drag, calculate snap now
+            const screenPos = panZoom.getMousePos(e);
+            const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
+            const snapResult = snapDetection.snapPoint(worldPos);
+            setCursor2D(snapResult.point);
+          }
+        }
+        rightDragRef.current.isDragging = false;
+      }
+
       panZoom.handlePanMouseUp();
 
       // Sheet mode: annotation drag end
@@ -656,7 +1258,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
         boxSelection.endBoxSelection(screenPos, e.ctrlKey || e.shiftKey);
       }
     },
-    [panZoom, annotationEditing, viewportEditing, boundaryEditing, gripEditing, boxSelection]
+    [panZoom, annotationEditing, viewportEditing, boundaryEditing, gripEditing, boxSelection, editorMode, viewport, snapDetection, setCursor2D]
   );
 
   /**
@@ -665,6 +1267,12 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
   const handleContextMenu = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       e.preventDefault();
+
+      // If we just finished a right-drag for 2D cursor, suppress context menu
+      if (rightDragRef.current.didDrag) {
+        rightDragRef.current.didDrag = false;
+        return;
+      }
 
       // In sheet mode, finish leader if active, deselect annotation tools, then show context menu
       if (editorMode === 'sheet') {
@@ -718,6 +1326,80 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       // Cancel beam drawing
       if (pendingBeam) {
         beamDrawing.cancelBeamDrawing();
+        setActiveTool('select');
+        return;
+      }
+
+      // Cancel gridline drawing
+      if (pendingGridline) {
+        gridlineDrawing.cancelGridlineDrawing();
+        setActiveTool('select');
+        return;
+      }
+
+      // Cancel level drawing
+      if (pendingLevel) {
+        levelDrawing.cancelLevelDrawing();
+        setActiveTool('select');
+        return;
+      }
+
+      if (pendingPile) {
+        pileDrawing.cancelPileDrawing();
+        setActiveTool('select');
+        return;
+      }
+
+      if (pendingCPT) {
+        cptDrawing.cancelCPTDrawing();
+        setActiveTool('select');
+        return;
+      }
+
+      if (pendingWall) {
+        wallDrawing.cancelWallDrawing();
+        setActiveTool('select');
+        return;
+      }
+
+      // Finish or cancel slab drawing on right-click
+      if (pendingSlab) {
+        if (slabDrawing.pointCount >= 3) {
+          // Finish: create the slab with current points
+          slabDrawing.finishSlabDrawing();
+          snapDetection.clearTracking();
+        } else {
+          // Cancel: not enough points
+          slabDrawing.cancelSlabDrawing();
+          setActiveTool('select');
+        }
+        return;
+      }
+
+      // Finish or cancel plate system drawing on right-click
+      if (pendingPlateSystem) {
+        if (plateSystemDrawing.pointCount >= 3) {
+          // Finish: create the plate system with current points
+          plateSystemDrawing.finishPlateSystemDrawing();
+          snapDetection.clearTracking();
+        } else {
+          // Cancel: not enough points
+          plateSystemDrawing.cancelPlateSystemDrawing();
+          setActiveTool('select');
+        }
+        return;
+      }
+
+      // Cancel section callout drawing
+      if (pendingSectionCallout) {
+        sectionCalloutDrawing.cancelSectionCalloutDrawing();
+        setActiveTool('select');
+        return;
+      }
+
+      // Cancel space drawing
+      if (pendingSpace) {
+        spaceDrawing.cancelSpaceDrawing();
         setActiveTool('select');
         return;
       }
@@ -807,7 +1489,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       }
 
       // Modify tools: right-click finishes / cancels
-      const modifyToolsList = ['move', 'copy', 'rotate', 'scale', 'mirror', 'array', 'trim', 'extend', 'fillet', 'chamfer', 'offset'];
+      const modifyToolsList = ['move', 'copy', 'copy2', 'rotate', 'scale', 'mirror', 'array', 'trim', 'extend', 'fillet', 'chamfer', 'offset', 'elastic', 'trim-walls'];
       if (modifyToolsList.includes(activeTool)) {
         modifyTools.finishModify();
         setActiveTool('select');
@@ -816,7 +1498,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       }
 
       // If a drawing or annotation tool is selected but not actively drawing, deselect it
-      const drawingTools = ['line', 'rectangle', 'circle', 'arc', 'polyline', 'spline', 'ellipse', 'hatch', 'text', 'leader', 'dimension', 'beam', 'image'];
+      const drawingTools = ['line', 'rectangle', 'circle', 'arc', 'polyline', 'spline', 'ellipse', 'hatch', 'text', 'leader', 'label', 'dimension', 'beam', 'section-callout', 'image'];
       if (drawingTools.includes(activeTool)) {
         setActiveTool('select');
         // Clear any lingering snap/tracking indicators
@@ -825,7 +1507,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
     },
     [editorMode, annotationEditing, shapeDrawing, activeTool, setActiveTool, snapDetection, modifyTools, setPrintDialogOpen,
      panZoom, viewport, findShapeAtPoint, parametricShapes, selectedShapeIds, explodeParametricShapes, addShapes,
-     pendingSection, clearPendingSection, setSectionPlacementPreview, pendingBeam, beamDrawing, leaderDrawing]
+     pendingSection, clearPendingSection, setSectionPlacementPreview, pendingBeam, beamDrawing, pendingGridline, gridlineDrawing, pendingLevel, levelDrawing, pendingPile, pileDrawing, pendingCPT, cptDrawing, pendingWall, wallDrawing, pendingSectionCallout, sectionCalloutDrawing, pendingSpace, spaceDrawing, pendingPlateSystem, plateSystemDrawing, leaderDrawing]
   );
 
   /**
@@ -837,11 +1519,8 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
 
       const screenPos = panZoom.getMousePos(e);
 
-      // Sheet mode: double-click on a title block field to edit, or viewport to switch
+      // Sheet mode: double-click on a viewport to switch to that drawing
       if (editorMode === 'sheet') {
-        if (titleBlockEditing.handleTitleBlockClick(screenPos)) {
-          return;
-        }
         const sheetPos = viewportEditing.screenToSheet(screenPos.x, screenPos.y);
         const vp = viewportEditing.findViewportAtPoint(sheetPos);
         if (vp) {
@@ -857,14 +1536,70 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
       // Find shape at point
       const shapeId = findShapeAtPoint(worldPos);
       if (shapeId) {
-        // Check if it's a text shape
         const shape = shapes.find(s => s.id === shapeId);
+        // Check if it's a text shape
         if (shape && shape.type === 'text') {
           textDrawing.handleTextDoubleClick(shapeId);
+          return;
+        }
+        // Check if it's a gridline shape — bubble label edit or bubble toggle
+        if (shape && shape.type === 'gridline') {
+          const gl = shape as GridlineShape;
+          const angle = Math.atan2(gl.end.y - gl.start.y, gl.end.x - gl.start.x);
+          const dx = Math.cos(angle);
+          const dy = Math.sin(angle);
+          const tolerance = gl.bubbleRadius * 1.2;
+
+          // Check if clicking on existing start bubble
+          if (gl.bubblePosition === 'start' || gl.bubblePosition === 'both') {
+            const bubbleCenter = { x: gl.start.x - dx * gl.bubbleRadius, y: gl.start.y - dy * gl.bubbleRadius };
+            const dist = Math.sqrt((worldPos.x - bubbleCenter.x) ** 2 + (worldPos.y - bubbleCenter.y) ** 2);
+            if (dist < tolerance) {
+              startGridlineLabelEdit(shapeId, 'start');
+              return;
+            }
+          }
+          // Check if clicking on existing end bubble
+          if (gl.bubblePosition === 'end' || gl.bubblePosition === 'both') {
+            const bubbleCenter = { x: gl.end.x + dx * gl.bubbleRadius, y: gl.end.y + dy * gl.bubbleRadius };
+            const dist = Math.sqrt((worldPos.x - bubbleCenter.x) ** 2 + (worldPos.y - bubbleCenter.y) ** 2);
+            if (dist < tolerance) {
+              startGridlineLabelEdit(shapeId, 'end');
+              return;
+            }
+          }
+
+          // Check if double-clicking near an endpoint WITHOUT a bubble — toggle bubble on
+          const endTolerance = gl.bubbleRadius * 1.5;
+          const startDist = Math.sqrt((worldPos.x - gl.start.x) ** 2 + (worldPos.y - gl.start.y) ** 2);
+          const endDist = Math.sqrt((worldPos.x - gl.end.x) ** 2 + (worldPos.y - gl.end.y) ** 2);
+
+          if (startDist < endTolerance && gl.bubblePosition !== 'start' && gl.bubblePosition !== 'both') {
+            updateShape(shapeId, { bubblePosition: gl.bubblePosition === 'end' ? 'both' : 'start' } as any);
+            startGridlineLabelEdit(shapeId, 'start');
+            return;
+          }
+          if (endDist < endTolerance && gl.bubblePosition !== 'end' && gl.bubblePosition !== 'both') {
+            updateShape(shapeId, { bubblePosition: gl.bubblePosition === 'start' ? 'both' : 'end' } as any);
+            startGridlineLabelEdit(shapeId, 'end');
+            return;
+          }
+        }
+        // Double-click on a plate system or its child beam: enter edit mode
+        if (shape && shape.type === 'plate-system') {
+          setPlateSystemEditMode(true, shape.id);
+          return;
+        }
+        if (shape && shape.type === 'beam') {
+          const beam = shape as BeamShape;
+          if (beam.plateSystemId) {
+            setPlateSystemEditMode(true, beam.plateSystemId);
+            return;
+          }
         }
       }
     },
-    [editorMode, panZoom, viewport, findShapeAtPoint, shapes, textDrawing, viewportEditing, titleBlockEditing, switchToDrawing]
+    [editorMode, panZoom, viewport, findShapeAtPoint, shapes, textDrawing, viewportEditing, switchToDrawing, updateShape, startGridlineLabelEdit, selectShapes, setPlateSystemEditMode]
   );
 
   /**
@@ -1005,6 +1740,18 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
     };
   }, []); // Empty deps - we use refs to get current values
 
+  /**
+   * Check whether a right-drag just finished and consume the flag.
+   * Used by Canvas.tsx to suppress the context menu after a right-drag cursor placement.
+   */
+  const consumeRightDrag = useCallback(() => {
+    if (rightDragRef.current.didDrag) {
+      rightDragRef.current.didDrag = false;
+      return true;
+    }
+    return false;
+  }, []);
+
   return {
     handleMouseDown,
     handleMouseMove,
@@ -1014,6 +1761,6 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
     handleDoubleClick,
     handleContextMenu,
     isPanning: panZoom.isPanning,
-    titleBlockEditing,
+    consumeRightDrag,
   };
 }

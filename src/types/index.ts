@@ -33,6 +33,68 @@ export type {
   TextShape,
   PointShape,
 
+  // Gridline
+  GridlineShape,
+  GridlineBubblePosition,
+
+  // Level
+  LevelShape,
+  LevelLabelPosition,
+
+  // Pile
+  PileShape,
+  PileType,
+  PileOption,
+  BearingCapacityLevel,
+  PileSymbolType,
+  PilePlanSettings,
+
+  // CPT
+  CPTShape,
+  FoundationAdvice,
+
+  // Foundation Zone
+  FoundationZoneShape,
+
+  // Wall
+  WallShape,
+  WallType,
+  WallJustification,
+  WallEndCap,
+
+  // Slab
+  SlabShape,
+  SlabMaterial,
+  SlabType,
+
+  // Column
+  ColumnType,
+  ColumnShapeType,
+
+  // Beam Type
+  BeamType,
+  BeamTypeProfileType,
+
+  // Section Callout
+  SectionCalloutShape,
+  SectionCalloutType,
+
+  // Space
+  SpaceShape,
+
+  // Plate System
+  PlateSystemShape,
+  PlateSystemLayer,
+  PlateSystemMainProfile,
+  PlateSystemEdgeProfile,
+  PlateSystemOpening,
+
+  // Spot Elevation
+  SpotElevationShape,
+
+  // Section Reference
+  SectionReference,
+
   // Layers
   Layer,
 
@@ -49,6 +111,7 @@ export type {
   RectangleMode,
 
   // Drawings & Sheets (Base)
+  DrawingType,
   DrawingBoundary,
   Drawing,
   DraftBoundary,  // @deprecated alias
@@ -65,6 +128,15 @@ export type {
   CropRegionType,
   CropRegion,
   ViewportLayerOverride,
+
+  // Materials
+  MaterialCategory,
+  MaterialCategoryInfo,
+} from './geometry';
+
+export {
+  MATERIAL_CATEGORIES,
+  getMaterialCategoryInfo,
 } from './geometry';
 
 // ============================================================================
@@ -303,6 +375,30 @@ export {
   isCalloutAnnotation,
   isSectionMarker,
   isRevisionCloud,
+
+  // Gridline guard
+  isGridlineShape,
+
+  // Slab guard
+  isSlabShape,
+
+  // Section Callout guard
+  isSectionCalloutShape,
+
+  // Space guard
+  isSpaceShape,
+
+  // Plate System guard
+  isPlateSystemShape,
+
+  // Spot Elevation guard
+  isSpotElevationShape,
+
+  // CPT guard
+  isCPTShape,
+
+  // Foundation Zone guard
+  isFoundationZoneShape,
 
   // Primitive guards
   isPoint,

@@ -12,6 +12,7 @@ import type {
   SnapPoint,
   ShapeStyle,
   Drawing,
+  DrawingType,
   DrawingBoundary,
   Sheet,
   SheetViewport,
@@ -23,6 +24,7 @@ import type {
   CropRegion,
   ViewportLayerOverride,
   TextStyle,
+  WallJustification,
 } from '../../types/geometry';
 import type { StateCreator } from 'zustand';
 import { CAD_DEFAULT_FONT } from '../../constants/cadDefaults';
@@ -38,6 +40,7 @@ export type {
   SnapPoint,
   ShapeStyle,
   Drawing,
+  DrawingType,
   DrawingBoundary,
   Sheet,
   SheetViewport,
@@ -49,6 +52,7 @@ export type {
   CropRegion,
   ViewportLayerOverride,
   TextStyle,
+  WallJustification,
 };
 
 // Legacy aliases for backward compatibility
@@ -71,11 +75,25 @@ export type DrawingPreview =
   | { type: 'dimension'; dimensionType: DimensionType; points: Point[]; dimensionLineOffset: number; linearDirection?: 'horizontal' | 'vertical'; value: string }
   | { type: 'hatch'; points: Point[]; currentPoint: Point }
   | { type: 'leader'; points: Point[]; currentPoint: Point; textPosition?: Point }
-  | { type: 'beam'; start: Point; end: Point; flangeWidth: number; showCenterline: boolean }
-  | { type: 'modifyPreview'; shapes: Shape[] }
+  | { type: 'beam'; start: Point; end: Point; flangeWidth: number; showCenterline: boolean; bulge?: number }
+  | { type: 'gridline'; start: Point; end: Point; label: string; bubblePosition: 'start' | 'end' | 'both'; bubbleRadius: number }
+  | { type: 'level'; start: Point; end: Point; label: string; labelPosition: 'start' | 'end' | 'both'; bubbleRadius: number }
+  | { type: 'pile'; position: Point; diameter: number; label: string; fontSize: number; showCross: boolean }
+  | { type: 'cpt'; position: Point; name: string; fontSize: number; markerSize: number }
+  | { type: 'wall'; start: Point; end: Point; thickness: number; showCenterline: boolean; wallTypeId?: string; justification?: WallJustification; bulge?: number }
+  | { type: 'wall-rectangle'; corner1: Point; corner2: Point; thickness: number; showCenterline: boolean; wallTypeId?: string; justification?: WallJustification }
+  | { type: 'beam-rectangle'; corner1: Point; corner2: Point; flangeWidth: number; showCenterline: boolean }
+  | { type: 'wall-circle'; center: Point; radius: number; thickness: number; showCenterline: boolean; wallTypeId?: string; justification?: WallJustification }
+  | { type: 'beam-circle'; center: Point; radius: number; flangeWidth: number; showCenterline: boolean }
+  | { type: 'slab'; points: Point[]; currentPoint: Point; material?: string }
+  | { type: 'plate-system'; points: Point[]; currentPoint: Point; systemType: string; mainProfile: { width: number; spacing: number; direction: number }; edgeWidth?: number; bulges?: number[]; currentBulge?: number; arcThroughPoint?: Point }
+  | { type: 'section-callout'; start: Point; end: Point; label: string; bubbleRadius: number; flipDirection: boolean; viewDepth?: number }
+  | { type: 'spot-elevation'; position: Point; elevation: number; labelPosition: Point; showLeader: boolean }
+  | { type: 'modifyPreview'; shapes: Shape[]; basePoint?: Point; currentPoint?: Point }
   | { type: 'mirrorAxis'; start: Point; end: Point; shapes: Shape[] }
   | { type: 'rotateGuide'; center: Point; startRay?: Point; endRay: Point; angle?: number; shapes: Shape[] }
   | { type: 'scaleGuide'; origin: Point; refPoint?: Point; currentPoint: Point; factor?: number; shapes: Shape[] }
+  | { type: 'elasticBox'; start: Point; end: Point }
   | null;
 
 // Default text style for new text shapes
@@ -125,9 +143,6 @@ export interface ViewportEditState {
   isDragging: boolean;                 // Whether viewport is being moved/resized
   dragStart: Point | null;             // Mouse position when drag started (sheet mm coords)
   originalViewport: SheetViewport | null;   // Viewport state before drag started
-  isMoving: boolean;                   // Whether viewport is being moved via keyboard (G key)
-  moveBasePoint: Point | null;         // Base point for keyboard-initiated move (sheet mm coords)
-  moveSnappedPos: Point | null;        // Snapped preview position during keyboard move (sheet mm coords)
 }
 
 // ============================================================================
@@ -329,13 +344,75 @@ export const getShapeBounds = (shape: Shape): { minX: number; minY: number; maxX
         maxX: shape.position.x + shape.width,
         maxY: shape.position.y + shape.height,
       };
-    case 'block-instance':
+    case 'gridline': {
+      const r = shape.bubbleRadius || 0;
       return {
-        minX: shape.position.x,
-        minY: shape.position.y,
-        maxX: shape.position.x,
-        maxY: shape.position.y,
+        minX: Math.min(shape.start.x, shape.end.x) - r,
+        minY: Math.min(shape.start.y, shape.end.y) - r,
+        maxX: Math.max(shape.start.x, shape.end.x) + r,
+        maxY: Math.max(shape.start.y, shape.end.y) + r,
       };
+    }
+    case 'pile': {
+      const pr = shape.diameter / 2;
+      return {
+        minX: shape.position.x - pr,
+        minY: shape.position.y - pr,
+        maxX: shape.position.x + pr,
+        maxY: shape.position.y + pr,
+      };
+    }
+    case 'wall': {
+      const wAngle = Math.atan2(shape.end.y - shape.start.y, shape.end.x - shape.start.x);
+      const wPerpUnitX = Math.sin(wAngle);
+      const wPerpUnitY = Math.cos(wAngle);
+      // Determine how much thickness goes to each side based on justification
+      let wLeftThick: number;
+      let wRightThick: number;
+      if (shape.justification === 'left') {
+        wLeftThick = shape.thickness;
+        wRightThick = 0;
+      } else if (shape.justification === 'right') {
+        wLeftThick = 0;
+        wRightThick = shape.thickness;
+      } else {
+        wLeftThick = shape.thickness / 2;
+        wRightThick = shape.thickness / 2;
+      }
+      const wCorners = [
+        { x: shape.start.x + wPerpUnitX * wLeftThick, y: shape.start.y - wPerpUnitY * wLeftThick },
+        { x: shape.start.x - wPerpUnitX * wRightThick, y: shape.start.y + wPerpUnitY * wRightThick },
+        { x: shape.end.x + wPerpUnitX * wLeftThick, y: shape.end.y - wPerpUnitY * wLeftThick },
+        { x: shape.end.x - wPerpUnitX * wRightThick, y: shape.end.y + wPerpUnitY * wRightThick },
+      ];
+      return {
+        minX: Math.min(...wCorners.map(c => c.x)),
+        minY: Math.min(...wCorners.map(c => c.y)),
+        maxX: Math.max(...wCorners.map(c => c.x)),
+        maxY: Math.max(...wCorners.map(c => c.y)),
+      };
+    }
+    case 'slab': {
+      if (shape.points.length === 0) return null;
+      const sxs = shape.points.map(p => p.x);
+      const sys = shape.points.map(p => p.y);
+      return {
+        minX: Math.min(...sxs),
+        minY: Math.min(...sys),
+        maxX: Math.max(...sxs),
+        maxY: Math.max(...sys),
+      };
+    }
+    case 'spot-elevation': {
+      const seShape = shape as import('../../types/geometry').SpotElevationShape;
+      const ms = seShape.markerSize || 200;
+      return {
+        minX: Math.min(seShape.position.x, seShape.labelPosition.x) - ms,
+        minY: Math.min(seShape.position.y, seShape.labelPosition.y) - ms,
+        maxX: Math.max(seShape.position.x, seShape.labelPosition.x) + ms,
+        maxY: Math.max(seShape.position.y, seShape.labelPosition.y) + ms,
+      };
+    }
     default:
       return null;
   }

@@ -1,0 +1,1 @@
+export { MaterialsDialog } from './MaterialsDialog';

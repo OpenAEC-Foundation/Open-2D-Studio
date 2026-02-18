@@ -22,7 +22,13 @@ export class ParametricRenderer extends BaseRenderer {
   }
 
   private getLineWidth(strokeWidth: number): number {
-    return this._showLineweight ? strokeWidth : 1;
+    if (!this._showLineweight) {
+      return 1;
+    }
+    // Amplify the line weight so differences are clearly visible,
+    // and enforce a minimum of 2 pixels
+    const amplified = strokeWidth * 3;
+    return Math.max(amplified, 2);
   }
 
   /**

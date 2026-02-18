@@ -728,3 +728,468 @@
 .ribbon-theme-option .no-check {
   width: 14px;
 }
+
+/* ============================================================================
+   Quick Access Bar
+   ============================================================================ */
+
+.quick-access-bar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 8px;
+  background: var(--theme-ribbon-bg);
+  border-top: 1px solid var(--theme-border-light);
+  flex-shrink: 0;
+  height: 18px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.quick-access-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.quick-access-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--theme-text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  cursor: default;
+  white-space: nowrap;
+  transition: all 0.12s ease;
+  line-height: 1.2;
+  height: 16px;
+}
+
+.quick-access-btn:hover:not(.disabled) {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+  border-color: var(--theme-border-light);
+}
+
+.quick-access-btn:active:not(.disabled) {
+  background: var(--theme-active);
+  color: #ffffff;
+  border-color: var(--theme-active-border);
+}
+
+.quick-access-btn:focus {
+  outline: none;
+}
+
+.quick-access-btn.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.quick-access-separator {
+  width: 1px;
+  height: 12px;
+  background: var(--theme-border-light);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+.quick-access-tool-label {
+  font-size: 10px;
+  color: var(--theme-text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+  margin-right: 1px;
+  flex-shrink: 0;
+}
+
+.quick-access-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--theme-text-dim);
+  cursor: default;
+  white-space: nowrap;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.quick-access-checkbox input[type="checkbox"] {
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  accent-color: var(--theme-accent, #3b82f6);
+  cursor: default;
+}
+
+.quick-access-checkbox:hover {
+  color: var(--theme-text);
+}
+
+/* ============================================================================
+   Selection Filter Bar
+   ============================================================================ */
+
+.selection-filter-label {
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  margin-right: 1px;
+  flex-shrink: 0;
+}
+
+.selection-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--theme-text-dim);
+  background: transparent;
+  border: 1px solid var(--theme-border-light);
+  border-radius: 8px;
+  cursor: default;
+  white-space: nowrap;
+  transition: all 0.12s ease;
+  flex-shrink: 0;
+  line-height: 1.2;
+  height: 15px;
+}
+
+.selection-filter-chip:hover {
+  background: var(--theme-hover);
+  color: var(--theme-text);
+  border-color: var(--theme-text-dim);
+}
+
+.selection-filter-chip:focus {
+  outline: none;
+}
+
+.selection-filter-chip.active {
+  background: var(--theme-active);
+  border-color: var(--theme-active-border);
+  color: #ffffff;
+  font-weight: 500;
+}
+
+/* ============================================================================
+   IFC Spatial Tree (Ribbon Tab)
+   ============================================================================ */
+
+.ifc-tree-ribbon-wrapper {
+  overflow-y: auto;
+  overflow-x: hidden;
+  max-height: 76px;
+  min-width: 260px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--theme-border-light) transparent;
+}
+
+.ifc-tree-ribbon-wrapper::-webkit-scrollbar {
+  width: 4px;
+}
+
+.ifc-tree-ribbon-wrapper::-webkit-scrollbar-thumb {
+  background: var(--theme-border-light);
+  border-radius: 2px;
+}
+
+.ifc-tree-container {
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--theme-text-dim);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  padding: 1px 0;
+}
+
+.ifc-tree-node {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 2px;
+  border-radius: 2px;
+  transition: background 0.1s ease;
+  white-space: nowrap;
+}
+
+.ifc-tree-node:hover {
+  background: var(--theme-hover);
+}
+
+.ifc-tree-chevron {
+  flex-shrink: 0;
+  color: var(--theme-text-muted);
+}
+
+.ifc-tree-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.ifc-tree-dot::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--theme-text-muted);
+}
+
+.ifc-tree-label {
+  color: var(--theme-text-dim);
+  font-weight: 400;
+}
+
+.ifc-tree-badge {
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  background: var(--theme-input-bg);
+  border: 1px solid var(--theme-border-light);
+  padding: 0 4px;
+  border-radius: 3px;
+  margin-left: 4px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ifc-tree-children {
+  /* children indented via paddingLeft on the child IfcTreeNode wrapper */
+}
+
+.ifc-tree-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 4px;
+  margin-top: 2px;
+  border-top: 1px solid var(--theme-border-light);
+}
+
+.ifc-tree-summary-item {
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  padding: 0 4px;
+  border: 1px solid var(--theme-border-light);
+  border-radius: 3px;
+  background: var(--theme-input-bg);
+  white-space: nowrap;
+}
+
+/* IFC Stats group */
+.ifc-stats-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px;
+  min-width: 90px;
+}
+
+.ifc-stat-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.ifc-stat-label {
+  font-size: 10px;
+  color: var(--theme-text-muted);
+  white-space: nowrap;
+}
+
+.ifc-stat-value {
+  font-size: 10px;
+  color: var(--theme-text-dim);
+  font-weight: 500;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  white-space: nowrap;
+}
+
+/* ============================================================================
+   Bonsai Sync Status (Ribbon IFC Tab)
+   ============================================================================ */
+
+.bonsai-sync-status {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 6px;
+  min-width: 100px;
+  max-width: 160px;
+}
+
+.bonsai-sync-indicator-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.bonsai-sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.bonsai-sync-dot.active {
+  background: #4ade80;
+  box-shadow: 0 0 4px rgba(74, 222, 128, 0.5);
+}
+
+.bonsai-sync-dot.syncing {
+  background: #facc15;
+  box-shadow: 0 0 4px rgba(250, 204, 21, 0.5);
+  animation: bonsai-pulse 1s ease-in-out infinite;
+}
+
+.bonsai-sync-dot.error {
+  background: #f87171;
+  box-shadow: 0 0 4px rgba(248, 113, 113, 0.5);
+}
+
+.bonsai-sync-dot.inactive {
+  background: var(--theme-text-muted);
+  opacity: 0.4;
+}
+
+@keyframes bonsai-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.bonsai-sync-status-text {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--theme-text-dim);
+}
+
+.bonsai-sync-info-row {
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
+  overflow: hidden;
+}
+
+.bonsai-sync-info-label {
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bonsai-sync-info-value {
+  font-size: 9px;
+  color: var(--theme-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bonsai-sync-error-row {
+  margin-top: 1px;
+}
+
+.bonsai-sync-error-text {
+  color: #f87171;
+  font-size: 9px;
+}
+
+/* ============================================================================
+   Bonsai Sync — Info toggle & popover
+   ============================================================================ */
+
+.bonsai-sync-info-toggle {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+}
+
+.bonsai-sync-info-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--theme-border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--theme-text-muted);
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.bonsai-sync-info-btn:hover {
+  color: var(--theme-text);
+  border-color: var(--theme-text-dim);
+  background: var(--theme-hover);
+}
+
+.bonsai-sync-info-popover {
+  position: absolute;
+  top: 28px;
+  right: 0;
+  z-index: 9999;
+  width: 320px;
+  padding: 12px 14px;
+  background: var(--theme-bg-panel);
+  border: 1px solid var(--theme-border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.bonsai-sync-info-popover-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--theme-text);
+  margin-bottom: 8px;
+}
+
+.bonsai-sync-info-steps {
+  margin: 0;
+  padding: 0 0 0 18px;
+  list-style: decimal;
+}
+
+.bonsai-sync-info-steps li {
+  font-size: 10px;
+  color: var(--theme-text-dim);
+  line-height: 1.5;
+  margin-bottom: 4px;
+}
+
+.bonsai-sync-info-steps li strong {
+  color: var(--theme-text);
+  font-weight: 600;
+}
+
+.bonsai-sync-info-note {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--theme-border);
+  font-size: 9px;
+  color: var(--theme-text-muted);
+  line-height: 1.5;
+}
+
+.bonsai-sync-info-note code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 9px;
+  background: var(--theme-bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--theme-text-dim);
+}

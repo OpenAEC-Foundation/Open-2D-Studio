@@ -7,17 +7,24 @@
  * - Parametric shapes: drag center to move
  */
 
-import { useCallback, useRef, useMemo } from 'react';
+import { useCallback, useRef } from 'react';
 import { useAppStore } from '../../state/appStore';
-import type { Point, Shape, EllipseShape, TextShape, BeamShape, LineShape, ImageShape, BlockDefinition } from '../../types/geometry';
+import type { Point, Shape, EllipseShape, TextShape, BeamShape, LineShape, ImageShape, GridlineShape, LevelShape, PileShape, WallShape, SectionCalloutShape, PlateSystemShape } from '../../types/geometry';
 import type { DimensionShape } from '../../types/dimension';
 import type { ParametricShape } from '../../types/parametric';
 import { updateParametricPosition } from '../../services/parametric/parametricService';
-import { getTextBounds, snapToAngle, isPointNearShape } from '../../engine/geometry/GeometryUtils';
+import { getTextBounds, snapToAngle, isPointNearShape, bulgeArcMidpoint, calculateBulgeFrom3Points } from '../../engine/geometry/GeometryUtils';
 import { calculateAlignedDimensionGeometry, angleBetweenPoints, calculateDimensionValue, formatDimensionValue } from '../../engine/geometry/DimensionUtils';
 import { findNearestSnapPoint } from '../../engine/geometry/SnapUtils';
 import { applyTracking, type TrackingSettings } from '../../engine/geometry/Tracking';
 import { setGripHover } from '../../engine/renderer/gripHoverState';
+import { setActiveRotation, setRotationGizmoHovered } from '../../engine/renderer/rotationGizmoState';
+import { formatPeilLabel, calculatePeilFromY } from '../drawing/useLevelDrawing';
+import { formatSectionPeilLabel } from '../../services/section/sectionReferenceService';
+import { regenerateGridDimensions, updateLinkedDimensions } from '../../utils/gridDimensionUtils';
+import { recalculateMiterJoins } from '../../engine/geometry/Modify';
+import { findLinkedLabels, computeLinkedLabelPosition } from '../../engine/geometry/LabelUtils';
+import { regeneratePlateSystemBeams } from '../drawing/usePlateSystemDrawing';
 
 interface GripDragState {
   shapeId: string;
@@ -53,62 +60,124 @@ interface ParametricGripDragState {
   axisConstraint: 'x' | 'y' | null;
 }
 
+/** Info about a gridline endpoint that is joined with the dragged endpoint. */
+interface JoinedGridlineInfo {
+  shapeId: string;
+  gripIndex: 0 | 1;
+  originalShape: GridlineShape;
+  /** If true, this is a parallel gridline whose endpoint should align, not a perpendicular join. */
+  isParallel?: boolean;
+}
+
+/**
+ * Find other gridline endpoints that lie on the same perpendicular line
+ * as the dragged endpoint (i.e. they should move together).
+ * Also detects parallel gridlines whose corresponding endpoints should align.
+ */
+function findJoinedGridlineEndpoints(
+  draggedShape: GridlineShape,
+  draggedGripIndex: 0 | 1,
+  allShapes: Shape[],
+  tolerance: number
+): JoinedGridlineInfo[] {
+  const draggedEndpoint = draggedGripIndex === 0 ? draggedShape.start : draggedShape.end;
+  const dir = {
+    x: draggedShape.end.x - draggedShape.start.x,
+    y: draggedShape.end.y - draggedShape.start.y,
+  };
+  const len = Math.sqrt(dir.x * dir.x + dir.y * dir.y);
+  if (len === 0) return [];
+  const unitDir = { x: dir.x / len, y: dir.y / len };
+
+  const result: JoinedGridlineInfo[] = [];
+  const joinedIds = new Set<string>();
+  const gridlines = allShapes.filter(
+    s => s.type === 'gridline' && s.id !== draggedShape.id && s.drawingId === draggedShape.drawingId
+  ) as GridlineShape[];
+
+  for (const gl of gridlines) {
+    // Check start endpoint (perpendicular join)
+    const startDiff = { x: gl.start.x - draggedEndpoint.x, y: gl.start.y - draggedEndpoint.y };
+    const startProj = Math.abs(startDiff.x * unitDir.x + startDiff.y * unitDir.y);
+    if (startProj < tolerance) {
+      result.push({ shapeId: gl.id, gripIndex: 0, originalShape: JSON.parse(JSON.stringify(gl)) });
+      joinedIds.add(gl.id);
+      continue;
+    }
+    // Check end endpoint (perpendicular join)
+    const endDiff = { x: gl.end.x - draggedEndpoint.x, y: gl.end.y - draggedEndpoint.y };
+    const endProj = Math.abs(endDiff.x * unitDir.x + endDiff.y * unitDir.y);
+    if (endProj < tolerance) {
+      result.push({ shapeId: gl.id, gripIndex: 1, originalShape: JSON.parse(JSON.stringify(gl)) });
+      joinedIds.add(gl.id);
+    }
+  }
+
+  // Parallel gridline detection: find gridlines with the same direction
+  // and align their corresponding endpoints (start↔start, end↔end)
+  const ANGLE_TOLERANCE = 0.087; // ~5°
+  const dragAngle = Math.atan2(dir.y, dir.x);
+
+  for (const gl of gridlines) {
+    if (joinedIds.has(gl.id)) continue; // already joined perpendicularly
+    const glDir = { x: gl.end.x - gl.start.x, y: gl.end.y - gl.start.y };
+    const glLen = Math.sqrt(glDir.x * glDir.x + glDir.y * glDir.y);
+    if (glLen === 0) continue;
+    const glAngle = Math.atan2(glDir.y, glDir.x);
+    // Check parallel (same or opposite direction)
+    let angleDiff = Math.abs(dragAngle - glAngle) % Math.PI;
+    if (angleDiff > Math.PI / 2) angleDiff = Math.PI - angleDiff;
+    if (angleDiff < ANGLE_TOLERANCE) {
+      // Determine if directions are same or opposite
+      const dot = unitDir.x * (glDir.x / glLen) + unitDir.y * (glDir.y / glLen);
+      const sameDirection = dot > 0;
+      // Map grip index: same direction → same grip, opposite → swap
+      const mappedGrip = sameDirection ? draggedGripIndex : (draggedGripIndex === 0 ? 1 : 0);
+      result.push({
+        shapeId: gl.id,
+        gripIndex: mappedGrip as 0 | 1,
+        originalShape: JSON.parse(JSON.stringify(gl)),
+        isParallel: true,
+      });
+    }
+  }
+
+  return result;
+}
+
+/** Info about a section level that should move together with the dragged level. */
+interface JoinedSectionLevelInfo {
+  shapeId: string;
+  originalShape: LevelShape;
+}
+
+/**
+ * Find all other section-ref level shapes in the same drawing that should move
+ * together with the dragged level when dragging endpoints horizontally.
+ * This ensures the whole series of levels share the same horizontal position.
+ */
+function findJoinedSectionLevels(
+  draggedShape: LevelShape,
+  allShapes: Shape[],
+): JoinedSectionLevelInfo[] {
+  // Only group section-ref levels (auto-generated from IfcBuildingStoreys)
+  if (!draggedShape.id.startsWith('section-ref-lv-')) return [];
+
+  return allShapes
+    .filter((s): s is LevelShape =>
+      s.type === 'level' &&
+      s.id !== draggedShape.id &&
+      s.drawingId === draggedShape.drawingId &&
+      s.id.startsWith('section-ref-lv-')
+    )
+    .map(lv => ({
+      shapeId: lv.id,
+      originalShape: JSON.parse(JSON.stringify(lv)),
+    }));
+}
+
 /** Length of axis arrows in screen pixels (must match ShapeRenderer). */
 const AXIS_ARROW_SCREEN_LEN = 20;
-
-/**
- * Check if a grip index is the rotation grip for a given shape type.
- */
-function isRotationGrip(shape: Shape, gripIndex: number): boolean {
-  switch (shape.type) {
-    case 'rectangle': return gripIndex === 9;
-    case 'ellipse': return gripIndex === 5;
-    case 'image': return gripIndex === 9;
-    case 'block-instance': return gripIndex === 1;
-    case 'text': return gripIndex === 3;
-    default: return false;
-  }
-}
-
-/**
- * Get the rotation center for a shape (used when initiating rotation grip drag).
- */
-function getRotationCenter(shape: Shape): Point | null {
-  switch (shape.type) {
-    case 'rectangle': {
-      const tl = shape.topLeft;
-      const w = shape.width;
-      const h = shape.height;
-      const rot = shape.rotation || 0;
-      const cos = Math.cos(rot);
-      const sin = Math.sin(rot);
-      return {
-        x: tl.x + (w / 2) * cos - (h / 2) * sin,
-        y: tl.y + (w / 2) * sin + (h / 2) * cos,
-      };
-    }
-    case 'ellipse':
-      return { ...shape.center };
-    case 'image': {
-      const pos = shape.position;
-      const w = shape.width;
-      const h = shape.height;
-      const rot = shape.rotation || 0;
-      const cos = Math.cos(rot);
-      const sin = Math.sin(rot);
-      return {
-        x: pos.x + (w / 2) * cos - (h / 2) * sin,
-        y: pos.y + (w / 2) * sin + (h / 2) * cos,
-      };
-    }
-    case 'block-instance':
-      return { ...shape.position };
-    case 'text':
-      return { ...shape.position };
-    default:
-      return null;
-  }
-}
 
 /**
  * Check if a world-space point is near an axis arrow extending from a grip point.
@@ -154,7 +223,7 @@ function hitTestAxisArrow(worldPos: Point, gripPoint: Point, zoom: number, angle
   return null;
 }
 
-function getGripPoints(shape: Shape, drawingScale?: number, zoom?: number, showRotationGizmo?: boolean): Point[] {
+function getGripPoints(shape: Shape, drawingScale?: number, zoom?: number): Point[] {
   switch (shape.type) {
     case 'line':
       return [
@@ -166,14 +235,10 @@ function getGripPoints(shape: Shape, drawingScale?: number, zoom?: number, showR
       // 0-3: corners TL, TR, BR, BL
       // 4-7: edge midpoints Top, Right, Bottom, Left
       // 8: center
-      // 9: rotation handle (when showRotationGizmo is true)
       const tl = shape.topLeft;
       const w = shape.width;
       const h = shape.height;
-      const rot = shape.rotation || 0;
-      const rectCos = Math.cos(rot);
-      const rectSin = Math.sin(rot);
-      const pts: Point[] = [
+      return [
         tl,
         { x: tl.x + w, y: tl.y },
         { x: tl.x + w, y: tl.y + h },
@@ -184,15 +249,6 @@ function getGripPoints(shape: Shape, drawingScale?: number, zoom?: number, showR
         { x: tl.x, y: tl.y + h / 2 },            // left edge mid
         { x: tl.x + w / 2, y: tl.y + h / 2 },   // center
       ];
-      if (showRotationGizmo && zoom) {
-        const dist = 25 / zoom;
-        // Local (w/2, -dist) → world via topLeft + rotation
-        pts.push({
-          x: tl.x + (w / 2) * rectCos - (-dist) * rectSin,
-          y: tl.y + (w / 2) * rectSin + (-dist) * rectCos,
-        });
-      }
-      return pts;
     }
     case 'circle':
       // 0: center, 1: right, 2: left, 3: bottom, 4: top
@@ -215,7 +271,6 @@ function getGripPoints(shape: Shape, drawingScale?: number, zoom?: number, showR
     }
     case 'ellipse': {
       // 0: center, 1: right, 2: left, 3: bottom, 4: top
-      // 5: rotation handle (when showRotationGizmo is true)
       const rot = shape.rotation || 0;
       const cos = Math.cos(rot);
       const sin = Math.sin(rot);
@@ -226,18 +281,13 @@ function getGripPoints(shape: Shape, drawingScale?: number, zoom?: number, showR
         x: cx + lx * cos - ly * sin,
         y: cy + lx * sin + ly * cos,
       });
-      const ellipsePts: Point[] = [
+      return [
         shape.center,                      // Center grip
         toWorld(shape.radiusX, 0),         // Right grip
         toWorld(-shape.radiusX, 0),        // Left grip
         toWorld(0, shape.radiusY),         // Bottom grip
         toWorld(0, -shape.radiusY),        // Top grip
       ];
-      if (showRotationGizmo && zoom) {
-        const dist = 25 / zoom;
-        ellipsePts.push(toWorld(0, -shape.radiusY - dist)); // Rotation handle
-      }
-      return ellipsePts;
     }
     case 'polyline':
     case 'spline': {
@@ -264,16 +314,115 @@ function getGripPoints(shape: Shape, drawingScale?: number, zoom?: number, showR
       }
       return pts;
     }
-    case 'beam':
-      // Beam handles: start, end, and midpoint
+    case 'beam': {
+      // Arc beam handles: start, end, arc midpoint (body drag), bulge control
+      const beamBulge = (shape as BeamShape).bulge;
+      if (beamBulge && Math.abs(beamBulge) > 0.0001) {
+        const arcMid = bulgeArcMidpoint(shape.start, shape.end, beamBulge);
+        return [
+          shape.start,   // grip 0: start point
+          shape.end,     // grip 1: end point
+          arcMid,        // grip 2: arc midpoint (body drag)
+          arcMid,        // grip 3: bulge control point (same as arc midpoint)
+        ];
+      }
+      // Straight beam handles: start, end, and midpoint
       return [
         shape.start,
         shape.end,
         { x: (shape.start.x + shape.end.x) / 2, y: (shape.start.y + shape.end.y) / 2 },
       ];
+    }
+    case 'gridline': {
+      // Gridline handles: start, end, and midpoint
+      // Grip points stay at actual start/end (the line + bubble extend 500mm beyond visually)
+      return [
+        shape.start,
+        shape.end,
+        { x: (shape.start.x + shape.end.x) / 2, y: (shape.start.y + shape.end.y) / 2 },
+      ];
+    }
+    case 'level':
+      // Level handles: start, end, and midpoint
+      return [
+        shape.start,
+        shape.end,
+        { x: (shape.start.x + shape.end.x) / 2, y: (shape.start.y + shape.end.y) / 2 },
+      ];
+    case 'pile':
+      // Pile handle: center position only
+      return [shape.position];
+    case 'cpt':
+      // CPT handle: center position only
+      return [(shape as any).position];
+    case 'foundation-zone':
+      // Foundation zone handles: all contour vertices
+      return [...((shape as any).contourPoints || [])];
+    case 'wall': {
+      // Arc wall handles: start, end, arc midpoint (body drag), bulge control
+      const wallBulge = (shape as WallShape).bulge;
+      if (wallBulge && Math.abs(wallBulge) > 0.0001) {
+        const arcMid = bulgeArcMidpoint(shape.start, shape.end, wallBulge);
+        return [
+          shape.start,   // grip 0: start point
+          shape.end,     // grip 1: end point
+          arcMid,        // grip 2: arc midpoint (body drag)
+          arcMid,        // grip 3: bulge control point (same as arc midpoint)
+        ];
+      }
+      // Straight wall handles: start, end, and midpoint (like beam)
+      return [
+        shape.start,
+        shape.end,
+        { x: (shape.start.x + shape.end.x) / 2, y: (shape.start.y + shape.end.y) / 2 },
+      ];
+    }
+    case 'slab':
+      // Slab handles: all polygon vertices
+      return [...shape.points];
+    case 'plate-system': {
+      // Plate system handles: contour polygon vertices + edge midpoints (or arc midpoints)
+      const psShape = shape as PlateSystemShape;
+      const psContour = psShape.contourPoints;
+      const psBulges = psShape.contourBulges;
+      const psPts: Point[] = [...psContour];
+      // Add edge midpoint grips (one per edge of the closed polygon)
+      // For arc edges (non-zero bulge): use the arc midpoint (draggable to reshape bulge)
+      for (let i = 0; i < psContour.length; i++) {
+        const j = (i + 1) % psContour.length;
+        const b = psBulges ? (psBulges[i] ?? 0) : 0;
+        if (Math.abs(b) > 0.0001) {
+          psPts.push(bulgeArcMidpoint(psContour[i], psContour[j], b));
+        } else {
+          psPts.push({
+            x: (psContour[i].x + psContour[j].x) / 2,
+            y: (psContour[i].y + psContour[j].y) / 2,
+          });
+        }
+      }
+      return psPts;
+    }
+    case 'section-callout': {
+      // Section callout handles: start, end, midpoint, and view depth grip
+      const sc = shape as SectionCalloutShape;
+      const scAngle = Math.atan2(sc.end.y - sc.start.y, sc.end.x - sc.start.x);
+      const scDx = Math.cos(scAngle);
+      const scDy = Math.sin(scAngle);
+      const scPerpSign = sc.flipDirection ? 1 : -1;
+      const scPerpX = -scDy * scPerpSign;
+      const scPerpY = scDx * scPerpSign;
+      const scVD = sc.viewDepth ?? 5000;
+      const scMidX = (sc.start.x + sc.end.x) / 2;
+      const scMidY = (sc.start.y + sc.end.y) / 2;
+      return [
+        sc.start,
+        sc.end,
+        { x: scMidX, y: scMidY },
+        { x: scMidX + scPerpX * scVD, y: scMidY + scPerpY * scVD },
+      ];
+    }
     case 'image': {
       // Image handles: 4 corners + 4 midpoints + center (like rectangle)
-      // 9: rotation handle (when showRotationGizmo is true)
       const imgTl = shape.position;
       const imgW = shape.width;
       const imgH = shape.height;
@@ -284,7 +433,7 @@ function getGripPoints(shape: Shape, drawingScale?: number, zoom?: number, showR
         x: imgTl.x + lx * imgCos - ly * imgSin,
         y: imgTl.y + lx * imgSin + ly * imgCos,
       });
-      const imgPts: Point[] = [
+      return [
         imgToWorld(0, 0),
         imgToWorld(imgW, 0),
         imgToWorld(imgW, imgH),
@@ -295,11 +444,6 @@ function getGripPoints(shape: Shape, drawingScale?: number, zoom?: number, showR
         imgToWorld(0, imgH / 2),
         imgToWorld(imgW / 2, imgH / 2),
       ];
-      if (showRotationGizmo && zoom) {
-        const dist = 25 / zoom;
-        imgPts.push(imgToWorld(imgW / 2, -dist)); // Rotation handle
-      }
-      return imgPts;
     }
     case 'text': {
       // Grip 0: center of text box (move handle)
@@ -432,17 +576,6 @@ function getGripPoints(shape: Shape, drawingScale?: number, zoom?: number, showR
       // Fallback for other dimension types
       return dim.points;
     }
-    case 'block-instance': {
-      const biPts: Point[] = [shape.position];
-      if (showRotationGizmo && zoom) {
-        const dist = 25 / zoom;
-        const rot = shape.rotation || 0;
-        const cos = Math.cos(rot);
-        const sin = Math.sin(rot);
-        biPts.push({ x: shape.position.x - (-dist) * sin, y: shape.position.y + (-dist) * cos });
-      }
-      return biPts;
-    }
     default:
       return [];
   }
@@ -504,9 +637,17 @@ function getShapeReferencePoint(shape: Shape): Point {
     case 'text': return shape.position;
     case 'point': return shape.position;
     case 'beam': return shape.start;
+    case 'gridline': return (shape as GridlineShape).start;
+    case 'level': return (shape as LevelShape).start;
+    case 'pile': return (shape as PileShape).position;
+    case 'cpt': return (shape as any).position;
+    case 'foundation-zone': return ((shape as any).contourPoints || [{ x: 0, y: 0 }])[0];
+    case 'wall': return (shape as WallShape).start;
+    case 'section-callout': return (shape as SectionCalloutShape).start;
+    case 'slab': return shape.points[0] || { x: 0, y: 0 };
+    case 'plate-system': return (shape as PlateSystemShape).contourPoints[0] || { x: 0, y: 0 };
     case 'image': return shape.position;
     case 'dimension': return (shape as DimensionShape).points[0] || { x: 0, y: 0 };
-    case 'block-instance': return shape.position;
     default: return { x: 0, y: 0 };
   }
 }
@@ -563,6 +704,85 @@ function computeBodyMoveUpdates(shape: Shape, newPos: Point): Partial<Shape> | n
         end: { x: shape.end.x + dx, y: shape.end.y + dy },
       } as Partial<Shape>;
 
+    case 'gridline': {
+      const gl = shape as GridlineShape;
+      return {
+        start: { x: gl.start.x + dx, y: gl.start.y + dy },
+        end: { x: gl.end.x + dx, y: gl.end.y + dy },
+      } as Partial<Shape>;
+    }
+
+    case 'level': {
+      const lv = shape as LevelShape;
+      const newLvStartY = lv.start.y + dy;
+      if (shape.id.startsWith('section-ref-lv-')) {
+        // Section-ref levels: elevation = -Y (section Y is inverted), label in meters
+        const newElevation = -newLvStartY;
+        return {
+          start: { x: lv.start.x + dx, y: newLvStartY },
+          end: { x: lv.end.x + dx, y: lv.end.y + dy },
+          peil: newElevation,
+          elevation: newElevation,
+          label: formatSectionPeilLabel(newElevation),
+        } as Partial<Shape>;
+      }
+      const newLvPeil = calculatePeilFromY(newLvStartY);
+      return {
+        start: { x: lv.start.x + dx, y: newLvStartY },
+        end: { x: lv.end.x + dx, y: lv.end.y + dy },
+        peil: newLvPeil,
+        elevation: newLvPeil,
+        label: formatPeilLabel(newLvPeil),
+      } as Partial<Shape>;
+    }
+
+    case 'pile': {
+      const pl = shape as PileShape;
+      return {
+        position: { x: pl.position.x + dx, y: pl.position.y + dy },
+      } as Partial<Shape>;
+    }
+
+    case 'cpt': {
+      const cp = shape as any;
+      return {
+        position: { x: cp.position.x + dx, y: cp.position.y + dy },
+      } as Partial<Shape>;
+    }
+
+    case 'foundation-zone': {
+      const fz = shape as any;
+      return {
+        contourPoints: fz.contourPoints.map((p: any) => ({ x: p.x + dx, y: p.y + dy })),
+      } as Partial<Shape>;
+    }
+
+    case 'wall': {
+      const wa = shape as WallShape;
+      return {
+        start: { x: wa.start.x + dx, y: wa.start.y + dy },
+        end: { x: wa.end.x + dx, y: wa.end.y + dy },
+      } as Partial<Shape>;
+    }
+
+    case 'section-callout': {
+      const sc = shape as SectionCalloutShape;
+      return {
+        start: { x: sc.start.x + dx, y: sc.start.y + dy },
+        end: { x: sc.end.x + dx, y: sc.end.y + dy },
+      } as Partial<Shape>;
+    }
+
+    case 'slab':
+      return {
+        points: shape.points.map(p => ({ x: p.x + dx, y: p.y + dy })),
+      } as Partial<Shape>;
+
+    case 'plate-system':
+      return {
+        contourPoints: (shape as PlateSystemShape).contourPoints.map(p => ({ x: p.x + dx, y: p.y + dy })),
+      } as Partial<Shape>;
+
     case 'image':
       return {
         position: { x: shape.position.x + dx, y: shape.position.y + dy },
@@ -575,11 +795,101 @@ function computeBodyMoveUpdates(shape: Shape, newPos: Point): Partial<Shape> | n
       } as Partial<Shape>;
     }
 
-    case 'block-instance':
-      return {
-        position: { x: shape.position.x + dx, y: shape.position.y + dy },
-      } as Partial<Shape>;
+    default:
+      return null;
+  }
+}
 
+/**
+ * Compute shape updates for rotating a shape around a center point by a given angle.
+ * Works on the ORIGINAL shape geometry so it can be called repeatedly during drag.
+ */
+function computeRotationUpdates(shape: Shape, center: Point, angleRad: number): Partial<Shape> | null {
+  if (angleRad === 0) return null;
+
+  const cos = Math.cos(angleRad);
+  const sin = Math.sin(angleRad);
+  const rotPt = (p: Point): Point => ({
+    x: center.x + (p.x - center.x) * cos - (p.y - center.y) * sin,
+    y: center.y + (p.x - center.x) * sin + (p.y - center.y) * cos,
+  });
+
+  switch (shape.type) {
+    case 'line':
+      return { start: rotPt(shape.start), end: rotPt(shape.end) } as Partial<Shape>;
+    case 'beam':
+      return { start: rotPt(shape.start), end: rotPt(shape.end) } as Partial<Shape>;
+    case 'gridline': {
+      const gl = shape as GridlineShape;
+      return { start: rotPt(gl.start), end: rotPt(gl.end) } as Partial<Shape>;
+    }
+    case 'level': {
+      const lv = shape as LevelShape;
+      const newLvStart = rotPt(lv.start);
+      const newLvEnd = rotPt(lv.end);
+      const rotPeil = calculatePeilFromY(newLvStart.y);
+      return {
+        start: newLvStart,
+        end: newLvEnd,
+        peil: rotPeil,
+        elevation: rotPeil,
+        label: formatPeilLabel(rotPeil),
+      } as Partial<Shape>;
+    }
+    case 'wall': {
+      const wa = shape as WallShape;
+      return { start: rotPt(wa.start), end: rotPt(wa.end) } as Partial<Shape>;
+    }
+    case 'section-callout': {
+      const sc = shape as SectionCalloutShape;
+      return { start: rotPt(sc.start), end: rotPt(sc.end) } as Partial<Shape>;
+    }
+    case 'slab':
+      return { points: shape.points.map(rotPt) } as Partial<Shape>;
+    case 'plate-system':
+      return { contourPoints: (shape as PlateSystemShape).contourPoints.map(rotPt) } as Partial<Shape>;
+    case 'polyline':
+    case 'spline':
+    case 'hatch':
+      return { points: shape.points.map(rotPt) } as Partial<Shape>;
+    case 'rectangle': {
+      // Rotate topLeft; width/height stay the same (visual distortion, but preserves type)
+      return { topLeft: rotPt(shape.topLeft) } as Partial<Shape>;
+    }
+    case 'circle':
+      return { center: rotPt(shape.center) } as Partial<Shape>;
+    case 'ellipse':
+      return {
+        center: rotPt(shape.center),
+        rotation: (shape.rotation || 0) + angleRad,
+      } as Partial<Shape>;
+    case 'arc':
+      return {
+        center: rotPt(shape.center),
+        startAngle: shape.startAngle + angleRad,
+        endAngle: shape.endAngle + angleRad,
+      } as Partial<Shape>;
+    case 'image':
+      return {
+        position: rotPt(shape.position),
+        rotation: (shape.rotation || 0) + angleRad,
+      } as Partial<Shape>;
+    case 'pile': {
+      const pl = shape as PileShape;
+      return { position: rotPt(pl.position) } as Partial<Shape>;
+    }
+    case 'cpt': {
+      const cp = shape as any;
+      return { position: rotPt(cp.position) } as Partial<Shape>;
+    }
+    case 'foundation-zone': {
+      const fz = shape as any;
+      return { contourPoints: fz.contourPoints.map((p: any) => rotPt(p)) } as Partial<Shape>;
+    }
+    case 'dimension': {
+      const dim = shape as DimensionShape;
+      return { points: dim.points.map(rotPt) } as Partial<Shape>;
+    }
     default:
       return null;
   }
@@ -690,7 +1000,6 @@ function computeGripUpdates(shape: Shape, gripIndex: number, newPos: Point, edge
     }
 
     case 'ellipse': {
-      if (gripIndex === 5) return null; // Rotation grip — handled by rotation drag logic
       if (gripIndex === 0) {
         // Center drag — move ellipse
         return { center: { x: newPos.x, y: newPos.y } } as Partial<Shape>;
@@ -719,7 +1028,6 @@ function computeGripUpdates(shape: Shape, gripIndex: number, newPos: Point, edge
     }
 
     case 'rectangle': {
-      if (gripIndex === 9) return null; // Rotation grip — handled by rotation drag logic
       if (gripIndex === 8) {
         // Center drag — move entire rectangle
         const origCenter = {
@@ -860,20 +1168,20 @@ function computeGripUpdates(shape: Shape, gripIndex: number, newPos: Point, edge
 
     case 'beam': {
       const beamShape = shape as BeamShape;
+      const beamIsArc = beamShape.bulge && Math.abs(beamShape.bulge) > 0.0001;
       if (gripIndex === 0) {
-        // Start point drag
+        // Start point drag — keep bulge value the same
         return { start: newPos } as Partial<Shape>;
       }
       if (gripIndex === 1) {
-        // End point drag
+        // End point drag — keep bulge value the same
         return { end: newPos } as Partial<Shape>;
       }
       if (gripIndex === 2) {
-        // Midpoint drag — move both endpoints by the delta from original midpoint
-        const origMid = {
-          x: (beamShape.start.x + beamShape.end.x) / 2,
-          y: (beamShape.start.y + beamShape.end.y) / 2,
-        };
+        // Midpoint / body drag — translate entire shape
+        const origMid = beamIsArc
+          ? bulgeArcMidpoint(beamShape.start, beamShape.end, beamShape.bulge!)
+          : { x: (beamShape.start.x + beamShape.end.x) / 2, y: (beamShape.start.y + beamShape.end.y) / 2 };
         const dx = newPos.x - origMid.x;
         const dy = newPos.y - origMid.y;
         return {
@@ -881,12 +1189,270 @@ function computeGripUpdates(shape: Shape, gripIndex: number, newPos: Point, edge
           end: { x: beamShape.end.x + dx, y: beamShape.end.y + dy },
         } as Partial<Shape>;
       }
+      if (gripIndex === 3 && beamIsArc) {
+        // Bulge control grip — recalculate bulge from 3 points
+        const newBulge = calculateBulgeFrom3Points(beamShape.start, newPos, beamShape.end);
+        return { bulge: newBulge } as Partial<Shape>;
+      }
       return null;
+    }
+
+    case 'gridline': {
+      const gridlineShape = shape as GridlineShape;
+      // Gridlines must always maintain their original orientation.
+      // Endpoint grips (0, 1): project movement onto the gridline direction and
+      // move ONLY the dragged endpoint. Perpendicular movement is ignored entirely
+      // so the gridline stays on its original line.
+      // Midpoint grip (2): full 2D translation of both endpoints.
+      const glDir = {
+        x: gridlineShape.end.x - gridlineShape.start.x,
+        y: gridlineShape.end.y - gridlineShape.start.y,
+      };
+      const glLen = Math.sqrt(glDir.x * glDir.x + glDir.y * glDir.y);
+
+      if (gripIndex === 0 || gripIndex === 1) {
+        const draggedPt = gripIndex === 0 ? gridlineShape.start : gridlineShape.end;
+        const totalDx = newPos.x - draggedPt.x;
+        const totalDy = newPos.y - draggedPt.y;
+
+        if (glLen < 1e-9) {
+          // Degenerate gridline (zero length) - just translate both points
+          return {
+            start: { x: gridlineShape.start.x + totalDx, y: gridlineShape.start.y + totalDy },
+            end: { x: gridlineShape.end.x + totalDx, y: gridlineShape.end.y + totalDy },
+          } as Partial<Shape>;
+        }
+
+        const unitDir = { x: glDir.x / glLen, y: glDir.y / glLen };
+
+        // Project mouse delta onto the line direction only (extend/shorten).
+        // Perpendicular component is discarded to keep the gridline on its line.
+        const alongDist = totalDx * unitDir.x + totalDy * unitDir.y;
+        const alongShiftX = alongDist * unitDir.x;
+        const alongShiftY = alongDist * unitDir.y;
+
+        // Move only the dragged endpoint; the other endpoint stays fixed.
+        const newDraggedPt = {
+          x: draggedPt.x + alongShiftX,
+          y: draggedPt.y + alongShiftY,
+        };
+
+        return {
+          start: gripIndex === 0 ? newDraggedPt : gridlineShape.start,
+          end: gripIndex === 0 ? gridlineShape.end : newDraggedPt,
+        } as Partial<Shape>;
+      }
+
+      if (gripIndex === 2) {
+        const origMid = {
+          x: (gridlineShape.start.x + gridlineShape.end.x) / 2,
+          y: (gridlineShape.start.y + gridlineShape.end.y) / 2,
+        };
+        const dx = newPos.x - origMid.x;
+        const dy = newPos.y - origMid.y;
+        return {
+          start: { x: gridlineShape.start.x + dx, y: gridlineShape.start.y + dy },
+          end: { x: gridlineShape.end.x + dx, y: gridlineShape.end.y + dy },
+        } as Partial<Shape>;
+      }
+      return null;
+    }
+
+    case 'level': {
+      const levelShape = shape as LevelShape;
+      const isSectionRef = shape.id.startsWith('section-ref-lv-');
+      // Levels are always horizontal. Endpoint grips (0, 1) only move horizontally
+      // (stretch the line). Body/midpoint grip (2) moves vertically and updates peil.
+      if (gripIndex === 0 || gripIndex === 1) {
+        // Endpoint drag: only allow horizontal movement (change X, keep Y)
+        const draggedPt = gripIndex === 0 ? levelShape.start : levelShape.end;
+        const newDraggedPt = { x: newPos.x, y: draggedPt.y };
+        return {
+          start: gripIndex === 0 ? newDraggedPt : levelShape.start,
+          end: gripIndex === 0 ? levelShape.end : newDraggedPt,
+        } as Partial<Shape>;
+      }
+      if (gripIndex === 2) {
+        // Body/midpoint drag: move entire level vertically (and horizontally),
+        // then auto-update peil based on new Y position.
+        const origMid = {
+          x: (levelShape.start.x + levelShape.end.x) / 2,
+          y: (levelShape.start.y + levelShape.end.y) / 2,
+        };
+        const dx = newPos.x - origMid.x;
+        const dy = newPos.y - origMid.y;
+        const newStartY = levelShape.start.y + dy;
+        if (isSectionRef) {
+          // Section-ref levels: elevation = -Y (section Y is inverted), label in meters
+          const newElevation = -newStartY;
+          return {
+            start: { x: levelShape.start.x + dx, y: newStartY },
+            end: { x: levelShape.end.x + dx, y: levelShape.end.y + dy },
+            peil: newElevation,
+            elevation: newElevation,
+            label: formatSectionPeilLabel(newElevation),
+          } as Partial<Shape>;
+        }
+        const newPeil = calculatePeilFromY(newStartY);
+        return {
+          start: { x: levelShape.start.x + dx, y: newStartY },
+          end: { x: levelShape.end.x + dx, y: levelShape.end.y + dy },
+          peil: newPeil,
+          elevation: newPeil,
+          label: formatPeilLabel(newPeil),
+        } as Partial<Shape>;
+      }
+      return null;
+    }
+
+    case 'pile': {
+      if (gripIndex === 0) {
+        return { position: newPos } as Partial<Shape>;
+      }
+      return null;
+    }
+
+    case 'cpt': {
+      if (gripIndex === 0) {
+        return { position: newPos } as Partial<Shape>;
+      }
+      return null;
+    }
+
+    case 'foundation-zone': {
+      const fzShape = shape as any;
+      if (gripIndex >= 0 && gripIndex < fzShape.contourPoints.length) {
+        const newPoints = [...fzShape.contourPoints];
+        newPoints[gripIndex] = newPos;
+        return { contourPoints: newPoints } as Partial<Shape>;
+      }
+      return null;
+    }
+
+    case 'wall': {
+      const wallShape = shape as WallShape;
+      const wallIsArc = wallShape.bulge && Math.abs(wallShape.bulge) > 0.0001;
+      if (gripIndex === 0) {
+        // Start point drag — keep bulge value the same
+        return { start: newPos } as Partial<Shape>;
+      }
+      if (gripIndex === 1) {
+        // End point drag — keep bulge value the same
+        return { end: newPos } as Partial<Shape>;
+      }
+      if (gripIndex === 2) {
+        // Midpoint / body drag — translate entire shape
+        const origMid = wallIsArc
+          ? bulgeArcMidpoint(wallShape.start, wallShape.end, wallShape.bulge!)
+          : { x: (wallShape.start.x + wallShape.end.x) / 2, y: (wallShape.start.y + wallShape.end.y) / 2 };
+        const dx = newPos.x - origMid.x;
+        const dy = newPos.y - origMid.y;
+        return {
+          start: { x: wallShape.start.x + dx, y: wallShape.start.y + dy },
+          end: { x: wallShape.end.x + dx, y: wallShape.end.y + dy },
+        } as Partial<Shape>;
+      }
+      if (gripIndex === 3 && wallIsArc) {
+        // Bulge control grip — recalculate bulge from 3 points
+        const newBulge = calculateBulgeFrom3Points(wallShape.start, newPos, wallShape.end);
+        return { bulge: newBulge } as Partial<Shape>;
+      }
+      return null;
+    }
+
+    case 'section-callout': {
+      const scShape = shape as SectionCalloutShape;
+      if (gripIndex === 0) return { start: newPos } as Partial<Shape>;
+      if (gripIndex === 1) return { end: newPos } as Partial<Shape>;
+      if (gripIndex === 2) {
+        const origMid = {
+          x: (scShape.start.x + scShape.end.x) / 2,
+          y: (scShape.start.y + scShape.end.y) / 2,
+        };
+        const dx = newPos.x - origMid.x;
+        const dy = newPos.y - origMid.y;
+        return {
+          start: { x: scShape.start.x + dx, y: scShape.start.y + dy },
+          end: { x: scShape.end.x + dx, y: scShape.end.y + dy },
+        } as Partial<Shape>;
+      }
+      if (gripIndex === 3) {
+        // View depth grip: project newPos onto the perpendicular direction to compute depth
+        const scA = Math.atan2(scShape.end.y - scShape.start.y, scShape.end.x - scShape.start.x);
+        const scPerpS = scShape.flipDirection ? 1 : -1;
+        const scPerpDx = -Math.sin(scA) * scPerpS;
+        const scPerpDy = Math.cos(scA) * scPerpS;
+        const scMidPt = {
+          x: (scShape.start.x + scShape.end.x) / 2,
+          y: (scShape.start.y + scShape.end.y) / 2,
+        };
+        // Project the vector from midpoint to newPos onto the perpendicular direction
+        const vecX = newPos.x - scMidPt.x;
+        const vecY = newPos.y - scMidPt.y;
+        const newDepth = Math.max(0, vecX * scPerpDx + vecY * scPerpDy);
+        return { viewDepth: Math.round(newDepth) } as Partial<Shape>;
+      }
+      return null;
+    }
+
+    case 'slab': {
+      // Slab grips are polygon vertex indices — move the individual vertex
+      if (gripIndex < 0 || gripIndex >= shape.points.length) return null;
+      const newPoints = shape.points.map((p, i) =>
+        i === gripIndex ? { x: newPos.x, y: newPos.y } : p
+      );
+      return { points: newPoints } as Partial<Shape>;
+    }
+
+    case 'plate-system': {
+      // Plate system grips: first N are contour vertices, next N are edge midpoints (or arc midpoints)
+      const psShape = shape as PlateSystemShape;
+      const psContour = psShape.contourPoints;
+      const psBulges = psShape.contourBulges;
+      const psVertexCount = psContour.length;
+      if (gripIndex < 0) return null;
+
+      if (gripIndex < psVertexCount) {
+        // Vertex grip: move the individual vertex
+        const newContour = psContour.map((p, i) =>
+          i === gripIndex ? { x: newPos.x, y: newPos.y } : p
+        );
+        return { contourPoints: newContour } as Partial<Shape>;
+      }
+
+      // Edge midpoint / arc midpoint grip
+      const edgeIdx = gripIndex - psVertexCount;
+      if (edgeIdx < 0 || edgeIdx >= psVertexCount) return null;
+
+      const vi = edgeIdx;
+      const vj = (edgeIdx + 1) % psVertexCount;
+      const b = psBulges ? (psBulges[edgeIdx] ?? 0) : 0;
+
+      if (Math.abs(b) > 0.0001) {
+        // Arc-midpoint drag: recalculate bulge from the three points (start, dragged midpoint, end)
+        const newBulge = calculateBulgeFrom3Points(psContour[vi], newPos, psContour[vj]);
+        const newBulges = psBulges ? [...psBulges] : new Array(psVertexCount).fill(0);
+        while (newBulges.length < psVertexCount) newBulges.push(0);
+        newBulges[edgeIdx] = newBulge;
+        return { contourBulges: newBulges } as Partial<Shape>;
+      }
+
+      // Straight edge midpoint: move both adjacent vertices by the same delta
+      const midX = (psContour[vi].x + psContour[vj].x) / 2;
+      const midY = (psContour[vi].y + psContour[vj].y) / 2;
+      const dx = newPos.x - midX;
+      const dy = newPos.y - midY;
+      const newContour = psContour.map((p, i) => {
+        if (i === vi || i === vj) {
+          return { x: p.x + dx, y: p.y + dy };
+        }
+        return p;
+      });
+      return { contourPoints: newContour } as Partial<Shape>;
     }
 
     case 'image': {
       const imgShape = shape as ImageShape;
-      if (gripIndex === 9) return null; // Rotation grip — handled by rotation drag logic
       if (gripIndex === 8) {
         // Center grip — move the image (account for rotation)
         const rot = imgShape.rotation || 0;
@@ -1221,12 +1787,6 @@ function computeGripUpdates(shape: Shape, gripIndex: number, newPos: Point, edge
       return null;
     }
 
-    case 'block-instance':
-      if (gripIndex === 1) return null; // Rotation grip — handled by rotation drag logic
-      // Grip 0 is the center/position handle — move the instance
-      if (gripIndex === 0) return { position: newPos } as Partial<Shape>;
-      return null;
-
     default:
       return null;
   }
@@ -1239,6 +1799,7 @@ export function useGripEditing() {
     parametricShapes,
     selectedShapeIds,
     updateShape,
+    updateShapes,
     updateProfilePosition,
     setCurrentSnapPoint,
     drawings,
@@ -1253,24 +1814,18 @@ export function useGripEditing() {
     snapTolerance,
     setCurrentTrackingLines,
     setTrackingPoint,
-    blockDefinitions: blockDefinitionsArray,
     showRotationGizmo,
   } = useAppStore();
 
   const dragRef = useRef<GripDragState | null>(null);
   const parametricDragRef = useRef<ParametricGripDragState | null>(null);
   const justFinishedDragRef = useRef(false);
+  const joinedGridlinesRef = useRef<JoinedGridlineInfo[]>([]);
+  const joinedSectionLevelsRef = useRef<JoinedSectionLevelInfo[]>([]);
 
   // Get the active drawing scale for text bounds calculation
   const activeDrawing = drawings.find(d => d.id === activeDrawingId);
   const drawingScale = activeDrawing?.scale;
-
-  // Build Map for efficient block definition lookups
-  const blockDefinitionsMap = useMemo(() => {
-    const map = new Map<string, BlockDefinition>();
-    for (const def of blockDefinitionsArray) map.set(def.id, def);
-    return map;
-  }, [blockDefinitionsArray]);
 
   const handleGripMouseDown = useCallback(
     (worldPos: Point): boolean => {
@@ -1322,21 +1877,62 @@ export function useGripEditing() {
       const shape = shapes.find(s => s.id === shapeId);
       if (!shape) return false;
 
-      const grips = getGripPoints(shape, drawingScale, viewport.zoom, showRotationGizmo);
+      const grips = getGripPoints(shape, drawingScale, viewport.zoom);
       if (grips.length === 0) return false;
 
       const tolerance = 10 / viewport.zoom;
 
+      // Check rotation gizmo handle and ring (takes priority)
+      if (showRotationGizmo && shape.type !== 'text') {
+        // Calculate centroid and ring radius — must match the renderer
+        let cx = 0, cy = 0;
+        for (const pt of grips) { cx += pt.x; cy += pt.y; }
+        cx /= grips.length;
+        cy /= grips.length;
+
+        // Fixed world-space ring radius: 50mm (must match renderer)
+        const ringRadius = 50;
+
+        // Hit test the handle at top of ring
+        const handleX = cx;
+        const handleY = cy - ringRadius; // Top position (handleAngle = -PI/2)
+        const gDx = worldPos.x - handleX;
+        const gDy = worldPos.y - handleY;
+        const handleHitRadius = 8 / viewport.zoom;
+
+        // Also allow clicking anywhere on the ring itself (within a tolerance band)
+        const distFromCenter = Math.sqrt((worldPos.x - cx) * (worldPos.x - cx) + (worldPos.y - cy) * (worldPos.y - cy));
+        const ringTolerance = 5 / viewport.zoom;
+        const onRing = Math.abs(distFromCenter - ringRadius) <= ringTolerance;
+
+        if (Math.sqrt(gDx * gDx + gDy * gDy) <= handleHitRadius || onRing) {
+          setCurrentSnapPoint(null);
+          const rotCenter = { x: cx, y: cy };
+          const initAngle = Math.atan2(worldPos.x - rotCenter.x, -(worldPos.y - rotCenter.y));
+          dragRef.current = {
+            shapeId,
+            gripIndex: -2, // Special index: rotation gizmo
+            originalShape: JSON.parse(JSON.stringify(shape)),
+            convertedToPolyline: false,
+            originalRectGripIndex: -2,
+            axisConstraint: null,
+            initialRotationAngle: initAngle,
+            rotationCenter: rotCenter,
+          };
+          return true;
+        }
+      }
+
       // First pass: check axis arrows on all grips (arrows take priority)
       // Skip arc midpoint (grip 3) — its circumcenter algorithm can't handle axis constraint
       // Skip text resize handles (grips 1, 2) for Y-axis — they only support X-axis (width) resize
-      // Skip rotation handles — they are circular handles, not square grips with arrows
+      // Skip text rotation handle (grip 3) — it's a rotation control, no axis constraint
       for (let i = 0; i < grips.length; i++) {
         if (shape.type === 'arc' && i === 3) continue;
-        if (isRotationGrip(shape, i)) continue; // Rotation handle - no axis arrows
+        if (shape.type === 'text' && i === 3) continue; // Rotation handle - no axis arrows
         // For line/beam midpoint (index 2), use rotated axes
         let gripAxisAngle = 0;
-        if (i === 2 && (shape.type === 'line' || shape.type === 'beam')) {
+        if (i === 2 && (shape.type === 'line' || shape.type === 'beam' || shape.type === 'gridline' || shape.type === 'wall')) {
           gripAxisAngle = Math.atan2(shape.end.y - shape.start.y, shape.end.x - shape.start.x);
         }
         const axisHit = hitTestAxisArrow(worldPos, grips[i], viewport.zoom, gripAxisAngle);
@@ -1383,6 +1979,7 @@ export function useGripEditing() {
             axisConstraint: effectiveAxisHit, originalGripPoint: { ...grips[i] },
             clickOffset: { x: worldPos.x - grips[i].x, y: worldPos.y - grips[i].y },
             axisAngle: gripAxisAngle || undefined,
+            enableSnapping: shape.type === 'plate-system',
           };
           return true;
         }
@@ -1446,18 +2043,18 @@ export function useGripEditing() {
             const forceXAxisConstraint = shape.type === 'text' && (i === 1 || i === 2);
 
             // Enable snapping for dimension reference point handles (gripIndex >= 4)
-            const enableSnapping = shape.type === 'dimension' && i >= 4;
+            // and for all plate-system grips (vertex and edge midpoint)
+            const enableSnapping = (shape.type === 'dimension' && i >= 4) || shape.type === 'plate-system';
 
-            // For rotation handles, calculate initial angle and rotation center
+            // For text rotation handle (grip 3), calculate initial angle
             let initialRotationAngle: number | undefined;
             let rotationCenter: Point | undefined;
-            if (isRotationGrip(shape, i)) {
-              rotationCenter = getRotationCenter(shape) ?? undefined;
-              if (rotationCenter) {
-                const dx = worldPos.x - rotationCenter.x;
-                const dy = worldPos.y - rotationCenter.y;
-                initialRotationAngle = Math.atan2(dx, -dy);
-              }
+            if (shape.type === 'text' && i === 3) {
+              const textShape = shape as TextShape;
+              rotationCenter = { ...textShape.position };
+              const dx = worldPos.x - rotationCenter.x;
+              const dy = worldPos.y - rotationCenter.y;
+              initialRotationAngle = Math.atan2(dx, -dy);
             }
 
             dragRef.current = {
@@ -1468,7 +2065,7 @@ export function useGripEditing() {
               originalRectGripIndex: i,
               polylineMidpointIndices,
               axisConstraint: forceXAxisConstraint ? 'x' : null,
-              originalGripPoint: forceXAxisConstraint ? { ...grips[i] } : undefined,
+              originalGripPoint: { ...grips[i] },
               enableSnapping,
               initialRotationAngle,
               rotationCenter,
@@ -1479,7 +2076,7 @@ export function useGripEditing() {
       }
 
       // Third pass: check if click is on the shape body (for drag-to-move)
-      if (isPointNearShape(worldPos, shape, tolerance, drawingScale, blockDefinitionsMap)) {
+      if (isPointNearShape(worldPos, shape, tolerance, drawingScale)) {
         setCurrentSnapPoint(null);
         // Use shape's reference point (first meaningful position) as anchor
         const refPoint = getShapeReferencePoint(shape);
@@ -1490,6 +2087,8 @@ export function useGripEditing() {
           convertedToPolyline: false,
           originalRectGripIndex: -1,
           axisConstraint: null,
+          originalGripPoint: { ...refPoint },
+          enableSnapping: true, // Enable snapping during body drag so shapes snap to gridline endpoints etc.
           // clickOffset = mouse - refPoint, so adjustedPos = mouse - clickOffset = refPoint's new position
           clickOffset: { x: worldPos.x - refPoint.x, y: worldPos.y - refPoint.y },
         };
@@ -1498,7 +2097,7 @@ export function useGripEditing() {
 
       return false;
     },
-    [selectedShapeIds, shapes, parametricShapes, viewport.zoom, setCurrentSnapPoint, drawingScale, blockDefinitionsMap, showRotationGizmo]
+    [selectedShapeIds, shapes, parametricShapes, viewport.zoom, setCurrentSnapPoint, drawingScale, showRotationGizmo]
   );
 
   const handleGripMouseMove = useCallback(
@@ -1543,6 +2142,26 @@ export function useGripEditing() {
       const currentShape = useAppStore.getState().shapes.find(s => s.id === drag.shapeId);
       if (!currentShape) return true;
 
+      // Lazily detect joined gridline endpoints on first move
+      if (currentShape.type === 'gridline' && (drag.gripIndex === 0 || drag.gripIndex === 1) && joinedGridlinesRef.current.length === 0) {
+        const allShapes = useAppStore.getState().shapes;
+        const joined = findJoinedGridlineEndpoints(
+          currentShape as GridlineShape, drag.gripIndex as 0 | 1, allShapes, 1
+        );
+        if (joined.length > 0) {
+          joinedGridlinesRef.current = joined;
+        }
+      }
+
+      // Lazily detect joined section levels on first move (endpoint drags move all levels horizontally)
+      if (currentShape.type === 'level' && (drag.gripIndex === 0 || drag.gripIndex === 1) && joinedSectionLevelsRef.current.length === 0) {
+        const allShapes = useAppStore.getState().shapes;
+        const joined = findJoinedSectionLevels(currentShape as LevelShape, allShapes);
+        if (joined.length > 0) {
+          joinedSectionLevelsRef.current = joined;
+        }
+      }
+
       // Apply click offset (prevent grip from jumping to mouse position when clicking on arrow)
       const adjustedPos = drag.clickOffset
         ? { x: worldPos.x - drag.clickOffset.x, y: worldPos.y - drag.clickOffset.y }
@@ -1583,14 +2202,39 @@ export function useGripEditing() {
         }
       }
 
-      // Shift-key: snap line/beam endpoint to 45° angle increments
+      // Shift-key: snap line/beam/gridline/wall endpoint to 45° angle increments
       if (shiftKey && !drag.axisConstraint &&
-          (currentShape.type === 'line' || currentShape.type === 'beam') &&
+          (currentShape.type === 'line' || currentShape.type === 'beam' || currentShape.type === 'gridline' || currentShape.type === 'wall') &&
           (drag.gripIndex === 0 || drag.gripIndex === 1)) {
         const opposite = drag.gripIndex === 0
-          ? (currentShape as LineShape | BeamShape).end
-          : (currentShape as LineShape | BeamShape).start;
+          ? (currentShape as LineShape | BeamShape | GridlineShape | WallShape).end
+          : (currentShape as LineShape | BeamShape | GridlineShape | WallShape).start;
         constrainedPos = snapToAngle(opposite, constrainedPos);
+      }
+
+      // Shift-key: constrain section-callout grip movement to horizontal or vertical
+      if (shiftKey && !drag.axisConstraint && currentShape.type === 'section-callout' && drag.originalGripPoint) {
+        const scShape = currentShape as SectionCalloutShape;
+        if (drag.gripIndex === 0 || drag.gripIndex === 1) {
+          // Endpoint drag: constrain relative to the opposite endpoint
+          const opposite = drag.gripIndex === 0 ? scShape.end : scShape.start;
+          const sdx = constrainedPos.x - opposite.x;
+          const sdy = constrainedPos.y - opposite.y;
+          if (Math.abs(sdx) >= Math.abs(sdy)) {
+            constrainedPos = { x: constrainedPos.x, y: opposite.y };
+          } else {
+            constrainedPos = { x: opposite.x, y: constrainedPos.y };
+          }
+        } else if (drag.gripIndex === 2 || drag.gripIndex === -1) {
+          // Midpoint or body drag: constrain movement delta to horizontal or vertical
+          const sdx = constrainedPos.x - drag.originalGripPoint.x;
+          const sdy = constrainedPos.y - drag.originalGripPoint.y;
+          if (Math.abs(sdx) >= Math.abs(sdy)) {
+            constrainedPos = { x: constrainedPos.x, y: drag.originalGripPoint.y };
+          } else {
+            constrainedPos = { x: drag.originalGripPoint.x, y: constrainedPos.y };
+          }
+        }
       }
 
       // Apply tracking for beam/line endpoint drags and polyline vertex drags
@@ -1598,16 +2242,11 @@ export function useGripEditing() {
       let shouldApplyTracking = false;
 
       if (trackingEnabled && !drag.axisConstraint) {
-        if ((currentShape.type === 'beam' || currentShape.type === 'line') &&
+        if ((currentShape.type === 'beam' || currentShape.type === 'line' || currentShape.type === 'gridline' || currentShape.type === 'wall') &&
             (drag.gripIndex === 0 || drag.gripIndex === 1)) {
-          // Beam/Line endpoint drag - use opposite endpoint as base
-          if (currentShape.type === 'beam') {
-            const beam = currentShape as BeamShape;
-            basePoint = drag.gripIndex === 0 ? beam.end : beam.start;
-          } else if (currentShape.type === 'line') {
-            const line = currentShape as LineShape;
-            basePoint = drag.gripIndex === 0 ? line.end : line.start;
-          }
+          // Line-like endpoint drag - use opposite endpoint as base
+          const linelike = currentShape as LineShape | BeamShape | GridlineShape | WallShape;
+          basePoint = drag.gripIndex === 0 ? linelike.end : linelike.start;
           shouldApplyTracking = true;
         } else if (currentShape.type === 'polyline' && drag.gripIndex < currentShape.points.length) {
           // Polyline vertex drag - use adjacent vertex as base
@@ -1669,7 +2308,7 @@ export function useGripEditing() {
         setTrackingPoint(null);
       }
 
-      // Apply snap detection for endpoint drags (beam, line, polyline, dimension)
+      // Apply snap detection for endpoint drags and body drags (move)
       const shouldEnableSnapping = drag.enableSnapping || shouldApplyTracking;
 
       if (shouldEnableSnapping) {
@@ -1713,13 +2352,13 @@ export function useGripEditing() {
         }
       }
 
-      // Special handling for rotation grips (uses relative angle)
-      if (drag.rotationCenter && drag.initialRotationAngle !== undefined) {
+      // Special handling for text rotation (uses relative angle)
+      if (currentShape.type === 'text' && drag.gripIndex === 3 && drag.rotationCenter && drag.initialRotationAngle !== undefined) {
         const dx = constrainedPos.x - drag.rotationCenter.x;
         const dy = constrainedPos.y - drag.rotationCenter.y;
         const currentAngle = Math.atan2(dx, -dy);
         const deltaAngle = currentAngle - drag.initialRotationAngle;
-        const originalRotation = (drag.originalShape as any).rotation || 0;
+        const originalRotation = (drag.originalShape as TextShape).rotation || 0;
         let newRotation = originalRotation + deltaAngle;
 
         // Angle snapping - snap to common angles (0°, 45°, 90°, etc.)
@@ -1728,6 +2367,7 @@ export function useGripEditing() {
 
         for (const snapAngle of snapAngles) {
           const diff = Math.abs(newRotation - snapAngle);
+          // Also check wrapped angles (e.g., -180° and 180° are the same)
           const wrappedDiff = Math.abs(diff - 2 * Math.PI);
           if (diff < snapThreshold || wrappedDiff < snapThreshold) {
             newRotation = snapAngle;
@@ -1738,28 +2378,53 @@ export function useGripEditing() {
         useAppStore.setState((state) => {
           const idx = state.shapes.findIndex(s => s.id === drag.shapeId);
           if (idx !== -1) {
-            const s = state.shapes[idx];
-            (s as any).rotation = newRotation;
-
-            // For shapes that rotate around topLeft/position (not their center),
-            // recompute the anchor so the center stays at drag.rotationCenter.
-            if (s.type === 'rectangle') {
-              const cos = Math.cos(newRotation);
-              const sin = Math.sin(newRotation);
-              s.topLeft = {
-                x: drag.rotationCenter!.x - (s.width / 2) * cos + (s.height / 2) * sin,
-                y: drag.rotationCenter!.y - (s.width / 2) * sin - (s.height / 2) * cos,
-              };
-            } else if (s.type === 'image') {
-              const cos = Math.cos(newRotation);
-              const sin = Math.sin(newRotation);
-              s.position = {
-                x: drag.rotationCenter!.x - (s.width / 2) * cos + (s.height / 2) * sin,
-                y: drag.rotationCenter!.y - (s.width / 2) * sin - (s.height / 2) * cos,
-              };
-            }
+            (state.shapes[idx] as TextShape).rotation = newRotation;
           }
         });
+        return true;
+      }
+
+      // Rotation gizmo drag (gripIndex === -2): rotate shape around centroid
+      if (drag.gripIndex === -2 && drag.rotationCenter && drag.initialRotationAngle !== undefined) {
+        const rdx = constrainedPos.x - drag.rotationCenter.x;
+        const rdy = constrainedPos.y - drag.rotationCenter.y;
+        const currentAngle = Math.atan2(rdx, -rdy);
+        let deltaAngle = currentAngle - drag.initialRotationAngle;
+        let isSnapped = false;
+
+        // Snap to 45 degree increments only when Shift is held
+        if (shiftKey) {
+          const snapAngles = [0, Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4, Math.PI, -Math.PI, -(3 * Math.PI) / 4, -Math.PI / 2, -Math.PI / 4];
+          const snapThreshold = Math.PI / 36;
+          for (const sa of snapAngles) {
+            if (Math.abs(deltaAngle - sa) < snapThreshold ||
+                Math.abs(deltaAngle - sa + 2 * Math.PI) < snapThreshold ||
+                Math.abs(deltaAngle - sa - 2 * Math.PI) < snapThreshold) {
+              deltaAngle = sa;
+              isSnapped = true;
+              break;
+            }
+          }
+        }
+
+        // Set active rotation state for the renderer to draw angle feedback
+        setActiveRotation({
+          shapeId: drag.shapeId,
+          center: drag.rotationCenter,
+          startAngle: drag.initialRotationAngle,
+          deltaAngle,
+          isSnapped,
+        });
+
+        const rotUpdates = computeRotationUpdates(drag.originalShape, drag.rotationCenter, deltaAngle);
+        if (rotUpdates) {
+          useAppStore.setState((state) => {
+            const idx = state.shapes.findIndex(s => s.id === drag.shapeId);
+            if (idx !== -1) {
+              Object.assign(state.shapes[idx], rotUpdates);
+            }
+          });
+        }
         return true;
       }
 
@@ -1774,6 +2439,87 @@ export function useGripEditing() {
           }
         });
       }
+
+      // Sync joined gridline endpoints
+      if (joinedGridlinesRef.current.length > 0 && drag.originalShape.type === 'gridline') {
+        const origEndpoint = drag.gripIndex === 0
+          ? (drag.originalShape as GridlineShape).start
+          : (drag.originalShape as GridlineShape).end;
+        const delta = { x: constrainedPos.x - origEndpoint.x, y: constrainedPos.y - origEndpoint.y };
+
+        // Get the dragged gridline's direction for parallel projection
+        const dragDir = {
+          x: (drag.originalShape as GridlineShape).end.x - (drag.originalShape as GridlineShape).start.x,
+          y: (drag.originalShape as GridlineShape).end.y - (drag.originalShape as GridlineShape).start.y,
+        };
+        const dragLen = Math.sqrt(dragDir.x * dragDir.x + dragDir.y * dragDir.y);
+        const dragUnit = dragLen > 0 ? { x: dragDir.x / dragLen, y: dragDir.y / dragLen } : { x: 1, y: 0 };
+
+        useAppStore.setState((state) => {
+          for (const joined of joinedGridlinesRef.current) {
+            const idx = state.shapes.findIndex(s => s.id === joined.shapeId);
+            if (idx !== -1) {
+              if (joined.isParallel) {
+                // Parallel: project delta along the parallel gridline's own direction
+                const glDir = {
+                  x: joined.originalShape.end.x - joined.originalShape.start.x,
+                  y: joined.originalShape.end.y - joined.originalShape.start.y,
+                };
+                const glLen = Math.sqrt(glDir.x * glDir.x + glDir.y * glDir.y);
+                if (glLen === 0) continue;
+                const glUnit = { x: glDir.x / glLen, y: glDir.y / glLen };
+                // Project the delta along the dragged gridline's direction,
+                // then apply that distance along the parallel gridline's direction
+                const projDist = delta.x * dragUnit.x + delta.y * dragUnit.y;
+                const origPt = joined.gripIndex === 0
+                  ? joined.originalShape.start
+                  : joined.originalShape.end;
+                const newPt = {
+                  x: origPt.x + glUnit.x * projDist,
+                  y: origPt.y + glUnit.y * projDist,
+                };
+                if (joined.gripIndex === 0) {
+                  (state.shapes[idx] as GridlineShape).start = newPt;
+                } else {
+                  (state.shapes[idx] as GridlineShape).end = newPt;
+                }
+              } else {
+                // Perpendicular: move by same delta (existing behavior)
+                const origPt = joined.gripIndex === 0
+                  ? joined.originalShape.start
+                  : joined.originalShape.end;
+                const newPt = { x: origPt.x + delta.x, y: origPt.y + delta.y };
+                if (joined.gripIndex === 0) {
+                  (state.shapes[idx] as GridlineShape).start = newPt;
+                } else {
+                  (state.shapes[idx] as GridlineShape).end = newPt;
+                }
+              }
+            }
+          }
+        });
+      }
+
+      // Sync joined section levels: move all other section-ref levels horizontally together
+      if (joinedSectionLevelsRef.current.length > 0 && drag.originalShape.type === 'level' && (drag.gripIndex === 0 || drag.gripIndex === 1)) {
+        const origEndpoint = drag.gripIndex === 0
+          ? (drag.originalShape as LevelShape).start
+          : (drag.originalShape as LevelShape).end;
+        const dx = constrainedPos.x - origEndpoint.x;
+
+        useAppStore.setState((state) => {
+          for (const joined of joinedSectionLevelsRef.current) {
+            const idx = state.shapes.findIndex(s => s.id === joined.shapeId);
+            if (idx !== -1) {
+              const lv = state.shapes[idx] as LevelShape;
+              // Move both start and end x by the same delta (keeping the horizontal spread)
+              (state.shapes[idx] as LevelShape).start = { x: joined.originalShape.start.x + dx, y: lv.start.y };
+              (state.shapes[idx] as LevelShape).end = { x: joined.originalShape.end.x + dx, y: lv.end.y };
+            }
+          }
+        });
+      }
+
       return true;
     },
     [setCurrentSnapPoint, trackingEnabled, polarTrackingEnabled, orthoMode, objectTrackingEnabled,
@@ -1785,6 +2531,8 @@ export function useGripEditing() {
     // Clear tracking lines on mouse up
     setCurrentTrackingLines([]);
     setTrackingPoint(null);
+    // Clear active rotation feedback
+    setActiveRotation(null);
 
     // Check parametric shape drag first
     const parametricDrag = parametricDragRef.current;
@@ -1817,32 +2565,168 @@ export function useGripEditing() {
     setCurrentSnapPoint(null);
 
     const currentShape = useAppStore.getState().shapes.find(s => s.id === drag.shapeId);
+    const joinedShapes = joinedGridlinesRef.current;
+    const joinedLevels = joinedSectionLevelsRef.current;
+    const hasJoined = joinedShapes.length > 0 || joinedLevels.length > 0;
+
     if (currentShape) {
+      // Capture final states of joined shapes before restoring originals
+      const joinedFinalStates: { id: string; shape: Shape }[] = [];
+      if (hasJoined) {
+        const storeShapes = useAppStore.getState().shapes;
+        for (const joined of joinedShapes) {
+          const s = storeShapes.find(sh => sh.id === joined.shapeId);
+          if (s) joinedFinalStates.push({ id: joined.shapeId, shape: { ...s } });
+        }
+        for (const joined of joinedLevels) {
+          const s = storeShapes.find(sh => sh.id === joined.shapeId);
+          if (s) joinedFinalStates.push({ id: joined.shapeId, shape: { ...s } });
+        }
+      }
+
       // Restore original shape (direct mutation, no history)
       useAppStore.setState((state) => {
         const idx = state.shapes.findIndex(s => s.id === drag.shapeId);
         if (idx !== -1) {
           state.shapes[idx] = { ...drag.originalShape } as Shape;
         }
+        // Also restore joined originals
+        for (const joined of joinedShapes) {
+          const jIdx = state.shapes.findIndex(s => s.id === joined.shapeId);
+          if (jIdx !== -1) {
+            state.shapes[jIdx] = { ...joined.originalShape } as Shape;
+          }
+        }
+        for (const joined of joinedLevels) {
+          const jIdx = state.shapes.findIndex(s => s.id === joined.shapeId);
+          if (jIdx !== -1) {
+            state.shapes[jIdx] = { ...joined.originalShape } as Shape;
+          }
+        }
       });
 
-      // Commit final state through updateShape (single history entry)
-      const typeChanged = drag.originalShape.type !== currentShape.type;
-      if (typeChanged) {
-        // Shape type was converted (rect→polyline or circle→ellipse)
-        // Replace with the full converted shape data
-        const convertedData = { ...currentShape } as Shape;
-        updateShape(drag.shapeId, convertedData);
+      // Record history index before committing, so we can collapse all
+      // related entries (shape move + dimension updates + label updates etc.)
+      // into a single undo step.
+      const historyStartIndex = useAppStore.getState().historyIndex + 1;
+
+      // Commit final state through history
+      if (hasJoined) {
+        // Batch commit: dragged shape + all joined shapes as one undo step
+        const batchUpdates: { id: string; updates: Partial<Shape> }[] = [
+          { id: drag.shapeId, updates: { ...currentShape } as Partial<Shape> },
+        ];
+        for (const jf of joinedFinalStates) {
+          batchUpdates.push({ id: jf.id, updates: { ...jf.shape } as Partial<Shape> });
+        }
+        updateShapes(batchUpdates);
       } else {
-        // Commit the current (mutated) shape state as a single history entry
         updateShape(drag.shapeId, { ...currentShape } as Partial<Shape>);
+      }
+
+      // Recalculate miter joins for walls/beams with miter angles after grip edit
+      if (currentShape.type === 'wall' || currentShape.type === 'beam') {
+        const allShapesNow = useAppStore.getState().shapes;
+        const updatedShape = allShapesNow.find(s => s.id === drag.shapeId);
+        if (updatedShape) {
+          const miterUpdates = recalculateMiterJoins(updatedShape, allShapesNow);
+          if (miterUpdates.length > 0) {
+            updateShapes(miterUpdates);
+          }
+        }
+      }
+
+      // Update linked labels to stay parallel with the modified shape
+      {
+        const allShapesNow = useAppStore.getState().shapes;
+        const updatedShape = allShapesNow.find(s => s.id === drag.shapeId);
+        if (updatedShape) {
+          const labelPos = computeLinkedLabelPosition(updatedShape);
+          if (labelPos) {
+            const linkedLabels = findLinkedLabels(allShapesNow, drag.shapeId);
+            if (linkedLabels.length > 0) {
+              const labelUpdates = linkedLabels.map(label => ({
+                id: label.id,
+                updates: {
+                  position: labelPos.position,
+                  rotation: labelPos.rotation,
+                } as Partial<Shape>,
+              }));
+              updateShapes(labelUpdates);
+            }
+          }
+        }
+      }
+
+      // Regenerate plate system child beams after contour grip edit
+      // (must happen before collapse so the beam add/delete is included)
+      if (drag.originalShape.type === 'plate-system') {
+        regeneratePlateSystemBeams(drag.shapeId);
+      }
+
+      // Collapse all history entries created so far into one undo step
+      // (covers: shape move + miter recalc + linked label updates + plate system beams)
+      const storeAfterCommit = useAppStore.getState();
+      if (storeAfterCommit.historyIndex >= historyStartIndex) {
+        storeAfterCommit.collapseEntries(historyStartIndex);
       }
     }
 
+    // Auto-regenerate grid dimensions if a gridline was dragged
+    if (drag.originalShape.type === 'gridline') {
+      // Record history index before dimension updates so we can collapse them
+      // together with the gridline move (which was already collapsed above).
+      // We need a fresh start index since the previous collapse already merged.
+      const dimHistoryStart = useAppStore.getState().historyIndex;
+
+      // Update associative DimAssociate dimensions linked to this gridline
+      updateLinkedDimensions(drag.shapeId);
+      // Also update linked dims for any joined gridlines that moved together
+      for (const joined of joinedGridlinesRef.current) {
+        updateLinkedDimensions(joined.shapeId);
+      }
+      // Regenerate auto-generated grid dimensions if enabled (synchronous)
+      if (useAppStore.getState().autoGridDimension) {
+        regenerateGridDimensions();
+      }
+
+      // Collapse the gridline move + all dimension updates into one undo step
+      const storeAfterDims = useAppStore.getState();
+      if (storeAfterDims.historyIndex > dimHistoryStart) {
+        storeAfterDims.collapseEntries(dimHistoryStart);
+      }
+
+      // Bidirectional sync: if this is a section reference gridline, propagate back to plan
+      if (drag.shapeId.startsWith('section-ref-')) {
+        setTimeout(() => {
+          useAppStore.getState().syncSectionReferenceToSource?.(drag.shapeId);
+        }, 60);
+      }
+    }
+
+    // Bidirectional sync: if a section reference level was dragged, propagate back to storey
+    if (drag.originalShape.type === 'level' && drag.shapeId.startsWith('section-ref-')) {
+      setTimeout(() => {
+        useAppStore.getState().syncSectionReferenceToSource?.(drag.shapeId);
+      }, 60);
+    }
+
+    // Update linked section drawing boundary when a section callout is grip-edited
+    if (drag.originalShape.type === 'section-callout') {
+      const sc = useAppStore.getState().shapes.find(s => s.id === drag.shapeId) as SectionCalloutShape | undefined;
+      if (sc?.targetDrawingId) {
+        setTimeout(() => {
+          useAppStore.getState().updateSectionDrawingBoundary?.(sc.targetDrawingId!);
+        }, 50);
+      }
+    }
+
+    joinedGridlinesRef.current = [];
+    joinedSectionLevelsRef.current = [];
     dragRef.current = null;
     justFinishedDragRef.current = true;
     return true;
-  }, [updateShape, updateProfilePosition, setCurrentSnapPoint, setCurrentTrackingLines, setTrackingPoint]);
+  }, [updateShape, updateShapes, updateProfilePosition, setCurrentSnapPoint, setCurrentTrackingLines, setTrackingPoint]);
 
   const isDragging = useCallback(() => dragRef.current !== null || parametricDragRef.current !== null, []);
 
@@ -1873,14 +2757,36 @@ export function useGripEditing() {
       }
 
       const shape = shapes.find(s => s.id === selectedShapeIds[0]);
-      if (!shape) { setGripHover(null); return null; }
-      const grips = getGripPoints(shape, drawingScale, viewport.zoom, showRotationGizmo);
+      if (!shape) { setGripHover(null); setRotationGizmoHovered(false); return null; }
+      const grips = getGripPoints(shape, drawingScale, viewport.zoom);
+
+      // Check rotation gizmo hover (handle + ring)
+      if (showRotationGizmo && shape.type !== 'text' && grips.length > 0) {
+        let cx = 0, cy = 0;
+        for (const pt of grips) { cx += pt.x; cy += pt.y; }
+        cx /= grips.length;
+        cy /= grips.length;
+        // Fixed world-space ring radius: 50mm (must match renderer)
+        const ringRadius = 50;
+        const handleX = cx;
+        const handleY = cy - ringRadius;
+        const hDx = worldPos.x - handleX;
+        const hDy = worldPos.y - handleY;
+        const handleHitRadius = 8 / viewport.zoom;
+        const distFromCenter = Math.sqrt((worldPos.x - cx) * (worldPos.x - cx) + (worldPos.y - cy) * (worldPos.y - cy));
+        const ringTolerance = 5 / viewport.zoom;
+        const onHandle = Math.sqrt(hDx * hDx + hDy * hDy) <= handleHitRadius;
+        const onRing = Math.abs(distFromCenter - ringRadius) <= ringTolerance;
+        setRotationGizmoHovered(onHandle || onRing);
+      } else {
+        setRotationGizmoHovered(false);
+      }
+
       for (let i = 0; i < grips.length; i++) {
         if (shape.type === 'arc' && i === 3) continue;
-        if (isRotationGrip(shape, i)) continue; // Rotation grips have no axis arrows
         // For line/beam midpoint (index 2), use rotated axes
         let gripAxisAngle = 0;
-        if (i === 2 && (shape.type === 'line' || shape.type === 'beam')) {
+        if (i === 2 && (shape.type === 'line' || shape.type === 'beam' || shape.type === 'gridline' || shape.type === 'wall')) {
           gripAxisAngle = Math.atan2(shape.end.y - shape.start.y, shape.end.x - shape.start.x);
         }
         const axis = hitTestAxisArrow(worldPos, grips[i], viewport.zoom, gripAxisAngle);

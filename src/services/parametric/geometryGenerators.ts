@@ -889,6 +889,268 @@ function generateRoundBarGeometry(
 }
 
 // ============================================================================
+// Concrete Rectangular Generator
+// ============================================================================
+
+function generateConcreteRectGeometry(
+  params: ParameterValues,
+  position: Point,
+  rotation: number,
+  scale: number
+): GeneratedGeometry {
+  const w = params.width as number;
+  const h = params.height as number;
+  const halfW = w / 2;
+  const halfH = h / 2;
+
+  const outline: Point[] = [
+    { x: -halfW, y: -halfH },
+    { x: halfW, y: -halfH },
+    { x: halfW, y: halfH },
+    { x: -halfW, y: halfH },
+  ];
+
+  const center = { x: 0, y: 0 };
+  const transformedOutline = transformPoints(outline, center, rotation, scale, position);
+
+  return {
+    outlines: [transformedOutline],
+    closed: [true],
+    center: position,
+    bounds: calculateBounds(transformedOutline),
+    generatedAt: Date.now(),
+  };
+}
+
+// ============================================================================
+// Concrete Round Generator
+// ============================================================================
+
+function generateConcreteRoundGeometry(
+  params: ParameterValues,
+  position: Point,
+  rotation: number,
+  scale: number
+): GeneratedGeometry {
+  const d = params.diameter as number;
+  const r = d / 2;
+  const outline = generateCirclePoints(0, 0, r, 48);
+  const center = { x: 0, y: 0 };
+  const transformedOutline = transformPoints(outline, center, rotation, scale, position);
+
+  const arcInfo = transformArcInfo(
+    { centerX: 0, centerY: 0, radius: r, startAngle: 0, endAngle: Math.PI * 2 },
+    rotation, scale, position
+  );
+  const arcSegment: ArcSegmentInfo = {
+    startIndex: 0,
+    endIndex: transformedOutline.length - 1,
+    center: arcInfo.center,
+    radius: arcInfo.radius,
+    startAngle: arcInfo.startAngle,
+    endAngle: arcInfo.endAngle,
+  };
+
+  return {
+    outlines: [transformedOutline],
+    closed: [true],
+    center: position,
+    bounds: calculateBounds(transformedOutline),
+    generatedAt: Date.now(),
+    arcSegments: [[arcSegment]],
+  };
+}
+
+// ============================================================================
+// Concrete T-Beam Generator
+// ============================================================================
+
+function generateConcreteTeeGeometry(
+  params: ParameterValues,
+  position: Point,
+  rotation: number,
+  scale: number
+): GeneratedGeometry {
+  const bf = params.flangeWidth as number;
+  const hf = params.flangeThickness as number;
+  const bw = params.webWidth as number;
+  const h = params.height as number;
+
+  const halfBf = bf / 2;
+  const halfBw = bw / 2;
+  const halfH = h / 2;
+
+  // T-shape: flange on top, web below
+  const outline: Point[] = [
+    { x: -halfBf, y: -halfH },                  // Top-left of flange
+    { x: halfBf, y: -halfH },                   // Top-right of flange
+    { x: halfBf, y: -halfH + hf },              // Bottom-right of flange
+    { x: halfBw, y: -halfH + hf },              // Right notch
+    { x: halfBw, y: halfH },                    // Bottom-right of web
+    { x: -halfBw, y: halfH },                   // Bottom-left of web
+    { x: -halfBw, y: -halfH + hf },             // Left notch
+    { x: -halfBf, y: -halfH + hf },             // Bottom-left of flange
+  ];
+
+  const center = { x: 0, y: 0 };
+  const transformedOutline = transformPoints(outline, center, rotation, scale, position);
+
+  return {
+    outlines: [transformedOutline],
+    closed: [true],
+    center: position,
+    bounds: calculateBounds(transformedOutline),
+    generatedAt: Date.now(),
+  };
+}
+
+// ============================================================================
+// Timber Rectangular Generator
+// ============================================================================
+
+function generateTimberRectGeometry(
+  params: ParameterValues,
+  position: Point,
+  rotation: number,
+  scale: number
+): GeneratedGeometry {
+  const w = params.width as number;
+  const h = params.height as number;
+  const halfW = w / 2;
+  const halfH = h / 2;
+
+  const outline: Point[] = [
+    { x: -halfW, y: -halfH },
+    { x: halfW, y: -halfH },
+    { x: halfW, y: halfH },
+    { x: -halfW, y: halfH },
+  ];
+
+  const center = { x: 0, y: 0 };
+  const transformedOutline = transformPoints(outline, center, rotation, scale, position);
+
+  return {
+    outlines: [transformedOutline],
+    closed: [true],
+    center: position,
+    bounds: calculateBounds(transformedOutline),
+    generatedAt: Date.now(),
+  };
+}
+
+// ============================================================================
+// Timber Round Generator
+// ============================================================================
+
+function generateTimberRoundGeometry(
+  params: ParameterValues,
+  position: Point,
+  rotation: number,
+  scale: number
+): GeneratedGeometry {
+  const d = params.diameter as number;
+  const r = d / 2;
+  const outline = generateCirclePoints(0, 0, r, 48);
+  const center = { x: 0, y: 0 };
+  const transformedOutline = transformPoints(outline, center, rotation, scale, position);
+
+  const arcInfo = transformArcInfo(
+    { centerX: 0, centerY: 0, radius: r, startAngle: 0, endAngle: Math.PI * 2 },
+    rotation, scale, position
+  );
+  const arcSegment: ArcSegmentInfo = {
+    startIndex: 0,
+    endIndex: transformedOutline.length - 1,
+    center: arcInfo.center,
+    radius: arcInfo.radius,
+    startAngle: arcInfo.startAngle,
+    endAngle: arcInfo.endAngle,
+  };
+
+  return {
+    outlines: [transformedOutline],
+    closed: [true],
+    center: position,
+    bounds: calculateBounds(transformedOutline),
+    generatedAt: Date.now(),
+    arcSegments: [[arcSegment]],
+  };
+}
+
+// ============================================================================
+// Generic Rectangular Generator
+// ============================================================================
+
+function generateGenericRectGeometry(
+  params: ParameterValues,
+  position: Point,
+  rotation: number,
+  scale: number
+): GeneratedGeometry {
+  const w = params.width as number;
+  const h = params.height as number;
+  const halfW = w / 2;
+  const halfH = h / 2;
+
+  const outline: Point[] = [
+    { x: -halfW, y: -halfH },
+    { x: halfW, y: -halfH },
+    { x: halfW, y: halfH },
+    { x: -halfW, y: halfH },
+  ];
+
+  const center = { x: 0, y: 0 };
+  const transformedOutline = transformPoints(outline, center, rotation, scale, position);
+
+  return {
+    outlines: [transformedOutline],
+    closed: [true],
+    center: position,
+    bounds: calculateBounds(transformedOutline),
+    generatedAt: Date.now(),
+  };
+}
+
+// ============================================================================
+// Generic Circular Generator
+// ============================================================================
+
+function generateGenericCircGeometry(
+  params: ParameterValues,
+  position: Point,
+  rotation: number,
+  scale: number
+): GeneratedGeometry {
+  const d = params.diameter as number;
+  const r = d / 2;
+  const outline = generateCirclePoints(0, 0, r, 48);
+  const center = { x: 0, y: 0 };
+  const transformedOutline = transformPoints(outline, center, rotation, scale, position);
+
+  const arcInfo = transformArcInfo(
+    { centerX: 0, centerY: 0, radius: r, startAngle: 0, endAngle: Math.PI * 2 },
+    rotation, scale, position
+  );
+  const arcSegment: ArcSegmentInfo = {
+    startIndex: 0,
+    endIndex: transformedOutline.length - 1,
+    center: arcInfo.center,
+    radius: arcInfo.radius,
+    startAngle: arcInfo.startAngle,
+    endAngle: arcInfo.endAngle,
+  };
+
+  return {
+    outlines: [transformedOutline],
+    closed: [true],
+    center: position,
+    bounds: calculateBounds(transformedOutline),
+    generatedAt: Date.now(),
+    arcSegments: [[arcSegment]],
+  };
+}
+
+// ============================================================================
 // Generator Registry
 // ============================================================================
 
@@ -908,6 +1170,13 @@ const GEOMETRY_GENERATORS: Record<ProfileType, GeneratorFunction> = {
   'hss-round': generateHSSRoundGeometry,
   'plate': generatePlateGeometry,
   'round-bar': generateRoundBarGeometry,
+  'concrete-rect': generateConcreteRectGeometry,
+  'concrete-round': generateConcreteRoundGeometry,
+  'concrete-tee': generateConcreteTeeGeometry,
+  'timber-rect': generateTimberRectGeometry,
+  'timber-round': generateTimberRoundGeometry,
+  'generic-rect': generateGenericRectGeometry,
+  'generic-circ': generateGenericCircGeometry,
   'custom': () => ({
     outlines: [],
     closed: [],

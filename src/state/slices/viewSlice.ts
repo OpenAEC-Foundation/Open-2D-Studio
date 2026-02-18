@@ -28,6 +28,7 @@ export interface ViewActions {
   zoomToFit: () => void;
   zoomToSelection: () => void;
   resetView: () => void;
+  rotateView: (angleDeg: number) => void;
   setCanvasSize: (size: { width: number; height: number }) => void;
   setMousePosition: (point: Point) => void;
   setCursor2D: (point: Point) => void;
@@ -64,6 +65,7 @@ export const initialViewState: ViewState = {
 import type { Shape } from '../../types/geometry';
 import { getShapeBounds } from './types';
 import { translateTransform, transformShape } from '../../engine/geometry/Modify';
+import { screenToWorld } from '../../engine/geometry/GeometryUtils';
 
 // Type for the full store that this slice needs access to
 interface StoreWithModel {
@@ -90,7 +92,7 @@ export const createViewSlice = (
 
   zoomOut: () =>
     set((state) => {
-      state.viewport.zoom = Math.max(state.viewport.zoom / 1.2, 0.01);
+      state.viewport.zoom = Math.max(state.viewport.zoom / 1.2, 0.001);
     }),
 
   zoomToFit: () => {
@@ -206,8 +208,27 @@ export const createViewSlice = (
 
   resetView: () =>
     set((state) => {
-      state.viewport = { offsetX: 0, offsetY: 0, zoom: 1 };
+      state.viewport = { offsetX: 0, offsetY: 0, zoom: 1, rotation: 0 };
     }),
+
+  rotateView: (angleDeg) => {
+    const { viewport, canvasSize } = get();
+    const cx = canvasSize.width / 2;
+    const cy = canvasSize.height / 2;
+    // World position at screen center before rotation
+    const wc = screenToWorld(cx, cy, viewport);
+    const newRotation = (viewport.rotation || 0) + angleDeg * Math.PI / 180;
+    // Adjust offset so screen center stays at the same world position
+    const cos = Math.cos(newRotation);
+    const sin = Math.sin(newRotation);
+    const newOffsetX = cx - wc.x * viewport.zoom * cos + wc.y * viewport.zoom * sin;
+    const newOffsetY = cy - wc.x * viewport.zoom * sin - wc.y * viewport.zoom * cos;
+    set((state) => {
+      state.viewport.rotation = newRotation;
+      state.viewport.offsetX = newOffsetX;
+      state.viewport.offsetY = newOffsetY;
+    });
+  },
 
   setCanvasSize: (size) =>
     set((state) => {

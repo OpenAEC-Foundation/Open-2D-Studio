@@ -3,18 +3,23 @@
  */
 
 import type { Shape, DrawingPreview, CurrentStyle, Viewport } from '../types';
-import type { HatchShape, HatchPatternType, BeamShape, ImageShape, BlockDefinition, BlockInstanceShape } from '../../../types/geometry';
-import type { CustomHatchPattern, LineFamily, SvgHatchPattern } from '../../../types/hatch';
-import { BUILTIN_PATTERNS, isSvgHatchPattern } from '../../../types/hatch';
+import type { HatchShape, HatchPatternType, BeamShape, ImageShape, GridlineShape, LevelShape, PileShape, WallShape, SlabShape, WallType, SectionCalloutShape, SpaceShape, PlateSystemShape, SpotElevationShape, CPTShape, FoundationZoneShape } from '../../../types/geometry';
+import type { CustomHatchPattern, LineFamily, SvgHatchPattern, MaterialHatchSettings } from '../../../types/hatch';
+import { BUILTIN_PATTERNS, isSvgHatchPattern, DEFAULT_MATERIAL_HATCH_SETTINGS } from '../../../types/hatch';
 import { BaseRenderer } from './BaseRenderer';
-import { COLORS } from '../types';
+import { COLORS, LINE_DASH_PATTERNS, LINE_DASH_REFERENCE_SCALE } from '../types';
 import { DimensionRenderer } from './DimensionRenderer';
 import type { DimensionShape } from '../../../types/dimension';
 import { drawSplinePath } from '../../geometry/SplineUtils';
 import { bulgeToArc, bulgeArcMidpoint } from '../../geometry/GeometryUtils';
 import { svgToImage } from '../../../services/export/svgPatternService';
+import { generateProfileGeometry } from '../../../services/parametric/geometryGenerators';
+import type { ProfileType, ParameterValues } from '../../../types/parametric';
 import { getGripHover } from '../gripHoverState';
+import { getRotationGizmoVisible, getActiveRotation, getRotationGizmoHovered } from '../rotationGizmoState';
+import { useAppStore } from '../../../state/appStore';
 import { CAD_DEFAULT_FONT } from '../../../constants/cadDefaults';
+import { getElementLabelText, resolveTemplate } from '../../geometry/LabelUtils';
 
 export class ShapeRenderer extends BaseRenderer {
   private dimensionRenderer: DimensionRenderer;
@@ -29,14 +34,20 @@ export class ShapeRenderer extends BaseRenderer {
   private previewSelectedIds: Set<string> = new Set();
   // Display lineweight: when false, all lines render at 1px screen width
   private _showLineweight: boolean = true;
-  // Whether to display rotation gizmo handles on selected shapes
-  private _showRotationGizmo: boolean = true;
   // Current viewport zoom (needed to compute 1-screen-pixel width in world coords)
   private _currentZoom: number = 1;
   // Cache for loaded image elements (keyed by shape ID)
   private imageCache: Map<string, HTMLImageElement> = new Map();
-  // Block definitions for rendering block instances
-  private blockDefinitions: Map<string, BlockDefinition> = new Map();
+  // Wall types for material-based hatch lookup
+  private wallTypes: WallType[] = [];
+  // Material hatch settings from Drawing Standards
+  private materialHatchSettings: MaterialHatchSettings = { ...DEFAULT_MATERIAL_HATCH_SETTINGS };
+  // Gridline extension distance in mm (distance beyond start/end before the bubble)
+  private gridlineExtension: number = 1000;
+  // Sea level datum: peil=0 elevation relative to NAP in meters (default 0)
+  private seaLevelDatum: number = 0;
+  // All shapes lookup for linked label text resolution
+  private shapesLookup: Map<string, Shape> = new Map();
 
   constructor(ctx: CanvasRenderingContext2D, width: number = 0, height: number = 0, dpr?: number) {
     super(ctx, width, height, dpr);
@@ -54,17 +65,22 @@ export class ShapeRenderer extends BaseRenderer {
   }
 
   /**
+   * Get line dash pattern scaled by drawing scale.
+   * Patterns are defined at reference scale (1:100). At other scales they
+   * are adjusted so dashes stay the same size on paper.
+   */
+  override getLineDash(lineStyle: string): number[] {
+    const pattern = LINE_DASH_PATTERNS[lineStyle] || [];
+    if (pattern.length === 0) return pattern;
+    const scaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+    return pattern.map(v => v * scaleFactor);
+  }
+
+  /**
    * Set whether to display actual line weights (false = all lines 1px thin)
    */
   setShowLineweight(show: boolean): void {
     this._showLineweight = show;
-  }
-
-  /**
-   * Set whether to display rotation gizmo handles on selected shapes
-   */
-  setShowRotationGizmo(show: boolean): void {
-    this._showRotationGizmo = show;
   }
 
   /**
@@ -75,21 +91,20 @@ export class ShapeRenderer extends BaseRenderer {
   }
 
   /**
-   * Set block definitions for rendering block instances
-   */
-  setBlockDefinitions(defs: BlockDefinition[]): void {
-    this.blockDefinitions.clear();
-    for (const def of defs) {
-      this.blockDefinitions.set(def.id, def);
-    }
-  }
-
-  /**
    * Get the effective stroke width (respects showLineweight toggle).
    * When lineweight display is off, returns 1 screen pixel in world coords.
+   * When lineweight display is on, applies a multiplier and minimum width
+   * so that line weights are clearly visible and distinguishable.
    */
   private getLineWidth(strokeWidth: number): number {
-    return this._showLineweight ? strokeWidth : 1 / this._currentZoom;
+    if (!this._showLineweight) {
+      return 1 / this._currentZoom;
+    }
+    // Amplify the line weight so differences are clearly visible,
+    // and enforce a minimum of 2 screen pixels (in world coords)
+    const amplified = strokeWidth * 3;
+    const minWidth = 2 / this._currentZoom;
+    return Math.max(amplified, minWidth);
   }
 
   /**
@@ -107,6 +122,58 @@ export class ShapeRenderer extends BaseRenderer {
     this.customPatterns = [...userPatterns, ...projectPatterns];
     // Preload SVG patterns
     this.preloadSvgPatterns();
+  }
+
+  /**
+   * Set wall types for material-based hatch lookup.
+   * When rendering walls, the renderer will look up the wall type by wallTypeId
+   * and use the material's hatch settings from Drawing Standards.
+   */
+  setWallTypes(wallTypes: WallType[]): void {
+    this.wallTypes = wallTypes;
+  }
+
+  /**
+   * Set material hatch settings from Drawing Standards.
+   * These define how each material category (concrete, masonry, etc.) is hatched.
+   */
+  setMaterialHatchSettings(settings: MaterialHatchSettings): void {
+    this.materialHatchSettings = settings;
+  }
+
+  /**
+   * Set the gridline extension distance (mm).
+   * This is how far the gridline extends beyond its start/end points before the bubble circle.
+   */
+  setGridlineExtension(value: number): void {
+    this.gridlineExtension = value;
+  }
+
+  /**
+   * Set the sea level datum (peil=0 relative to NAP) in meters.
+   * Used to display NAP elevations on level markers.
+   */
+  setSeaLevelDatum(value: number): void {
+    this.seaLevelDatum = value;
+  }
+
+  /**
+   * Set the currently selected shape IDs for associative dimension highlighting.
+   * When a dimension's linked element is selected, its text is rendered in green.
+   */
+  setSelectedShapeIds(ids: Set<string>): void {
+    this.dimensionRenderer.setSelectedShapeIds(ids);
+  }
+
+  /**
+   * Set the shapes lookup map for resolving linked label text.
+   * Call this before rendering shapes so linked labels can look up their target element.
+   */
+  setShapesLookup(shapes: Shape[]): void {
+    this.shapesLookup.clear();
+    for (const s of shapes) {
+      this.shapesLookup.set(s.id, s);
+    }
   }
 
   /**
@@ -220,20 +287,65 @@ export class ShapeRenderer extends BaseRenderer {
       case 'beam':
         this.drawBeam(shape as BeamShape, invertColors);
         break;
+      case 'gridline':
+        this.drawGridline(shape as GridlineShape, invertColors);
+        break;
+      case 'level':
+        this.drawLevel(shape as LevelShape, invertColors);
+        break;
+      case 'pile':
+        this.drawPile(shape as PileShape, invertColors);
+        break;
+      case 'cpt':
+        this.drawCPT(shape as CPTShape, invertColors);
+        break;
+      case 'foundation-zone':
+        this.drawFoundationZone(shape as FoundationZoneShape, invertColors);
+        break;
+      case 'wall':
+        this.drawWall(shape as WallShape, invertColors);
+        break;
+      case 'slab':
+        this.drawSlab(shape as SlabShape, invertColors);
+        break;
+      case 'section-callout':
+        this.drawSectionCallout(shape as SectionCalloutShape, invertColors);
+        break;
+      case 'space':
+        this.drawSpace(shape as SpaceShape, invertColors);
+        break;
+      case 'plate-system':
+        this.drawPlateSystem(shape as PlateSystemShape, invertColors);
+        break;
+      case 'spot-elevation':
+        this.drawSpotElevation(shape as SpotElevationShape, invertColors);
+        break;
       case 'image':
         this.drawImage(shape as ImageShape);
         break;
-      case 'block-instance':
-        this.drawBlockInstance(shape as BlockInstanceShape, isSelected, isHovered, invertColors);
-        break;
       default:
         break;
+    }
+
+    // Draw selection fill overlay (solid green fill over the shape area)
+    if (isSelected) {
+      this.drawSelectionFillOverlay(shape);
     }
 
     // Draw selection handles (hidden during modify tool operations)
     // Skip for text and dimension shapes - they have their own selection box rendering
     if (isSelected && !hideHandles && shape.type !== 'text' && shape.type !== 'dimension') {
       this.drawSelectionHandles(shape);
+    }
+
+    // Draw plate system edit mode indicator (dashed cyan border) or "Tab to edit" hint
+    if (shape.type === 'plate-system') {
+      const store = useAppStore.getState();
+      if (store.plateSystemEditMode && store.editingPlateSystemId === shape.id) {
+        this.drawPlateSystemEditModeIndicator(shape as PlateSystemShape);
+      } else if (isSelected) {
+        this.drawPlateSystemTabHint(shape as PlateSystemShape);
+      }
     }
 
     // Reset line dash
@@ -295,15 +407,498 @@ export class ShapeRenderer extends BaseRenderer {
       case 'beam':
         this.drawBeam(shape as BeamShape, invertColors);
         break;
+      case 'gridline':
+        this.drawGridline(shape as GridlineShape, invertColors);
+        break;
+      case 'level':
+        this.drawLevel(shape as LevelShape, invertColors);
+        break;
+      case 'pile':
+        this.drawPile(shape as PileShape, invertColors);
+        break;
+      case 'cpt':
+        this.drawCPT(shape as CPTShape, invertColors);
+        break;
+      case 'foundation-zone':
+        this.drawFoundationZone(shape as FoundationZoneShape, invertColors);
+        break;
+      case 'wall':
+        this.drawWall(shape as WallShape, invertColors);
+        break;
+      case 'slab':
+        this.drawSlab(shape as SlabShape, invertColors);
+        break;
+      case 'section-callout':
+        this.drawSectionCallout(shape as SectionCalloutShape, invertColors);
+        break;
+      case 'space':
+        this.drawSpace(shape as SpaceShape, invertColors);
+        break;
+      case 'plate-system':
+        this.drawPlateSystem(shape as PlateSystemShape, invertColors);
+        break;
+      case 'spot-elevation':
+        this.drawSpotElevation(shape as SpotElevationShape, invertColors);
+        break;
       case 'image':
         this.drawImage(shape as ImageShape);
-        break;
-      case 'block-instance':
-        this.drawBlockInstance(shape as BlockInstanceShape, false, false, invertColors);
         break;
     }
 
     ctx.setLineDash([]);
+  }
+
+  /**
+   * Draw a semi-transparent green fill overlay on a selected shape.
+   * For shapes with area (rectangles, circles, polygons, etc.), the area is
+   * filled. For line-only shapes (line, arc, spline, open polyline), a thicker
+   * green stroke is drawn instead.
+   */
+  private drawSelectionFillOverlay(shape: Shape): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.setLineDash([]);
+
+    switch (shape.type) {
+      case 'line': {
+        // Lines have no area -- draw a thicker green stroke
+        ctx.strokeStyle = COLORS.selectionFill;
+        ctx.lineWidth = this.getLineWidth(shape.style.strokeWidth) * 4;
+        ctx.beginPath();
+        ctx.moveTo(shape.start.x, shape.start.y);
+        ctx.lineTo(shape.end.x, shape.end.y);
+        ctx.stroke();
+        break;
+      }
+
+      case 'rectangle': {
+        ctx.fillStyle = COLORS.selectionFill;
+        if (shape.rotation) {
+          ctx.translate(shape.topLeft.x, shape.topLeft.y);
+          ctx.rotate(shape.rotation);
+          ctx.translate(-shape.topLeft.x, -shape.topLeft.y);
+        }
+        const r = shape.cornerRadius ?? 0;
+        ctx.beginPath();
+        if (r > 0) {
+          const maxR = Math.min(r, shape.width / 2, shape.height / 2);
+          const x = shape.topLeft.x;
+          const y = shape.topLeft.y;
+          const w = shape.width;
+          const h = shape.height;
+          ctx.moveTo(x + maxR, y);
+          ctx.lineTo(x + w - maxR, y);
+          ctx.arcTo(x + w, y, x + w, y + maxR, maxR);
+          ctx.lineTo(x + w, y + h - maxR);
+          ctx.arcTo(x + w, y + h, x + w - maxR, y + h, maxR);
+          ctx.lineTo(x + maxR, y + h);
+          ctx.arcTo(x, y + h, x, y + h - maxR, maxR);
+          ctx.lineTo(x, y + maxR);
+          ctx.arcTo(x, y, x + maxR, y, maxR);
+          ctx.closePath();
+        } else {
+          ctx.rect(shape.topLeft.x, shape.topLeft.y, shape.width, shape.height);
+        }
+        ctx.fill();
+        break;
+      }
+
+      case 'circle': {
+        ctx.fillStyle = COLORS.selectionFill;
+        ctx.beginPath();
+        ctx.arc(shape.center.x, shape.center.y, shape.radius, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      }
+
+      case 'arc': {
+        // Arcs have no area -- draw a thicker green stroke
+        ctx.strokeStyle = COLORS.selectionFill;
+        ctx.lineWidth = this.getLineWidth(shape.style.strokeWidth) * 4;
+        ctx.beginPath();
+        ctx.arc(shape.center.x, shape.center.y, shape.radius, shape.startAngle, shape.endAngle);
+        ctx.stroke();
+        break;
+      }
+
+      case 'polyline': {
+        const { points, closed, bulge } = shape;
+        if (points.length < 2) break;
+
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 0; i < points.length - 1; i++) {
+          const b = bulge?.[i] ?? 0;
+          if (b !== 0) {
+            const arc = bulgeToArc(points[i], points[i + 1], b);
+            ctx.arc(arc.center.x, arc.center.y, arc.radius, arc.startAngle, arc.endAngle, arc.clockwise);
+          } else {
+            ctx.lineTo(points[i + 1].x, points[i + 1].y);
+          }
+        }
+
+        if (closed) {
+          const lastB = bulge?.[points.length - 1] ?? 0;
+          if (lastB !== 0) {
+            const arc = bulgeToArc(points[points.length - 1], points[0], lastB);
+            ctx.arc(arc.center.x, arc.center.y, arc.radius, arc.startAngle, arc.endAngle, arc.clockwise);
+          } else {
+            ctx.closePath();
+          }
+          ctx.fillStyle = COLORS.selectionFill;
+          ctx.fill();
+        } else {
+          // Open polyline -- thicker green stroke
+          ctx.strokeStyle = COLORS.selectionFill;
+          ctx.lineWidth = this.getLineWidth(shape.style.strokeWidth) * 4;
+          ctx.stroke();
+        }
+        break;
+      }
+
+      case 'spline': {
+        // Splines have no area -- draw a thicker green stroke
+        if (shape.points.length < 2) break;
+        ctx.strokeStyle = COLORS.selectionFill;
+        ctx.lineWidth = this.getLineWidth(shape.style.strokeWidth) * 4;
+        drawSplinePath(ctx, shape.points);
+        ctx.stroke();
+        break;
+      }
+
+      case 'ellipse': {
+        const startAngle = shape.startAngle ?? 0;
+        const endAngle = shape.endAngle ?? Math.PI * 2;
+        const isPartial = shape.startAngle !== undefined && shape.endAngle !== undefined;
+        ctx.beginPath();
+        ctx.ellipse(shape.center.x, shape.center.y, shape.radiusX, shape.radiusY, shape.rotation, startAngle, isPartial ? endAngle : Math.PI * 2);
+        if (isPartial) {
+          // Partial ellipse (arc) -- thicker green stroke
+          ctx.strokeStyle = COLORS.selectionFill;
+          ctx.lineWidth = this.getLineWidth(shape.style.strokeWidth) * 4;
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = COLORS.selectionFill;
+          ctx.fill();
+        }
+        break;
+      }
+
+      case 'hatch': {
+        const hatchShape = shape as HatchShape;
+        const { points, bulge: hBulge } = hatchShape;
+        if (points.length < 3) break;
+        ctx.fillStyle = COLORS.selectionFill;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 0; i < points.length - 1; i++) {
+          const b = hBulge?.[i] ?? 0;
+          if (b !== 0) {
+            const arc = bulgeToArc(points[i], points[i + 1], b);
+            ctx.arc(arc.center.x, arc.center.y, arc.radius, arc.startAngle, arc.endAngle, arc.clockwise);
+          } else {
+            ctx.lineTo(points[i + 1].x, points[i + 1].y);
+          }
+        }
+        const lastB = hBulge?.[points.length - 1] ?? 0;
+        if (lastB !== 0) {
+          const arc = bulgeToArc(points[points.length - 1], points[0], lastB);
+          ctx.arc(arc.center.x, arc.center.y, arc.radius, arc.startAngle, arc.endAngle, arc.clockwise);
+        } else {
+          ctx.closePath();
+        }
+        ctx.fill();
+        break;
+      }
+
+      case 'beam': {
+        const beamShape = shape as BeamShape;
+        const viewMode = beamShape.viewMode || 'plan';
+        ctx.fillStyle = COLORS.selectionFill;
+
+        if (viewMode === 'plan') {
+          if (beamShape.bulge && Math.abs(beamShape.bulge) > 0.0001) {
+            // Arc beam fill
+            const { center, radius, startAngle, endAngle, clockwise } = bulgeToArc(beamShape.start, beamShape.end, beamShape.bulge);
+            let innerR: number, outerR: number;
+            if (beamShape.justification === 'left') {
+              innerR = radius; outerR = radius + beamShape.flangeWidth;
+            } else if (beamShape.justification === 'right') {
+              innerR = radius - beamShape.flangeWidth; outerR = radius;
+            } else {
+              innerR = radius - beamShape.flangeWidth / 2; outerR = radius + beamShape.flangeWidth / 2;
+            }
+            if (innerR < 0) innerR = 0;
+            ctx.beginPath();
+            ctx.arc(center.x, center.y, outerR, startAngle, endAngle, clockwise);
+            ctx.lineTo(center.x + innerR * Math.cos(endAngle), center.y + innerR * Math.sin(endAngle));
+            ctx.arc(center.x, center.y, innerR, endAngle, startAngle, !clockwise);
+            ctx.closePath();
+            ctx.fill();
+          } else {
+            // Straight beam fill using computed corners
+            const corners = this.computeBeamCorners(beamShape);
+            ctx.beginPath();
+            ctx.moveTo(corners[0].x, corners[0].y);
+            ctx.lineTo(corners[1].x, corners[1].y);
+            ctx.lineTo(corners[2].x, corners[2].y);
+            ctx.lineTo(corners[3].x, corners[3].y);
+            ctx.closePath();
+            ctx.fill();
+          }
+        } else if (viewMode === 'section') {
+          // Section view: fill profile outlines
+          try {
+            const midX = (beamShape.start.x + beamShape.end.x) / 2;
+            const midY = (beamShape.start.y + beamShape.end.y) / 2;
+            const geometry = generateProfileGeometry(
+              beamShape.profileType as ProfileType,
+              beamShape.profileParameters as ParameterValues,
+              { x: midX, y: midY },
+              beamShape.rotation,
+              1
+            );
+            for (let i = 0; i < geometry.outlines.length; i++) {
+              const outline = geometry.outlines[i];
+              if (outline.length < 2 || !geometry.closed[i]) continue;
+              ctx.beginPath();
+              ctx.moveTo(outline[0].x, outline[0].y);
+              for (let j = 1; j < outline.length; j++) {
+                ctx.lineTo(outline[j].x, outline[j].y);
+              }
+              ctx.closePath();
+              ctx.fill();
+            }
+          } catch {
+            // Fallback: same as plan
+            const corners = this.computeBeamCorners(beamShape);
+            ctx.beginPath();
+            ctx.moveTo(corners[0].x, corners[0].y);
+            ctx.lineTo(corners[1].x, corners[1].y);
+            ctx.lineTo(corners[2].x, corners[2].y);
+            ctx.lineTo(corners[3].x, corners[3].y);
+            ctx.closePath();
+            ctx.fill();
+          }
+        } else {
+          // Elevation / side view: rectangle from perpendicular offset
+          const depth = (viewMode === 'elevation')
+            ? ((beamShape.profileParameters.webHeight as number) || (beamShape.profileParameters.height as number) || (beamShape.profileParameters.outerDiameter as number) || beamShape.flangeWidth)
+            : beamShape.flangeWidth;
+          const beamAngle = Math.atan2(beamShape.end.y - beamShape.start.y, beamShape.end.x - beamShape.start.x);
+          const halfDepth = depth / 2;
+          const perpX = Math.sin(beamAngle) * halfDepth;
+          const perpY = Math.cos(beamAngle) * halfDepth;
+          ctx.beginPath();
+          ctx.moveTo(beamShape.start.x + perpX, beamShape.start.y - perpY);
+          ctx.lineTo(beamShape.end.x + perpX, beamShape.end.y - perpY);
+          ctx.lineTo(beamShape.end.x - perpX, beamShape.end.y + perpY);
+          ctx.lineTo(beamShape.start.x - perpX, beamShape.start.y + perpY);
+          ctx.closePath();
+          ctx.fill();
+        }
+        break;
+      }
+
+      case 'wall': {
+        const wallShape = shape as WallShape;
+        ctx.fillStyle = COLORS.selectionFill;
+
+        if (wallShape.bulge && Math.abs(wallShape.bulge) > 0.0001) {
+          // Arc wall fill
+          const { center, radius, startAngle, endAngle, clockwise } = bulgeToArc(wallShape.start, wallShape.end, wallShape.bulge);
+          let innerR: number, outerR: number;
+          if (wallShape.justification === 'left') {
+            innerR = radius; outerR = radius + wallShape.thickness;
+          } else if (wallShape.justification === 'right') {
+            innerR = radius - wallShape.thickness; outerR = radius;
+          } else {
+            innerR = radius - wallShape.thickness / 2; outerR = radius + wallShape.thickness / 2;
+          }
+          if (innerR < 0) innerR = 0;
+          ctx.beginPath();
+          ctx.arc(center.x, center.y, outerR, startAngle, endAngle, clockwise);
+          ctx.lineTo(center.x + innerR * Math.cos(endAngle), center.y + innerR * Math.sin(endAngle));
+          ctx.arc(center.x, center.y, innerR, endAngle, startAngle, !clockwise);
+          ctx.closePath();
+          ctx.fill();
+        } else {
+          // Straight wall fill using computed corners
+          const corners = this.computeWallCorners(wallShape);
+          ctx.beginPath();
+          ctx.moveTo(corners[0].x, corners[0].y);
+          ctx.lineTo(corners[1].x, corners[1].y);
+          ctx.lineTo(corners[2].x, corners[2].y);
+          ctx.lineTo(corners[3].x, corners[3].y);
+          ctx.closePath();
+          ctx.fill();
+        }
+        break;
+      }
+
+      case 'slab': {
+        const slabShape = shape as SlabShape;
+        const { points } = slabShape;
+        if (points.length < 3) break;
+        ctx.fillStyle = COLORS.selectionFill;
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) {
+          ctx.lineTo(points[i].x, points[i].y);
+        }
+        ctx.closePath();
+        ctx.fill();
+        break;
+      }
+
+      case 'space': {
+        const spaceShape = shape as SpaceShape;
+        const { contourPoints } = spaceShape;
+        if (contourPoints.length < 3) break;
+        ctx.fillStyle = COLORS.selectionFill;
+        ctx.beginPath();
+        ctx.moveTo(contourPoints[0].x, contourPoints[0].y);
+        for (let i = 1; i < contourPoints.length; i++) {
+          ctx.lineTo(contourPoints[i].x, contourPoints[i].y);
+        }
+        ctx.closePath();
+        ctx.fill();
+        break;
+      }
+
+      case 'plate-system': {
+        const psShape = shape as PlateSystemShape;
+        const { contourPoints: psPts, contourBulges: psBulges } = psShape;
+        if (psPts.length < 3) break;
+        ctx.fillStyle = COLORS.selectionFill;
+        ctx.beginPath();
+        ctx.moveTo(psPts[0].x, psPts[0].y);
+        for (let i = 0; i < psPts.length; i++) {
+          const j = (i + 1) % psPts.length;
+          const b = psBulges?.[i] ?? 0;
+          if (b !== 0 && Math.abs(b) > 0.0001) {
+            const arc = bulgeToArc(psPts[i], psPts[j], b);
+            ctx.arc(arc.center.x, arc.center.y, arc.radius, arc.startAngle, arc.endAngle, arc.clockwise);
+          } else if (j !== 0) {
+            ctx.lineTo(psPts[j].x, psPts[j].y);
+          } else {
+            ctx.closePath();
+          }
+        }
+        ctx.fill();
+        break;
+      }
+
+      case 'pile': {
+        const pileShape = shape as PileShape;
+        const radius = pileShape.diameter / 2;
+        ctx.fillStyle = COLORS.selectionFill;
+        ctx.beginPath();
+        ctx.arc(pileShape.position.x, pileShape.position.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      }
+
+      case 'cpt': {
+        const cptShape = shape as CPTShape;
+        const cptSf = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+        const ms = (cptShape.markerSize || 300) * cptSf;
+        ctx.fillStyle = COLORS.selectionFill;
+        ctx.beginPath();
+        ctx.moveTo(cptShape.position.x, cptShape.position.y - ms * 0.6);
+        ctx.lineTo(cptShape.position.x - ms * 0.5, cptShape.position.y + ms * 0.4);
+        ctx.lineTo(cptShape.position.x + ms * 0.5, cptShape.position.y + ms * 0.4);
+        ctx.closePath();
+        ctx.fill();
+        break;
+      }
+
+      case 'foundation-zone': {
+        const fzShape = shape as FoundationZoneShape;
+        if (fzShape.contourPoints.length >= 3) {
+          ctx.fillStyle = COLORS.selectionFill;
+          ctx.beginPath();
+          ctx.moveTo(fzShape.contourPoints[0].x, fzShape.contourPoints[0].y);
+          for (let i = 1; i < fzShape.contourPoints.length; i++) {
+            ctx.lineTo(fzShape.contourPoints[i].x, fzShape.contourPoints[i].y);
+          }
+          ctx.closePath();
+          ctx.fill();
+        }
+        break;
+      }
+
+      case 'gridline': {
+        // Gridlines are line-like -- thicker green stroke
+        const gridShape = shape as GridlineShape;
+        const scaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+        const ext = this.gridlineExtension * scaleFactor;
+        const angle = Math.atan2(gridShape.end.y - gridShape.start.y, gridShape.end.x - gridShape.start.x);
+        const dx = Math.cos(angle);
+        const dy = Math.sin(angle);
+        ctx.strokeStyle = COLORS.selectionFill;
+        ctx.lineWidth = this.getLineWidth(shape.style.strokeWidth) * 4;
+        ctx.beginPath();
+        ctx.moveTo(gridShape.start.x - dx * ext, gridShape.start.y - dy * ext);
+        ctx.lineTo(gridShape.end.x + dx * ext, gridShape.end.y + dy * ext);
+        ctx.stroke();
+        break;
+      }
+
+      case 'level': {
+        // Levels are line-like -- thicker green stroke
+        const levelShape = shape as LevelShape;
+        ctx.strokeStyle = COLORS.selectionFill;
+        ctx.lineWidth = this.getLineWidth(shape.style.strokeWidth) * 4;
+        ctx.beginPath();
+        ctx.moveTo(levelShape.start.x, levelShape.start.y);
+        ctx.lineTo(levelShape.end.x, levelShape.end.y);
+        ctx.stroke();
+        break;
+      }
+
+      case 'section-callout': {
+        // Section callouts are line-like -- thicker green stroke
+        const sectionShape = shape as SectionCalloutShape;
+        ctx.strokeStyle = COLORS.selectionFill;
+        ctx.lineWidth = this.getLineWidth(shape.style.strokeWidth) * 4;
+        ctx.beginPath();
+        ctx.moveTo(sectionShape.start.x, sectionShape.start.y);
+        ctx.lineTo(sectionShape.end.x, sectionShape.end.y);
+        ctx.stroke();
+        break;
+      }
+
+      case 'image': {
+        const imgShape = shape as ImageShape;
+        ctx.fillStyle = COLORS.selectionFill;
+        if (imgShape.rotation) {
+          ctx.translate(imgShape.position.x, imgShape.position.y);
+          ctx.rotate(imgShape.rotation);
+          ctx.fillRect(0, 0, imgShape.width, imgShape.height);
+        } else {
+          ctx.fillRect(imgShape.position.x, imgShape.position.y, imgShape.width, imgShape.height);
+        }
+        break;
+      }
+
+      case 'text': {
+        // Text has its own selection box rendering (drawTextSelectionBox).
+        // No additional fill overlay needed here.
+        break;
+      }
+
+      case 'dimension': {
+        // Dimensions have their own selection rendering in DimensionRenderer.
+        // No additional fill overlay needed here.
+        break;
+      }
+
+      default:
+        break;
+    }
+
+    ctx.restore();
   }
 
   /**
@@ -514,6 +1109,35 @@ export class ShapeRenderer extends BaseRenderer {
       case 'beam': {
         // Draw beam preview in plan view
         const { start, end, flangeWidth, showCenterline } = preview;
+
+        // Arc beam preview
+        if (preview.bulge && Math.abs(preview.bulge) > 0.0001) {
+          const bArc = bulgeToArc(start, end, preview.bulge);
+          const bHalfW = flangeWidth / 2;
+          const bInnerR = Math.max(0, bArc.radius - bHalfW);
+          const bOuterR = bArc.radius + bHalfW;
+
+          // Draw arc beam outline
+          ctx.beginPath();
+          ctx.arc(bArc.center.x, bArc.center.y, bOuterR, bArc.startAngle, bArc.endAngle, bArc.clockwise);
+          ctx.lineTo(bArc.center.x + bInnerR * Math.cos(bArc.endAngle), bArc.center.y + bInnerR * Math.sin(bArc.endAngle));
+          ctx.arc(bArc.center.x, bArc.center.y, bInnerR, bArc.endAngle, bArc.startAngle, !bArc.clockwise);
+          ctx.closePath();
+          ctx.stroke();
+
+          // Draw centerline arc (dashed)
+          if (showCenterline) {
+            ctx.save();
+            ctx.setLineDash(this.getLineDash('dashdot'));
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.beginPath();
+            ctx.arc(bArc.center.x, bArc.center.y, bArc.radius, bArc.startAngle, bArc.endAngle, bArc.clockwise);
+            ctx.stroke();
+            ctx.restore();
+          }
+          break;
+        }
+
         const beamAngle = Math.atan2(end.y - start.y, end.x - start.x);
         const halfWidth = flangeWidth / 2;
         const perpX = Math.sin(beamAngle) * halfWidth;
@@ -531,7 +1155,7 @@ export class ShapeRenderer extends BaseRenderer {
         // Draw centerline (dashed)
         if (showCenterline) {
           ctx.save();
-          ctx.setLineDash([8, 4]);
+          ctx.setLineDash(this.getLineDash('dashdot'));
           ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
           ctx.beginPath();
           ctx.moveTo(start.x, start.y);
@@ -547,6 +1171,950 @@ export class ShapeRenderer extends BaseRenderer {
         ctx.moveTo(end.x + perpX, end.y - perpY);
         ctx.lineTo(end.x - perpX, end.y + perpY);
         ctx.stroke();
+        break;
+      }
+
+      case 'gridline': {
+        // Draw gridline preview: dash-dot line + bubble(s)
+        // Matches the actual drawGridline() rendering with scale-aware extension and proper dash pattern
+        const { start: glStart, end: glEnd, label: glLabel, bubblePosition: glBubblePos, bubbleRadius: glRadiusRaw } = preview;
+        const glScaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+        const glRadius = glRadiusRaw * glScaleFactor;
+        const glAngle = Math.atan2(glEnd.y - glStart.y, glEnd.x - glStart.x);
+        const glDx = Math.cos(glAngle);
+        const glDy = Math.sin(glAngle);
+
+        // Line extends beyond start/end (at reference scale), scaled for current drawing scale
+        const glExt = this.gridlineExtension * glScaleFactor;
+
+        // Draw dash-dot line with scale-aware pattern (matching actual gridline)
+        ctx.save();
+        ctx.setLineDash(this.getLineDash('dashdot'));
+        ctx.beginPath();
+        ctx.moveTo(glStart.x - glDx * glExt, glStart.y - glDy * glExt);
+        ctx.lineTo(glEnd.x + glDx * glExt, glEnd.y + glDy * glExt);
+        ctx.stroke();
+        ctx.restore();
+
+        // Draw bubbles at correct offset (extension + bubbleRadius from endpoint)
+        ctx.setLineDash([]);
+        const drawBubble = (cx: number, cy: number) => {
+          ctx.beginPath();
+          ctx.arc(cx, cy, glRadius, 0, Math.PI * 2);
+          ctx.stroke();
+          // Label text
+          const fSize = glRadius * 1.2;
+          ctx.save();
+          ctx.fillStyle = strokeColor;
+          ctx.font = `${fSize}px ${CAD_DEFAULT_FONT}`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(glLabel, cx, cy);
+          ctx.restore();
+        };
+
+        if (glBubblePos === 'start' || glBubblePos === 'both') {
+          drawBubble(glStart.x - glDx * (glExt + glRadius), glStart.y - glDy * (glExt + glRadius));
+        }
+        if (glBubblePos === 'end' || glBubblePos === 'both') {
+          drawBubble(glEnd.x + glDx * (glExt + glRadius), glEnd.y + glDy * (glExt + glRadius));
+        }
+        break;
+      }
+
+      case 'level': {
+        // Draw level preview: dashed line + right-side triangle marker only
+        const { start: lvStart, end: lvEnd, label: lvLabel, bubbleRadius: lvRadiusRaw } = preview;
+        const lvScaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+        const lvRadius = lvRadiusRaw * lvScaleFactor;
+        const lvAngle = Math.atan2(lvEnd.y - lvStart.y, lvEnd.x - lvStart.x);
+        const lvDx = Math.cos(lvAngle);
+        const lvDy = Math.sin(lvAngle);
+
+        ctx.save();
+        ctx.setLineDash(this.getLineDash('dashed'));
+        ctx.beginPath();
+        ctx.moveTo(lvStart.x, lvStart.y);
+        ctx.lineTo(lvEnd.x, lvEnd.y);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.setLineDash([]);
+        // Right-side (end) triangle marker only
+        const lvSz = lvRadius * 0.7;
+        const lvTipX = lvEnd.x;
+        const lvTipY = lvEnd.y;
+        const lvPerpX = -lvDy;
+        const lvPerpY = lvDx;
+        ctx.beginPath();
+        ctx.moveTo(lvTipX, lvTipY);
+        ctx.lineTo(lvTipX + lvDx * lvSz + lvPerpX * lvSz * 0.4, lvTipY + lvDy * lvSz + lvPerpY * lvSz * 0.4);
+        ctx.lineTo(lvTipX + lvDx * lvSz - lvPerpX * lvSz * 0.4, lvTipY + lvDy * lvSz - lvPerpY * lvSz * 0.4);
+        ctx.closePath();
+        ctx.fillStyle = strokeColor;
+        ctx.fill();
+        ctx.stroke();
+
+        // Peil label text to the right
+        const lvFSize = lvRadius * 1.0;
+        const lvTextX = lvEnd.x + lvDx * (lvSz * 1.5 + lvRadius * 0.3);
+        const lvTextY = lvEnd.y + lvDy * (lvSz * 1.5 + lvRadius * 0.3);
+        ctx.save();
+        ctx.fillStyle = strokeColor;
+        ctx.font = `${lvFSize}px ${CAD_DEFAULT_FONT}`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(lvLabel, lvTextX, lvTextY);
+        ctx.restore();
+        break;
+      }
+
+      case 'pile': {
+        // Draw pile preview: circle + cross + label at cursor
+        const { position: pilePos, diameter: pileDiam, label: pileLabel, fontSize: pileFontSize, showCross: pileShowCross } = preview;
+        const pileRadius = pileDiam / 2;
+
+        // Draw circle
+        ctx.beginPath();
+        ctx.arc(pilePos.x, pilePos.y, pileRadius, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Draw cross
+        if (pileShowCross) {
+          ctx.beginPath();
+          ctx.moveTo(pilePos.x - pileRadius * 0.707, pilePos.y - pileRadius * 0.707);
+          ctx.lineTo(pilePos.x + pileRadius * 0.707, pilePos.y + pileRadius * 0.707);
+          ctx.moveTo(pilePos.x + pileRadius * 0.707, pilePos.y - pileRadius * 0.707);
+          ctx.lineTo(pilePos.x - pileRadius * 0.707, pilePos.y + pileRadius * 0.707);
+          ctx.stroke();
+        }
+
+        // Draw label below
+        if (pileLabel) {
+          ctx.save();
+          ctx.fillStyle = strokeColor;
+          ctx.font = `${pileFontSize}px ${CAD_DEFAULT_FONT}`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillText(pileLabel, pilePos.x, pilePos.y + pileRadius + pileFontSize * 0.3);
+          ctx.restore();
+        }
+        break;
+      }
+
+      case 'cpt': {
+        // Draw CPT preview: triangle marker + name at cursor
+        const { position: cptPos, name: cptName, fontSize: cptFontSize, markerSize: cptMarkerSize } = preview;
+        const cptSf = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+        const ms = cptMarkerSize * cptSf;
+
+        // Draw inverted triangle marker
+        ctx.beginPath();
+        ctx.moveTo(cptPos.x, cptPos.y - ms * 0.6);
+        ctx.lineTo(cptPos.x - ms * 0.5, cptPos.y + ms * 0.4);
+        ctx.lineTo(cptPos.x + ms * 0.5, cptPos.y + ms * 0.4);
+        ctx.closePath();
+        ctx.stroke();
+
+        // Draw name below
+        if (cptName) {
+          ctx.save();
+          ctx.fillStyle = strokeColor;
+          ctx.font = `${cptFontSize * cptSf}px ${CAD_DEFAULT_FONT}`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillText(cptName, cptPos.x, cptPos.y + ms * 0.4 + cptFontSize * cptSf * 0.3);
+          ctx.restore();
+        }
+        break;
+      }
+
+      case 'wall': {
+        // Draw wall preview (rectangle in plan view)
+        const { start: wStart, end: wEnd, thickness: wThick, showCenterline: wShowCL } = preview;
+
+        // Arc wall preview
+        if (preview.bulge && Math.abs(preview.bulge) > 0.0001) {
+          const wArc = bulgeToArc(wStart, wEnd, preview.bulge);
+          const wArcJust = ('justification' in preview ? preview.justification : undefined) || 'center';
+          let wArcInnerR: number;
+          let wArcOuterR: number;
+          if (wArcJust === 'left') {
+            wArcInnerR = wArc.radius;
+            wArcOuterR = wArc.radius + wThick;
+          } else if (wArcJust === 'right') {
+            wArcInnerR = wArc.radius - wThick;
+            wArcOuterR = wArc.radius;
+          } else {
+            wArcInnerR = wArc.radius - wThick / 2;
+            wArcOuterR = wArc.radius + wThick / 2;
+          }
+          if (wArcInnerR < 0) wArcInnerR = 0;
+
+          // Draw arc wall outline
+          ctx.beginPath();
+          ctx.arc(wArc.center.x, wArc.center.y, wArcOuterR, wArc.startAngle, wArc.endAngle, wArc.clockwise);
+          ctx.lineTo(wArc.center.x + wArcInnerR * Math.cos(wArc.endAngle), wArc.center.y + wArcInnerR * Math.sin(wArc.endAngle));
+          ctx.arc(wArc.center.x, wArc.center.y, wArcInnerR, wArc.endAngle, wArc.startAngle, !wArc.clockwise);
+          ctx.closePath();
+          ctx.stroke();
+
+          // Hatch fill preview
+          {
+            let previewMatSetting = this.materialHatchSettings['concrete'] || DEFAULT_MATERIAL_HATCH_SETTINGS['concrete'];
+            if (preview.wallTypeId) {
+              const previewWallType = this.wallTypes.find(wt => wt.id === preview.wallTypeId);
+              if (previewWallType) {
+                previewMatSetting = this.materialHatchSettings[previewWallType.name]
+                  || this.materialHatchSettings[previewWallType.material]
+                  || DEFAULT_MATERIAL_HATCH_SETTINGS[previewWallType.material]
+                  || previewMatSetting;
+              }
+            }
+            const previewHatch = previewMatSetting;
+            if ((previewHatch.hatchType && previewHatch.hatchType !== 'none') || previewHatch.hatchPatternId) {
+              const previewStrokeWidth = ctx.lineWidth;
+              ctx.save();
+              // Clip to arc wall path
+              ctx.beginPath();
+              ctx.arc(wArc.center.x, wArc.center.y, wArcOuterR, wArc.startAngle, wArc.endAngle, wArc.clockwise);
+              ctx.lineTo(wArc.center.x + wArcInnerR * Math.cos(wArc.endAngle), wArc.center.y + wArcInnerR * Math.sin(wArc.endAngle));
+              ctx.arc(wArc.center.x, wArc.center.y, wArcInnerR, wArc.endAngle, wArc.startAngle, !wArc.clockwise);
+              ctx.closePath();
+              ctx.clip();
+
+              ctx.lineWidth = previewStrokeWidth * 0.4;
+              ctx.setLineDash([]);
+
+              if (previewHatch.backgroundColor) {
+                ctx.fillStyle = previewHatch.backgroundColor;
+                ctx.beginPath();
+                ctx.arc(wArc.center.x, wArc.center.y, wArcOuterR, wArc.startAngle, wArc.endAngle, wArc.clockwise);
+                ctx.lineTo(wArc.center.x + wArcInnerR * Math.cos(wArc.endAngle), wArc.center.y + wArcInnerR * Math.sin(wArc.endAngle));
+                ctx.arc(wArc.center.x, wArc.center.y, wArcInnerR, wArc.endAngle, wArc.startAngle, !wArc.clockwise);
+                ctx.closePath();
+                ctx.fill();
+              }
+
+              const wArcSpacing = previewHatch.hatchSpacing || 50;
+              const wArcHatchColor = previewHatch.hatchColor || (ctx.strokeStyle as string);
+              ctx.strokeStyle = wArcHatchColor;
+
+              // Check for insulation pattern (NEN standard zigzag)
+              const wArcPreviewPattern = previewHatch.hatchPatternId ? this.getPatternById(previewHatch.hatchPatternId) : undefined;
+              if (wArcPreviewPattern && (previewHatch.hatchPatternId === 'nen47-isolatie' || previewHatch.hatchPatternId === 'insulation')) {
+                this.drawInsulationZigzagArc(
+                  wArc.center, wArcInnerR, wArcOuterR,
+                  wArc.startAngle, wArc.endAngle, wArc.clockwise,
+                  wArcHatchColor,
+                  previewStrokeWidth
+                );
+              } else if (previewHatch.hatchType === 'solid') {
+                ctx.fillStyle = wArcHatchColor;
+                ctx.beginPath();
+                ctx.arc(wArc.center.x, wArc.center.y, wArcOuterR, wArc.startAngle, wArc.endAngle, wArc.clockwise);
+                ctx.lineTo(wArc.center.x + wArcInnerR * Math.cos(wArc.endAngle), wArc.center.y + wArcInnerR * Math.sin(wArc.endAngle));
+                ctx.arc(wArc.center.x, wArc.center.y, wArcInnerR, wArc.endAngle, wArc.startAngle, !wArc.clockwise);
+                ctx.closePath();
+                ctx.fill();
+              } else {
+                // Radial hatch lines for arc wall preview
+                const wArcAngularStep = wArcSpacing / wArc.radius;
+                const wArcStep = wArc.clockwise ? -wArcAngularStep : wArcAngularStep;
+                ctx.beginPath();
+                let wA = wArc.startAngle + wArcStep;
+                for (let wi = 0; wi < 10000; wi++) {
+                  // Check if angle is still in range
+                  const wNorm = wArc.clockwise
+                    ? ((wArc.startAngle - wA + Math.PI * 4) % (Math.PI * 2))
+                    : ((wA - wArc.startAngle + Math.PI * 4) % (Math.PI * 2));
+                  const wEndNorm = wArc.clockwise
+                    ? ((wArc.startAngle - wArc.endAngle + Math.PI * 4) % (Math.PI * 2))
+                    : ((wArc.endAngle - wArc.startAngle + Math.PI * 4) % (Math.PI * 2));
+                  if (wNorm > wEndNorm + 0.0001) break;
+                  ctx.moveTo(wArc.center.x + wArcInnerR * Math.cos(wA), wArc.center.y + wArcInnerR * Math.sin(wA));
+                  ctx.lineTo(wArc.center.x + wArcOuterR * Math.cos(wA), wArc.center.y + wArcOuterR * Math.sin(wA));
+                  wA += wArcStep;
+                }
+                ctx.stroke();
+              }
+
+              ctx.restore();
+            }
+          }
+
+          // Draw centerline arc (dashed)
+          if (wShowCL) {
+            ctx.save();
+            ctx.setLineDash(this.getLineDash('dashdot'));
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.beginPath();
+            ctx.arc(wArc.center.x, wArc.center.y, wArc.radius, wArc.startAngle, wArc.endAngle, wArc.clockwise);
+            ctx.stroke();
+            ctx.restore();
+          }
+          break;
+        }
+
+        const wallAngle = Math.atan2(wEnd.y - wStart.y, wEnd.x - wStart.x);
+
+        // Determine asymmetric offsets based on justification
+        const wJust = ('justification' in preview ? preview.justification : undefined) || 'center';
+        let wLeftThick: number;
+        let wRightThick: number;
+        if (wJust === 'left') {
+          wLeftThick = wThick;
+          wRightThick = 0;
+        } else if (wJust === 'right') {
+          wLeftThick = 0;
+          wRightThick = wThick;
+        } else {
+          wLeftThick = wThick / 2;
+          wRightThick = wThick / 2;
+        }
+
+        const wPerpUnitX = Math.sin(wallAngle);
+        const wPerpUnitY = Math.cos(wallAngle);
+
+        const wCorners = [
+          { x: wStart.x + wPerpUnitX * wLeftThick, y: wStart.y - wPerpUnitY * wLeftThick },
+          { x: wEnd.x + wPerpUnitX * wLeftThick, y: wEnd.y - wPerpUnitY * wLeftThick },
+          { x: wEnd.x - wPerpUnitX * wRightThick, y: wEnd.y + wPerpUnitY * wRightThick },
+          { x: wStart.x - wPerpUnitX * wRightThick, y: wStart.y + wPerpUnitY * wRightThick },
+        ];
+
+        // Draw wall outline
+        ctx.beginPath();
+        ctx.moveTo(wCorners[0].x, wCorners[0].y);
+        ctx.lineTo(wCorners[1].x, wCorners[1].y);
+        ctx.lineTo(wCorners[2].x, wCorners[2].y);
+        ctx.lineTo(wCorners[3].x, wCorners[3].y);
+        ctx.closePath();
+        ctx.stroke();
+
+        // Hatch fill preview - use materialHatchSettings (resolve from wall type or default to concrete)
+        {
+          // Resolve the material from the pending wall type, falling back to concrete
+          let previewMatSetting = this.materialHatchSettings['concrete'] || DEFAULT_MATERIAL_HATCH_SETTINGS['concrete'];
+          if (preview.wallTypeId) {
+            const previewWallType = this.wallTypes.find(wt => wt.id === preview.wallTypeId);
+            if (previewWallType) {
+              previewMatSetting = this.materialHatchSettings[previewWallType.name]
+                || this.materialHatchSettings[previewWallType.material]
+                || DEFAULT_MATERIAL_HATCH_SETTINGS[previewWallType.material]
+                || previewMatSetting;
+            }
+          }
+          const previewHatch = previewMatSetting;
+          if ((previewHatch.hatchType && previewHatch.hatchType !== 'none') || previewHatch.hatchPatternId) {
+            const previewStrokeWidth = ctx.lineWidth;
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(wCorners[0].x, wCorners[0].y);
+            ctx.lineTo(wCorners[1].x, wCorners[1].y);
+            ctx.lineTo(wCorners[2].x, wCorners[2].y);
+            ctx.lineTo(wCorners[3].x, wCorners[3].y);
+            ctx.closePath();
+            ctx.clip();
+
+            ctx.lineWidth = previewStrokeWidth * 0.4;
+            ctx.setLineDash([]);
+
+            // Fill solid background color first (under hatch lines)
+            if (previewHatch.backgroundColor) {
+              ctx.fillStyle = previewHatch.backgroundColor;
+              ctx.beginPath();
+              ctx.moveTo(wCorners[0].x, wCorners[0].y);
+              ctx.lineTo(wCorners[1].x, wCorners[1].y);
+              ctx.lineTo(wCorners[2].x, wCorners[2].y);
+              ctx.lineTo(wCorners[3].x, wCorners[3].y);
+              ctx.closePath();
+              ctx.fill();
+            }
+
+            const wMinX = Math.min(...wCorners.map(c => c.x));
+            const wMinY = Math.min(...wCorners.map(c => c.y));
+            const wMaxX = Math.max(...wCorners.map(c => c.x));
+            const wMaxY = Math.max(...wCorners.map(c => c.y));
+
+            const wSpacing = previewHatch.hatchSpacing || 50;
+            const wHatchColor = previewHatch.hatchColor || (ctx.strokeStyle as string);
+            ctx.strokeStyle = wHatchColor;
+            // Make hatch perpendicular to wall direction
+            const wAngleDeg = wallAngle * 180 / Math.PI;
+
+            const previewPattern = previewHatch.hatchPatternId ? this.getPatternById(previewHatch.hatchPatternId) : undefined;
+            if (previewPattern && previewPattern.lineFamilies.length > 0) {
+              const pScale = wSpacing / 10;
+              // Special case: insulation patterns get zigzag rendering (NEN standard)
+              if (previewHatch.hatchPatternId === 'nen47-isolatie' || previewHatch.hatchPatternId === 'insulation') {
+                this.drawInsulationZigzag(wMinX, wMinY, wMaxX, wMaxY, pScale, wAngleDeg, wHatchColor, previewStrokeWidth, wThick);
+              } else {
+                this.drawCustomPatternLines(previewPattern.lineFamilies, wMinX, wMinY, wMaxX, wMaxY, pScale, wAngleDeg, wHatchColor, previewStrokeWidth);
+              }
+            } else if (previewPattern && previewPattern.lineFamilies.length === 0) {
+              ctx.fillStyle = wHatchColor;
+              ctx.beginPath();
+              ctx.moveTo(wCorners[0].x, wCorners[0].y);
+              ctx.lineTo(wCorners[1].x, wCorners[1].y);
+              ctx.lineTo(wCorners[2].x, wCorners[2].y);
+              ctx.lineTo(wCorners[3].x, wCorners[3].y);
+              ctx.closePath();
+              ctx.fill();
+            } else {
+              const wBaseAngle = (previewHatch.hatchAngle || 45) + wAngleDeg;
+              if (previewHatch.hatchType === 'solid') {
+                ctx.fillStyle = wHatchColor;
+                ctx.beginPath();
+                ctx.moveTo(wCorners[0].x, wCorners[0].y);
+                ctx.lineTo(wCorners[1].x, wCorners[1].y);
+                ctx.lineTo(wCorners[2].x, wCorners[2].y);
+                ctx.lineTo(wCorners[3].x, wCorners[3].y);
+                ctx.closePath();
+                ctx.fill();
+              } else if (previewHatch.hatchType === 'diagonal') {
+                this.drawLineFamilySimple(wBaseAngle, wSpacing, wMinX, wMinY, wMaxX, wMaxY);
+              } else if (previewHatch.hatchType === 'crosshatch') {
+                this.drawLineFamilySimple(wBaseAngle, wSpacing, wMinX, wMinY, wMaxX, wMaxY);
+                this.drawLineFamilySimple(wBaseAngle + 90, wSpacing, wMinX, wMinY, wMaxX, wMaxY);
+              } else if (previewHatch.hatchType === 'horizontal') {
+                this.drawLineFamilySimple(wAngleDeg + 90, wSpacing, wMinX, wMinY, wMaxX, wMaxY);
+              }
+            }
+
+            ctx.restore();
+          }
+        }
+
+        // Draw centerline (dashed)
+        if (wShowCL) {
+          ctx.save();
+          ctx.setLineDash(this.getLineDash('dashdot'));
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+          ctx.beginPath();
+          ctx.moveTo(wStart.x, wStart.y);
+          ctx.lineTo(wEnd.x, wEnd.y);
+          ctx.stroke();
+          ctx.restore();
+        }
+        break;
+      }
+
+      case 'wall-rectangle': {
+        // Draw 4-wall rectangle preview from two opposite corners
+        const { corner1: wrC1, corner2: wrC2, thickness: wrThick, showCenterline: wrShowCL } = preview;
+        // Derive corners (axis-aligned rectangle)
+        const wrCorners = [
+          wrC1,
+          { x: wrC2.x, y: wrC1.y },
+          wrC2,
+          { x: wrC1.x, y: wrC2.y },
+        ];
+
+        const wrJust = ('justification' in preview ? preview.justification : undefined) || 'center';
+
+        // Draw 4 wall segments as rectangles (with thickness)
+        for (let i = 0; i < 4; i++) {
+          const wrs = wrCorners[i];
+          const wre = wrCorners[(i + 1) % 4];
+          const wrAngle = Math.atan2(wre.y - wrs.y, wre.x - wrs.x);
+
+          let wrLeft: number, wrRight: number;
+          if (wrJust === 'left') { wrLeft = wrThick; wrRight = 0; }
+          else if (wrJust === 'right') { wrLeft = 0; wrRight = wrThick; }
+          else { wrLeft = wrThick / 2; wrRight = wrThick / 2; }
+
+          const wrPx = Math.sin(wrAngle);
+          const wrPy = Math.cos(wrAngle);
+
+          const wrSegCorners = [
+            { x: wrs.x + wrPx * wrLeft, y: wrs.y - wrPy * wrLeft },
+            { x: wre.x + wrPx * wrLeft, y: wre.y - wrPy * wrLeft },
+            { x: wre.x - wrPx * wrRight, y: wre.y + wrPy * wrRight },
+            { x: wrs.x - wrPx * wrRight, y: wrs.y + wrPy * wrRight },
+          ];
+
+          ctx.beginPath();
+          ctx.moveTo(wrSegCorners[0].x, wrSegCorners[0].y);
+          ctx.lineTo(wrSegCorners[1].x, wrSegCorners[1].y);
+          ctx.lineTo(wrSegCorners[2].x, wrSegCorners[2].y);
+          ctx.lineTo(wrSegCorners[3].x, wrSegCorners[3].y);
+          ctx.closePath();
+          ctx.stroke();
+
+          // Centerline
+          if (wrShowCL) {
+            ctx.save();
+            ctx.setLineDash(this.getLineDash('dashdot'));
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.beginPath();
+            ctx.moveTo(wrs.x, wrs.y);
+            ctx.lineTo(wre.x, wre.y);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+        break;
+      }
+
+      case 'beam-rectangle': {
+        // Draw 4-beam rectangle preview from two opposite corners
+        const { corner1: brC1, corner2: brC2, flangeWidth: brFW, showCenterline: brShowCL } = preview;
+        const brCorners = [
+          brC1,
+          { x: brC2.x, y: brC1.y },
+          brC2,
+          { x: brC1.x, y: brC2.y },
+        ];
+
+        const brHalfW = brFW / 2;
+        for (let i = 0; i < 4; i++) {
+          const brs = brCorners[i];
+          const bre = brCorners[(i + 1) % 4];
+          const brAngle = Math.atan2(bre.y - brs.y, bre.x - brs.x);
+          const brPx = Math.sin(brAngle);
+          const brPy = Math.cos(brAngle);
+
+          const brSegCorners = [
+            { x: brs.x + brPx * brHalfW, y: brs.y - brPy * brHalfW },
+            { x: bre.x + brPx * brHalfW, y: bre.y - brPy * brHalfW },
+            { x: bre.x - brPx * brHalfW, y: bre.y + brPy * brHalfW },
+            { x: brs.x - brPx * brHalfW, y: brs.y + brPy * brHalfW },
+          ];
+
+          ctx.beginPath();
+          ctx.moveTo(brSegCorners[0].x, brSegCorners[0].y);
+          ctx.lineTo(brSegCorners[1].x, brSegCorners[1].y);
+          ctx.lineTo(brSegCorners[2].x, brSegCorners[2].y);
+          ctx.lineTo(brSegCorners[3].x, brSegCorners[3].y);
+          ctx.closePath();
+          ctx.stroke();
+
+          // Centerline
+          if (brShowCL) {
+            ctx.save();
+            ctx.setLineDash(this.getLineDash('dashdot'));
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.beginPath();
+            ctx.moveTo(brs.x, brs.y);
+            ctx.lineTo(bre.x, bre.y);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+        break;
+      }
+
+      case 'wall-circle': {
+        // Draw circular wall preview (two concentric circles for inner/outer wall edges)
+        const { center: wcCenter, radius: wcRadius, thickness: wcThick, showCenterline: wcShowCL } = preview;
+        const wcJust = ('justification' in preview ? preview.justification : undefined) || 'center';
+
+        let wcInnerR: number, wcOuterR: number;
+        if (wcJust === 'left') {
+          wcInnerR = wcRadius;
+          wcOuterR = wcRadius + wcThick;
+        } else if (wcJust === 'right') {
+          wcInnerR = wcRadius - wcThick;
+          wcOuterR = wcRadius;
+        } else {
+          wcInnerR = wcRadius - wcThick / 2;
+          wcOuterR = wcRadius + wcThick / 2;
+        }
+        if (wcInnerR < 0) wcInnerR = 0;
+
+        // Outer circle
+        ctx.beginPath();
+        ctx.arc(wcCenter.x, wcCenter.y, wcOuterR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Inner circle
+        if (wcInnerR > 0) {
+          ctx.beginPath();
+          ctx.arc(wcCenter.x, wcCenter.y, wcInnerR, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Centerline circle
+        if (wcShowCL) {
+          ctx.save();
+          ctx.setLineDash(this.getLineDash('dashdot'));
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+          ctx.beginPath();
+          ctx.arc(wcCenter.x, wcCenter.y, wcRadius, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // Cross at center
+        const wcCrossSize = Math.max(20, wcRadius * 0.05);
+        ctx.beginPath();
+        ctx.moveTo(wcCenter.x - wcCrossSize, wcCenter.y);
+        ctx.lineTo(wcCenter.x + wcCrossSize, wcCenter.y);
+        ctx.moveTo(wcCenter.x, wcCenter.y - wcCrossSize);
+        ctx.lineTo(wcCenter.x, wcCenter.y + wcCrossSize);
+        ctx.stroke();
+        break;
+      }
+
+      case 'beam-circle': {
+        // Draw circular beam preview (two concentric circles for inner/outer beam edges)
+        const { center: bcCenter, radius: bcRadius, flangeWidth: bcFW, showCenterline: bcShowCL } = preview;
+        const bcHalfW = bcFW / 2;
+        const bcInnerR = Math.max(0, bcRadius - bcHalfW);
+        const bcOuterR = bcRadius + bcHalfW;
+
+        // Outer circle
+        ctx.beginPath();
+        ctx.arc(bcCenter.x, bcCenter.y, bcOuterR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Inner circle
+        if (bcInnerR > 0) {
+          ctx.beginPath();
+          ctx.arc(bcCenter.x, bcCenter.y, bcInnerR, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Centerline circle
+        if (bcShowCL) {
+          ctx.save();
+          ctx.setLineDash(this.getLineDash('dashdot'));
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+          ctx.beginPath();
+          ctx.arc(bcCenter.x, bcCenter.y, bcRadius, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // Cross at center
+        const bcCrossSize = Math.max(20, bcRadius * 0.05);
+        ctx.beginPath();
+        ctx.moveTo(bcCenter.x - bcCrossSize, bcCenter.y);
+        ctx.lineTo(bcCenter.x + bcCrossSize, bcCenter.y);
+        ctx.moveTo(bcCenter.x, bcCenter.y - bcCrossSize);
+        ctx.lineTo(bcCenter.x, bcCenter.y + bcCrossSize);
+        ctx.stroke();
+        break;
+      }
+
+      case 'slab': {
+        const slabPts = preview.points;
+        const slabCurrent = preview.currentPoint;
+        const allSlabPts = [...slabPts, slabCurrent];
+
+        if (allSlabPts.length >= 2) {
+          ctx.beginPath();
+          ctx.moveTo(allSlabPts[0].x, allSlabPts[0].y);
+          for (let si = 1; si < allSlabPts.length; si++) {
+            ctx.lineTo(allSlabPts[si].x, allSlabPts[si].y);
+          }
+          ctx.lineTo(allSlabPts[0].x, allSlabPts[0].y);
+          ctx.closePath();
+          ctx.stroke();
+
+          // Hatch fill preview - use materialHatchSettings (resolve from slab material or default to concrete)
+          if (allSlabPts.length >= 3) {
+            const slabMaterial = (preview as { material?: string }).material || 'concrete';
+            const slabPreviewHatch = this.materialHatchSettings[slabMaterial]
+              || DEFAULT_MATERIAL_HATCH_SETTINGS[slabMaterial]
+              || this.materialHatchSettings['concrete']
+              || DEFAULT_MATERIAL_HATCH_SETTINGS['concrete'];
+            if ((slabPreviewHatch.hatchType && slabPreviewHatch.hatchType !== 'none') || slabPreviewHatch.hatchPatternId) {
+              const slabSW = ctx.lineWidth;
+              ctx.save();
+              ctx.beginPath();
+              ctx.moveTo(allSlabPts[0].x, allSlabPts[0].y);
+              for (let si = 1; si < allSlabPts.length; si++) {
+                ctx.lineTo(allSlabPts[si].x, allSlabPts[si].y);
+              }
+              ctx.closePath();
+              ctx.clip();
+              ctx.lineWidth = slabSW * 0.4;
+              ctx.setLineDash([]);
+
+              // Fill solid background color first (under hatch lines)
+              if (slabPreviewHatch.backgroundColor) {
+                ctx.fillStyle = slabPreviewHatch.backgroundColor;
+                ctx.fill();
+              }
+
+              const sMinX = Math.min(...allSlabPts.map(p => p.x));
+              const sMinY = Math.min(...allSlabPts.map(p => p.y));
+              const sMaxX = Math.max(...allSlabPts.map(p => p.x));
+              const sMaxY = Math.max(...allSlabPts.map(p => p.y));
+              const sSpacing = slabPreviewHatch.hatchSpacing || 100;
+              const sHatchColor = slabPreviewHatch.hatchColor || (ctx.strokeStyle as string);
+              ctx.strokeStyle = sHatchColor;
+
+              const slabPreviewPattern = slabPreviewHatch.hatchPatternId ? this.getPatternById(slabPreviewHatch.hatchPatternId) : undefined;
+              if (slabPreviewPattern && slabPreviewPattern.lineFamilies.length > 0) {
+                const sPScale = sSpacing / 10;
+                // Special case: insulation patterns get zigzag rendering (NEN standard)
+                if (slabPreviewHatch.hatchPatternId === 'nen47-isolatie' || slabPreviewHatch.hatchPatternId === 'insulation') {
+                  this.drawInsulationZigzag(sMinX, sMinY, sMaxX, sMaxY, sPScale, 0, sHatchColor, slabSW);
+                } else {
+                  this.drawCustomPatternLines(slabPreviewPattern.lineFamilies, sMinX, sMinY, sMaxX, sMaxY, sPScale, 0, sHatchColor, slabSW);
+                }
+              } else if (slabPreviewPattern && slabPreviewPattern.lineFamilies.length === 0) {
+                // Solid fill
+                ctx.fillStyle = sHatchColor;
+                ctx.fill();
+              } else if (slabPreviewHatch.hatchType === 'solid') {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+                ctx.fill();
+              } else {
+                const sAngle = slabPreviewHatch.hatchAngle || 45;
+                if (slabPreviewHatch.hatchType === 'diagonal') {
+                  this.drawLineFamilySimple(sAngle, sSpacing, sMinX, sMinY, sMaxX, sMaxY);
+                } else if (slabPreviewHatch.hatchType === 'crosshatch') {
+                  this.drawLineFamilySimple(sAngle, sSpacing, sMinX, sMinY, sMaxX, sMaxY);
+                  this.drawLineFamilySimple(sAngle + 90, sSpacing, sMinX, sMinY, sMaxX, sMaxY);
+                } else if (slabPreviewHatch.hatchType === 'horizontal') {
+                  this.drawLineFamilySimple(0, sSpacing, sMinX, sMinY, sMaxX, sMaxY);
+                } else if (slabPreviewHatch.hatchType === 'vertical') {
+                  this.drawLineFamilySimple(90, sSpacing, sMinX, sMinY, sMaxX, sMaxY);
+                }
+              }
+              ctx.restore();
+            }
+          }
+
+          for (const pt of slabPts) {
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 3 / this._currentZoom, 0, Math.PI * 2);
+            ctx.fillStyle = COLORS.commandPreview;
+            ctx.fill();
+          }
+        }
+        break;
+      }
+
+      case 'plate-system': {
+        // Draw plate system preview (polygon outline + joist lines)
+        // Supports bulge/arc segments on confirmed edges and a live arc preview on the current edge
+        const psPts = preview.points;
+        const psCurrent = preview.currentPoint;
+        const psBulges = preview.bulges;
+        const psCurrentBulge = preview.currentBulge ?? 0;
+        const psArcThrough = preview.arcThroughPoint;
+        const allPsPts = [...psPts, psCurrent];
+
+        // Helper to build the preview contour path with bulge arcs
+        const buildPsPreviewPath = () => {
+          ctx.moveTo(allPsPts[0].x, allPsPts[0].y);
+          for (let si = 0; si < allPsPts.length; si++) {
+            const sj = (si + 1) % allPsPts.length;
+            // Determine bulge for this segment
+            let b = 0;
+            if (si < psPts.length - 1) {
+              // Confirmed segment between two placed vertices
+              b = psBulges?.[si] ?? 0;
+            } else if (si === psPts.length - 1 && si < allPsPts.length - 1) {
+              // Live edge: from last placed vertex to current mouse position
+              b = psCurrentBulge;
+            }
+            // Closing segment back to first vertex (sj === 0 when si === allPsPts.length - 1)
+            // stays straight (b = 0)
+
+            if (b !== 0 && Math.abs(b) > 0.0001) {
+              const arc = bulgeToArc(allPsPts[si], allPsPts[sj], b);
+              ctx.arc(arc.center.x, arc.center.y, arc.radius, arc.startAngle, arc.endAngle, arc.clockwise);
+            } else if (sj !== 0) {
+              ctx.lineTo(allPsPts[sj].x, allPsPts[sj].y);
+            } else {
+              ctx.closePath();
+            }
+          }
+        };
+
+        if (allPsPts.length >= 2) {
+          // Draw the contour polygon outline (with arc segments)
+          ctx.beginPath();
+          buildPsPreviewPath();
+          ctx.stroke();
+
+          // Light fill
+          if (allPsPts.length >= 3) {
+            ctx.save();
+            ctx.fillStyle = 'rgba(253, 244, 227, 0.15)';
+            ctx.beginPath();
+            buildPsPreviewPath();
+            ctx.fill();
+
+            // Clip to contour and draw joist preview lines
+            ctx.beginPath();
+            buildPsPreviewPath();
+            ctx.clip();
+
+            const psDir = preview.mainProfile.direction;
+            const psSpacing = preview.mainProfile.spacing;
+            const psCosD = Math.cos(psDir);
+            const psSinD = Math.sin(psDir);
+
+            // Get bounding box
+            let psMinX = Infinity, psMinY = Infinity, psMaxX = -Infinity, psMaxY = -Infinity;
+            for (const p of allPsPts) {
+              if (p.x < psMinX) psMinX = p.x;
+              if (p.y < psMinY) psMinY = p.y;
+              if (p.x > psMaxX) psMaxX = p.x;
+              if (p.y > psMaxY) psMaxY = p.y;
+            }
+
+            const psDiag = Math.sqrt((psMaxX - psMinX) ** 2 + (psMaxY - psMinY) ** 2);
+            const psCx = (psMinX + psMaxX) / 2;
+            const psCy = (psMinY + psMaxY) / 2;
+            const psNorm = { x: -psSinD, y: psCosD };
+            const psNumLines = Math.ceil(psDiag / psSpacing) + 1;
+
+            ctx.strokeStyle = 'rgba(200, 160, 80, 0.6)';
+            ctx.lineWidth = preview.mainProfile.width * 0.15;
+            ctx.setLineDash([]);
+
+            for (let i = -psNumLines; i <= psNumLines; i++) {
+              const offset = i * psSpacing;
+              const ox = psCx + psNorm.x * offset;
+              const oy = psCy + psNorm.y * offset;
+              ctx.beginPath();
+              ctx.moveTo(ox - psCosD * psDiag, oy - psSinD * psDiag);
+              ctx.lineTo(ox + psCosD * psDiag, oy + psSinD * psDiag);
+              ctx.stroke();
+            }
+            ctx.restore();
+          }
+
+          // Closing line to first point (dashed)
+          if (psPts.length >= 2) {
+            ctx.save();
+            ctx.setLineDash([4, 4]);
+            ctx.globalAlpha = 0.4;
+            ctx.beginPath();
+            ctx.moveTo(psCurrent.x, psCurrent.y);
+            ctx.lineTo(psPts[0].x, psPts[0].y);
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          // Draw arc through-point indicator (small diamond)
+          if (psArcThrough) {
+            const sz = 4 / this._currentZoom;
+            ctx.save();
+            ctx.fillStyle = '#ff8800';
+            ctx.beginPath();
+            ctx.moveTo(psArcThrough.x, psArcThrough.y - sz);
+            ctx.lineTo(psArcThrough.x + sz, psArcThrough.y);
+            ctx.lineTo(psArcThrough.x, psArcThrough.y + sz);
+            ctx.lineTo(psArcThrough.x - sz, psArcThrough.y);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+          }
+
+          // Draw vertex dots
+          for (const pt of psPts) {
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 3 / this._currentZoom, 0, Math.PI * 2);
+            ctx.fillStyle = COLORS.commandPreview;
+            ctx.fill();
+          }
+        }
+        break;
+      }
+
+      case 'section-callout': {
+        // Draw section callout preview: cut line with dash pattern + text labels at endpoints + direction arrows
+        const { start: scStart, end: scEnd, label: scLabel, bubbleRadius: scRadiusRaw, flipDirection: scFlip } = preview;
+        const scScaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+        const scRadius = scRadiusRaw * scScaleFactor;
+        const scAngle = Math.atan2(scEnd.y - scStart.y, scEnd.x - scStart.x);
+        const scDx = Math.cos(scAngle);
+        const scDy = Math.sin(scAngle);
+
+        // Perpendicular direction for arrows (viewing direction, negated so default points correct way)
+        const perpSign = scFlip ? 1 : -1;
+        const scPerpX = -scDy * perpSign;
+        const scPerpY = scDx * perpSign;
+
+        // Draw view depth area preview
+        const scViewDepth = preview.viewDepth ?? 5000;
+        if (scViewDepth > 0) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(scStart.x, scStart.y);
+          ctx.lineTo(scEnd.x, scEnd.y);
+          ctx.lineTo(scEnd.x + scPerpX * scViewDepth, scEnd.y + scPerpY * scViewDepth);
+          ctx.lineTo(scStart.x + scPerpX * scViewDepth, scStart.y + scPerpY * scViewDepth);
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(100, 180, 255, 0.08)';
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(100, 180, 255, 0.4)';
+          ctx.lineWidth = ctx.lineWidth || 1;
+          ctx.setLineDash([scRadius * 0.15, scRadius * 0.1]);
+          ctx.beginPath();
+          ctx.moveTo(scStart.x + scPerpX * scViewDepth, scStart.y + scPerpY * scViewDepth);
+          ctx.lineTo(scEnd.x + scPerpX * scViewDepth, scEnd.y + scPerpY * scViewDepth);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.restore();
+        }
+
+        // Draw the cut line: thick dash pattern (long-dash, short-dash, long-dash)
+        ctx.save();
+        ctx.lineWidth = ctx.lineWidth * 2;
+        ctx.setLineDash([scRadius * 0.3, scRadius * 0.15, scRadius * 0.05, scRadius * 0.15]);
+        ctx.beginPath();
+        ctx.moveTo(scStart.x, scStart.y);
+        ctx.lineTo(scEnd.x, scEnd.y);
+        ctx.stroke();
+        ctx.restore();
+
+        // Draw simple text labels at endpoints (NO circles/bubbles)
+        ctx.setLineDash([]);
+        const scLabelOffset = scRadius * 1.2;
+        const drawSCLabel = (px: number, py: number, offsetDx: number, offsetDy: number) => {
+          const lx = px + offsetDx * scLabelOffset;
+          const ly = py + offsetDy * scLabelOffset;
+          const fSize = scRadius * 1.7;
+          ctx.save();
+          ctx.fillStyle = strokeColor;
+          ctx.font = `bold ${fSize}px ${CAD_DEFAULT_FONT}`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(scLabel, lx, ly);
+          ctx.restore();
+        };
+
+        // Labels at both endpoints (offset outward along line direction)
+        drawSCLabel(scStart.x, scStart.y, -scDx, -scDy);
+        drawSCLabel(scEnd.x, scEnd.y, scDx, scDy);
+
+        // Direction arrows at each endpoint - short perpendicular lines showing viewing direction
+        const arrowLen = scRadius * 1.5;
+        ctx.lineWidth = ctx.lineWidth || 1;
+        ctx.beginPath();
+        // Arrow at start endpoint
+        ctx.moveTo(scStart.x, scStart.y);
+        ctx.lineTo(scStart.x + scPerpX * arrowLen, scStart.y + scPerpY * arrowLen);
+        // Arrow at end endpoint
+        ctx.moveTo(scEnd.x, scEnd.y);
+        ctx.lineTo(scEnd.x + scPerpX * arrowLen, scEnd.y + scPerpY * arrowLen);
+        ctx.stroke();
+
+        // Draw arrowheads on the perpendicular lines
+        const arrowHeadSize = scRadius * 0.5;
+        const drawArrowHead = (tipX: number, tipY: number, dirX: number, dirY: number) => {
+          ctx.beginPath();
+          ctx.moveTo(tipX, tipY);
+          ctx.lineTo(tipX - dirX * arrowHeadSize + dirY * arrowHeadSize * 0.4, tipY - dirY * arrowHeadSize - dirX * arrowHeadSize * 0.4);
+          ctx.lineTo(tipX - dirX * arrowHeadSize - dirY * arrowHeadSize * 0.4, tipY - dirY * arrowHeadSize + dirX * arrowHeadSize * 0.4);
+          ctx.closePath();
+          ctx.fillStyle = strokeColor;
+          ctx.fill();
+        };
+
+        drawArrowHead(scStart.x + scPerpX * arrowLen, scStart.y + scPerpY * arrowLen, scPerpX, scPerpY);
+        drawArrowHead(scEnd.x + scPerpX * arrowLen, scEnd.y + scPerpY * arrowLen, scPerpX, scPerpY);
+
         break;
       }
 
@@ -601,15 +2169,84 @@ export class ShapeRenderer extends BaseRenderer {
         break;
       }
 
-      case 'modifyPreview':
+      case 'spot-elevation': {
+        // Draw spot elevation preview: cross/circle marker + elevation text
+        const { position: sePos, elevation: seElev, labelPosition: seLabelPos, showLeader: seShowLeader } = preview;
+        const seScaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+        const seMarkerSize = 150 * seScaleFactor;
+        const seFontSize = 250 * seScaleFactor;
+
+        // Draw cross marker
+        ctx.beginPath();
+        ctx.moveTo(sePos.x - seMarkerSize, sePos.y);
+        ctx.lineTo(sePos.x + seMarkerSize, sePos.y);
+        ctx.moveTo(sePos.x, sePos.y - seMarkerSize);
+        ctx.lineTo(sePos.x, sePos.y + seMarkerSize);
+        ctx.stroke();
+        // Draw circle around cross
+        ctx.beginPath();
+        ctx.arc(sePos.x, sePos.y, seMarkerSize * 0.8, 0, Math.PI * 2);
+        ctx.stroke();
+        // Draw leader line
+        if (seShowLeader) {
+          ctx.beginPath();
+          ctx.moveTo(sePos.x, sePos.y);
+          ctx.lineTo(seLabelPos.x, seLabelPos.y);
+          ctx.stroke();
+        }
+        // Draw elevation text
+        const seLabel = seElev >= 0 ? `+${(seElev / 1000).toFixed(3)}` : `${(seElev / 1000).toFixed(3)}`;
         ctx.save();
-        ctx.globalAlpha = 0.5;
-        ctx.setLineDash([6, 4]);
+        ctx.fillStyle = strokeColor;
+        ctx.font = `${seFontSize}px ${CAD_DEFAULT_FONT}`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(seLabel, seLabelPos.x + seMarkerSize * 0.3, seLabelPos.y);
+        ctx.restore();
+        break;
+      }
+
+      case 'modifyPreview':
+        // Draw ghost shapes with higher visibility
+        ctx.save();
+        ctx.globalAlpha = 0.75;
+        ctx.setLineDash([8, 4]);
         for (const shape of preview.shapes) {
-          this.drawShape(shape, false, false, false);
+          this.drawShape(shape, false, false, invertColors);
         }
         ctx.restore();
         ctx.setLineDash([]);
+        // Draw guide line from base point to current point
+        if (preview.basePoint && preview.currentPoint) {
+          const bp = preview.basePoint;
+          const cp = preview.currentPoint;
+          ctx.save();
+          ctx.strokeStyle = '#00ccff';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([6, 3]);
+          ctx.beginPath();
+          ctx.moveTo(bp.x, bp.y);
+          ctx.lineTo(cp.x, cp.y);
+          ctx.stroke();
+          // Base point crosshair
+          const ch = 6 / (viewport?.zoom ?? 1);
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.moveTo(bp.x - ch, bp.y); ctx.lineTo(bp.x + ch, bp.y);
+          ctx.moveTo(bp.x, bp.y - ch); ctx.lineTo(bp.x, bp.y + ch);
+          ctx.stroke();
+          // Distance label
+          const dist = Math.hypot(cp.x - bp.x, cp.y - bp.y);
+          if (dist > 0.01) {
+            const midX = (bp.x + cp.x) / 2;
+            const midY = (bp.y + cp.y) / 2;
+            const fontSize = 12 / (viewport?.zoom ?? 1);
+            ctx.font = `${fontSize}px sans-serif`;
+            ctx.fillStyle = '#00ccff';
+            ctx.fillText(dist.toFixed(1), midX + fontSize * 0.3, midY - fontSize * 0.3);
+          }
+          ctx.restore();
+        }
         break;
 
       case 'mirrorAxis':
@@ -814,6 +2451,30 @@ export class ShapeRenderer extends BaseRenderer {
         }
 
         ctx.setLineDash([]);
+        break;
+      }
+
+      case 'elasticBox': {
+        // Draw green dashed selection box for elastic/stretch tool
+        const { start, end } = preview;
+        const x = Math.min(start.x, end.x);
+        const y = Math.min(start.y, end.y);
+        const w = Math.abs(end.x - start.x);
+        const h = Math.abs(end.y - start.y);
+
+        ctx.save();
+        // Green fill (semi-transparent)
+        ctx.fillStyle = 'rgba(0, 200, 0, 0.12)';
+        ctx.fillRect(x, y, w, h);
+
+        // Green dashed border
+        ctx.strokeStyle = 'rgba(0, 200, 0, 0.85)';
+        ctx.lineWidth = 1.5 / (viewport?.zoom || 1);
+        ctx.setLineDash([8 / (viewport?.zoom || 1), 4 / (viewport?.zoom || 1)]);
+        ctx.strokeRect(x, y, w, h);
+
+        ctx.setLineDash([]);
+        ctx.restore();
         break;
       }
     }
@@ -1129,7 +2790,7 @@ export class ShapeRenderer extends BaseRenderer {
 
     const {
       position,
-      text,
+      text: storedText,
       fontSize,
       fontFamily,
       rotation,
@@ -1152,6 +2813,20 @@ export class ShapeRenderer extends BaseRenderer {
       textCase = 'none',
       paragraphSpacing = 0,
     } = shape;
+
+    // For linked labels: resolve text from linked element at render time
+    let text = storedText;
+    if (shape.linkedShapeId) {
+      const linkedShape = this.shapesLookup.get(shape.linkedShapeId);
+      if (linkedShape) {
+        if (shape.labelTemplate) {
+          // Use template-based resolution: {Name}, {Area}, {Thickness}, etc.
+          text = resolveTemplate(shape.labelTemplate, linkedShape, this.wallTypes);
+        } else {
+          text = getElementLabelText(linkedShape, this.wallTypes);
+        }
+      }
+    }
 
     ctx.save();
 
@@ -1443,9 +3118,10 @@ export class ShapeRenderer extends BaseRenderer {
 
     ctx.restore();
 
-    // Draw leader lines if present
-    if ((shape.leaderPoints && shape.leaderPoints.length > 0) ||
-        (shape.leaders && shape.leaders.length > 0)) {
+    // Draw leader lines if present (skip for linked labels -- they have no leader line)
+    if (!shape.linkedShapeId &&
+        ((shape.leaderPoints && shape.leaderPoints.length > 0) ||
+         (shape.leaders && shape.leaders.length > 0))) {
       ctx.save();
       const leaderConfig = shape.leaderConfig;
       let leaderColor = leaderConfig?.color || color || shape.style.strokeColor;
@@ -1731,16 +3407,50 @@ export class ShapeRenderer extends BaseRenderer {
     // Draw axis arrows on move handle
     this.drawAxisArrows({ x: centerX, y: midY }, zoom);
 
-    // Draw rotation handle above the text box (guarded by rotation gizmo toggle)
-    if (this._showRotationGizmo) {
-      const rotationHandleDistance = 25 / zoom;
-      const rotationHandleY = topY - 2 - rotationHandleDistance;
-      this.drawRotationGizmo(centerX, topY - 2, centerX, rotationHandleY, zoom);
-    }
+    // Draw rotation handle above the text box
+    const rotationHandleDistance = 25 / zoom; // Distance from top of box to rotation handle
+    const rotationHandleY = topY - 2 - rotationHandleDistance;
+    const rotationHandleRadius = handleSize * 0.6;
 
-    // Draw leader line selection highlights and grip handles
-    if ((shape.leaderPoints && shape.leaderPoints.length > 0) ||
-        (shape.leaders && shape.leaders.length > 0)) {
+    // Draw connecting line from top center to rotation handle
+    ctx.strokeStyle = COLORS.selection;
+    ctx.lineWidth = 1 / zoom;
+    ctx.beginPath();
+    ctx.moveTo(centerX, topY - 2);
+    ctx.lineTo(centerX, rotationHandleY);
+    ctx.stroke();
+
+    // Draw circular rotation handle
+    ctx.fillStyle = '#90EE90'; // Light green for rotation
+    ctx.strokeStyle = COLORS.selectionHandleStroke;
+    ctx.beginPath();
+    ctx.arc(centerX, rotationHandleY, rotationHandleRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Draw rotation arrow icon inside the handle
+    ctx.strokeStyle = '#006400'; // Dark green
+    ctx.lineWidth = 1.5 / zoom;
+    const iconRadius = rotationHandleRadius * 0.6;
+    ctx.beginPath();
+    ctx.arc(centerX, rotationHandleY, iconRadius, -Math.PI * 0.7, Math.PI * 0.3);
+    ctx.stroke();
+    // Arrowhead
+    const arrowTipAngle = Math.PI * 0.3;
+    const arrowTipX = centerX + iconRadius * Math.cos(arrowTipAngle);
+    const arrowTipY = rotationHandleY + iconRadius * Math.sin(arrowTipAngle);
+    const arrowHeadSize = 3 / zoom;
+    ctx.beginPath();
+    ctx.moveTo(arrowTipX, arrowTipY);
+    ctx.lineTo(arrowTipX - arrowHeadSize, arrowTipY - arrowHeadSize);
+    ctx.moveTo(arrowTipX, arrowTipY);
+    ctx.lineTo(arrowTipX + arrowHeadSize * 0.5, arrowTipY - arrowHeadSize);
+    ctx.stroke();
+
+    // Draw leader line selection highlights and grip handles (skip for linked labels)
+    if (!shape.linkedShapeId &&
+        ((shape.leaderPoints && shape.leaderPoints.length > 0) ||
+         (shape.leaders && shape.leaders.length > 0))) {
       // Undo the rotation transform for leader drawing (leaders are in world space)
       ctx.restore();
       ctx.save();
@@ -1837,117 +3547,6 @@ export class ShapeRenderer extends BaseRenderer {
     ctx.restore();
   }
 
-  /**
-   * Draw the rotation gizmo: a connecting line from shape top edge to a green circle with curved arrow icon.
-   */
-  private drawRotationGizmo(topX: number, topY: number, handleX: number, handleY: number, zoom: number): void {
-    const ctx = this.ctx;
-    const handleSize = 6 / zoom;
-    const rotationHandleRadius = handleSize * 0.6;
-
-    // Draw connecting line from top center to rotation handle
-    ctx.strokeStyle = COLORS.selection;
-    ctx.lineWidth = 1 / zoom;
-    ctx.beginPath();
-    ctx.moveTo(topX, topY);
-    ctx.lineTo(handleX, handleY);
-    ctx.stroke();
-
-    // Draw circular rotation handle
-    ctx.fillStyle = '#90EE90'; // Light green for rotation
-    ctx.strokeStyle = COLORS.selectionHandleStroke;
-    ctx.beginPath();
-    ctx.arc(handleX, handleY, rotationHandleRadius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    // Draw rotation arrow icon inside the handle
-    ctx.strokeStyle = '#006400'; // Dark green
-    ctx.lineWidth = 1.5 / zoom;
-    const iconRadius = rotationHandleRadius * 0.6;
-    ctx.beginPath();
-    ctx.arc(handleX, handleY, iconRadius, -Math.PI * 0.7, Math.PI * 0.3);
-    ctx.stroke();
-    // Arrowhead
-    const arrowTipAngle = Math.PI * 0.3;
-    const arrowTipX = handleX + iconRadius * Math.cos(arrowTipAngle);
-    const arrowTipY = handleY + iconRadius * Math.sin(arrowTipAngle);
-    const arrowHeadSize = 3 / zoom;
-    ctx.beginPath();
-    ctx.moveTo(arrowTipX, arrowTipY);
-    ctx.lineTo(arrowTipX - arrowHeadSize, arrowTipY - arrowHeadSize);
-    ctx.moveTo(arrowTipX, arrowTipY);
-    ctx.lineTo(arrowTipX + arrowHeadSize * 0.5, arrowTipY - arrowHeadSize);
-    ctx.stroke();
-  }
-
-  /**
-   * Compute the rotation gizmo anchor (top edge center) and handle (above shape) positions.
-   * Returns null for shapes that don't support the gizmo.
-   */
-  private getRotationGizmoPoints(shape: Shape, zoom: number): { topX: number; topY: number; handleX: number; handleY: number } | null {
-    const dist = 25 / zoom;
-
-    switch (shape.type) {
-      case 'rectangle': {
-        const tl = shape.topLeft;
-        const w = shape.width;
-        const rot = shape.rotation || 0;
-        const cos = Math.cos(rot);
-        const sin = Math.sin(rot);
-        // Top-center in local space → world
-        const topX = tl.x + (w / 2) * cos;
-        const topY = tl.y + (w / 2) * sin;
-        // Handle above the top-center: local (w/2, -dist) → world
-        const handleX = tl.x + (w / 2) * cos - (-dist) * sin;
-        const handleY = tl.y + (w / 2) * sin + (-dist) * cos;
-        return { topX, topY, handleX, handleY };
-      }
-      case 'ellipse': {
-        const cx = shape.center.x;
-        const cy = shape.center.y;
-        const rot = shape.rotation || 0;
-        const cos = Math.cos(rot);
-        const sin = Math.sin(rot);
-        // Top at local (0, -radiusY) → world
-        const topX = cx - (-shape.radiusY) * sin;
-        const topY = cy + (-shape.radiusY) * cos;
-        // Handle at local (0, -radiusY - dist) → world
-        const handleX = cx - (-shape.radiusY - dist) * sin;
-        const handleY = cy + (-shape.radiusY - dist) * cos;
-        return { topX, topY, handleX, handleY };
-      }
-      case 'image': {
-        const pos = shape.position;
-        const w = shape.width;
-        const rot = shape.rotation || 0;
-        const cos = Math.cos(rot);
-        const sin = Math.sin(rot);
-        // Top-center in local space (w/2, 0) → world
-        const topX = pos.x + (w / 2) * cos;
-        const topY = pos.y + (w / 2) * sin;
-        // Handle at local (w/2, -dist) → world
-        const handleX = pos.x + (w / 2) * cos - (-dist) * sin;
-        const handleY = pos.y + (w / 2) * sin + (-dist) * cos;
-        return { topX, topY, handleX, handleY };
-      }
-      case 'block-instance': {
-        const pos = shape.position;
-        const rot = shape.rotation || 0;
-        const cos = Math.cos(rot);
-        const sin = Math.sin(rot);
-        return {
-          topX: pos.x,
-          topY: pos.y,
-          handleX: pos.x - (-dist) * sin,
-          handleY: pos.y + (-dist) * cos,
-        };
-      }
-      default:
-        return null;
-    }
-  }
-
   private drawSelectionHandles(shape: Shape): void {
     const ctx = this.ctx;
     // Keep handles at a constant screen-pixel size, but never smaller than the shape's stroke
@@ -1963,19 +3562,33 @@ export class ShapeRenderer extends BaseRenderer {
     const points = this.getShapeHandlePoints(shape);
 
     const hover = getGripHover();
+    // Check if a specific grip is selected via box selection (endpoint editing mode)
+    const selectedGrip = useAppStore.getState().selectedGrip;
+    const isGripSelected = selectedGrip && selectedGrip.shapeId === shape.id;
 
     for (let i = 0; i < points.length; i++) {
       const point = points[i];
-      ctx.fillStyle = COLORS.selectionHandle;
-      ctx.strokeStyle = COLORS.selectionHandleStroke;
-      ctx.lineWidth = 1 / zoom;
-      ctx.fillRect(point.x - handleSize / 2, point.y - handleSize / 2, handleSize, handleSize);
-      ctx.strokeRect(point.x - handleSize / 2, point.y - handleSize / 2, handleSize, handleSize);
+      // Highlight the box-selected grip with a distinct color (bright cyan, larger)
+      const isThisGripSelected = isGripSelected && selectedGrip.gripIndex === i;
+      if (isThisGripSelected) {
+        const highlightSize = handleSize * 1.4;
+        ctx.fillStyle = '#00ffff';
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2 / zoom;
+        ctx.fillRect(point.x - highlightSize / 2, point.y - highlightSize / 2, highlightSize, highlightSize);
+        ctx.strokeRect(point.x - highlightSize / 2, point.y - highlightSize / 2, highlightSize, highlightSize);
+      } else {
+        ctx.fillStyle = COLORS.selectionHandle;
+        ctx.strokeStyle = COLORS.selectionHandleStroke;
+        ctx.lineWidth = 1 / zoom;
+        ctx.fillRect(point.x - handleSize / 2, point.y - handleSize / 2, handleSize, handleSize);
+        ctx.strokeRect(point.x - handleSize / 2, point.y - handleSize / 2, handleSize, handleSize);
+      }
       // Skip axis arrows on arc midpoint grip and image corner/side grips (only center grip 8 gets arrows)
       if (!(shape.type === 'arc' && i === 3) && !(shape.type === 'image' && i !== 8)) {
         // For line/beam midpoint (index 2), align axes along/perpendicular to the shape
         let angle = 0;
-        if (i === 2 && (shape.type === 'line' || shape.type === 'beam')) {
+        if (i === 2 && (shape.type === 'line' || shape.type === 'beam' || shape.type === 'gridline' || shape.type === 'wall')) {
           angle = Math.atan2(shape.end.y - shape.start.y, shape.end.x - shape.start.x);
         }
         // Determine which axis is hovered for highlighting
@@ -1984,13 +3597,163 @@ export class ShapeRenderer extends BaseRenderer {
       }
     }
 
-    // Draw rotation gizmo for rotatable shapes
-    if (this._showRotationGizmo) {
-      const gizmo = this.getRotationGizmoPoints(shape, zoom);
-      if (gizmo) {
-        this.drawRotationGizmo(gizmo.topX, gizmo.topY, gizmo.handleX, gizmo.handleY, zoom);
-      }
+    // Draw rotation gizmo handle if enabled (skip text — text has its own rotation grip)
+    if (getRotationGizmoVisible() && shape.type !== 'text') {
+      this.drawRotationGizmo(shape, points, zoom);
     }
+  }
+
+  /**
+   * Draw rotation gizmo: an outer rotation ring around the shape with a
+   * small handle, hover highlighting, and angle feedback during active rotation.
+   */
+  private drawRotationGizmo(shape: Shape, handlePoints: { x: number; y: number }[], zoom: number): void {
+    const ctx = this.ctx;
+
+    // Calculate shape center (centroid) from handle points
+    let cx = 0, cy = 0;
+    for (const pt of handlePoints) {
+      cx += pt.x;
+      cy += pt.y;
+    }
+    cx /= handlePoints.length;
+    cy /= handlePoints.length;
+
+    // Fixed world-space ring radius: 50mm (100mm diameter circle)
+    const ringRadius = 50;
+
+    const isHovered = getRotationGizmoHovered();
+    const activeRot = getActiveRotation();
+    const isActiveForThisShape = activeRot !== null && activeRot.shapeId === shape.id;
+
+    ctx.save();
+
+    // --- Draw the outer rotation ring (thin & subtle, fixed world-space size) ---
+    const ringColor = isHovered || isActiveForThisShape
+      ? 'rgba(0, 200, 255, 0.45)'
+      : 'rgba(0, 180, 255, 0.15)';
+    // 1px line width in screen space
+    const ringLineWidth = 1 / zoom;
+
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = ringLineWidth;
+    ctx.setLineDash([4 / zoom, 3 / zoom]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // --- Draw the rotation handle at the top of the ring ---
+    const handleAngle = -Math.PI / 2; // Top position
+    const handleX = cx + ringRadius * Math.cos(handleAngle);
+    const handleY = cy + ringRadius * Math.sin(handleAngle);
+    const handleRadius = isHovered ? 4 / zoom : 3 / zoom;
+
+    // Handle fill
+    ctx.fillStyle = isHovered
+      ? 'rgba(0, 220, 255, 1.0)'
+      : 'rgba(0, 180, 255, 0.85)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.lineWidth = 1 / zoom;
+    ctx.beginPath();
+    ctx.arc(handleX, handleY, handleRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Draw rotation arrow icon inside the handle
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.lineWidth = 0.8 / zoom;
+    const iconR = handleRadius * 0.55;
+    ctx.beginPath();
+    ctx.arc(handleX, handleY, iconR, -Math.PI * 0.8, Math.PI * 0.4);
+    ctx.stroke();
+    // Arrow tip
+    const tipA = Math.PI * 0.4;
+    const tipX = handleX + iconR * Math.cos(tipA);
+    const tipY = handleY + iconR * Math.sin(tipA);
+    const arrowSz = handleRadius * 0.35;
+    ctx.beginPath();
+    ctx.moveTo(tipX + arrowSz * Math.cos(tipA - 0.5), tipY + arrowSz * Math.sin(tipA - 0.5));
+    ctx.lineTo(tipX, tipY);
+    ctx.lineTo(tipX + arrowSz * Math.cos(tipA + 1.5), tipY + arrowSz * Math.sin(tipA + 1.5));
+    ctx.stroke();
+
+    // --- Draw angle feedback during active rotation ---
+    if (isActiveForThisShape) {
+      const rot = activeRot!;
+      const deltaAngle = rot.deltaAngle;
+      // Reference line (from center upward = 0 degrees)
+      const refAngle = -Math.PI / 2;
+      const guideLen = ringRadius + 6 / zoom;
+
+      // Draw reference line (dashed, dimmer)
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+      ctx.lineWidth = 1 / zoom;
+      ctx.setLineDash([4 / zoom, 3 / zoom]);
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + guideLen * Math.cos(refAngle), cy + guideLen * Math.sin(refAngle));
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Draw current angle line (solid, bright)
+      const currentAngle = refAngle + deltaAngle;
+      ctx.strokeStyle = rot.isSnapped ? 'rgba(0, 255, 128, 0.8)' : 'rgba(0, 200, 255, 0.8)';
+      ctx.lineWidth = 1.5 / zoom;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + guideLen * Math.cos(currentAngle), cy + guideLen * Math.sin(currentAngle));
+      ctx.stroke();
+
+      // Draw arc sweep between reference and current angle
+      if (Math.abs(deltaAngle) > 0.001) {
+        const sweepRadius = ringRadius * 0.4;
+        ctx.fillStyle = rot.isSnapped ? 'rgba(0, 255, 128, 0.1)' : 'rgba(0, 200, 255, 0.1)';
+        ctx.strokeStyle = rot.isSnapped ? 'rgba(0, 255, 128, 0.5)' : 'rgba(0, 200, 255, 0.5)';
+        ctx.lineWidth = 1.5 / zoom;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        if (deltaAngle > 0) {
+          ctx.arc(cx, cy, sweepRadius, refAngle, refAngle + deltaAngle);
+        } else {
+          ctx.arc(cx, cy, sweepRadius, refAngle + deltaAngle, refAngle);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      // Draw angle label
+      const angleDeg = (deltaAngle * 180) / Math.PI;
+      const labelAngle = refAngle + deltaAngle / 2;
+      const labelDist = ringRadius + 14 / zoom;
+      const labelX = cx + labelDist * Math.cos(labelAngle);
+      const labelY = cy + labelDist * Math.sin(labelAngle);
+
+      const fontSize = 12 / zoom;
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      // Background for label
+      const labelText = `${angleDeg.toFixed(1)}\u00B0`;
+      const metrics = ctx.measureText(labelText);
+      const padX = 4 / zoom;
+      const padY = 2 / zoom;
+      ctx.fillStyle = rot.isSnapped ? 'rgba(0, 100, 50, 0.85)' : 'rgba(0, 50, 80, 0.85)';
+      ctx.fillRect(
+        labelX - metrics.width / 2 - padX,
+        labelY - fontSize / 2 - padY,
+        metrics.width + padX * 2,
+        fontSize + padY * 2
+      );
+
+      // Label text
+      ctx.fillStyle = rot.isSnapped ? '#00ff80' : '#00ccff';
+      ctx.fillText(labelText, labelX, labelY);
+    }
+
+    ctx.restore();
   }
 
   /**
@@ -2230,6 +3993,86 @@ export class ShapeRenderer extends BaseRenderer {
           shape.end,
           { x: (shape.start.x + shape.end.x) / 2, y: (shape.start.y + shape.end.y) / 2 },
         ];
+      case 'gridline':
+        // Gridline handles: grips at actual start/end (line + bubble extend beyond visually)
+        return [
+          shape.start,
+          shape.end,
+          { x: (shape.start.x + shape.end.x) / 2, y: (shape.start.y + shape.end.y) / 2 },
+        ];
+      case 'level':
+        // Level handles: start, end, and midpoint (like gridline)
+        return [
+          shape.start,
+          shape.end,
+          { x: (shape.start.x + shape.end.x) / 2, y: (shape.start.y + shape.end.y) / 2 },
+        ];
+      case 'pile':
+        // Pile handle: center position
+        return [shape.position];
+      case 'cpt':
+        // CPT handle: center position
+        return [(shape as CPTShape).position];
+      case 'foundation-zone':
+        // Foundation zone handles: all contour vertices
+        return [...(shape as FoundationZoneShape).contourPoints];
+      case 'wall':
+        // Wall handles: start, end, and midpoint
+        return [
+          shape.start,
+          shape.end,
+          { x: (shape.start.x + shape.end.x) / 2, y: (shape.start.y + shape.end.y) / 2 },
+        ];
+      case 'slab':
+        // Slab handles: all polygon vertices
+        return [...(shape as SlabShape).points];
+      case 'plate-system': {
+        // Plate system handles: contour vertices + edge/arc midpoints
+        const psS = shape as PlateSystemShape;
+        const psHandles: { x: number; y: number }[] = [...psS.contourPoints];
+        for (let i = 0; i < psS.contourPoints.length; i++) {
+          const j = (i + 1) % psS.contourPoints.length;
+          const b = psS.contourBulges ? (psS.contourBulges[i] ?? 0) : 0;
+          if (Math.abs(b) > 0.0001) {
+            psHandles.push(bulgeArcMidpoint(psS.contourPoints[i], psS.contourPoints[j], b));
+          } else {
+            psHandles.push({
+              x: (psS.contourPoints[i].x + psS.contourPoints[j].x) / 2,
+              y: (psS.contourPoints[i].y + psS.contourPoints[j].y) / 2,
+            });
+          }
+        }
+        return psHandles;
+      }
+      case 'section-callout': {
+        // Section callout handles: start, end, midpoint, and view depth grip
+        const sc = shape as SectionCalloutShape;
+        const scAngle = Math.atan2(sc.end.y - sc.start.y, sc.end.x - sc.start.x);
+        const scDx = Math.cos(scAngle);
+        const scDy = Math.sin(scAngle);
+        const scPerpSign = sc.flipDirection ? 1 : -1;
+        const scPerpX = -scDy * scPerpSign;
+        const scPerpY = scDx * scPerpSign;
+        const scVD = sc.viewDepth ?? 5000;
+        const scMidX = (sc.start.x + sc.end.x) / 2;
+        const scMidY = (sc.start.y + sc.end.y) / 2;
+        return [
+          sc.start,
+          sc.end,
+          { x: scMidX, y: scMidY },
+          // View depth grip: midpoint of the far edge
+          { x: scMidX + scPerpX * scVD, y: scMidY + scPerpY * scVD },
+        ];
+      }
+      case 'space':
+        // Space handles: label position (centroid) for dragging
+        return [(shape as SpaceShape).labelPosition];
+      case 'spot-elevation':
+        // Spot elevation handles: marker position and label position
+        return [
+          (shape as SpotElevationShape).position,
+          (shape as SpotElevationShape).labelPosition,
+        ];
       case 'image': {
         const imgShape = shape as ImageShape;
         const tl = imgShape.position;
@@ -2254,41 +4097,9 @@ export class ShapeRenderer extends BaseRenderer {
           toWorld(w / 2, h / 2),
         ];
       }
-      case 'block-instance': {
-        // Show handles at the instance position (center grip)
-        const bi = shape as BlockInstanceShape;
-        return [bi.position];
-      }
       default:
         return [];
     }
-  }
-
-  private drawBlockInstance(shape: BlockInstanceShape, isSelected: boolean, isHovered: boolean, invertColors: boolean): void {
-    const def = this.blockDefinitions.get(shape.blockDefinitionId);
-    if (!def) return;
-
-    const ctx = this.ctx;
-    ctx.save();
-
-    // Apply instance transform: translate to position, rotate, scale, offset by base point
-    ctx.translate(shape.position.x, shape.position.y);
-    ctx.rotate(shape.rotation);
-    ctx.scale(shape.scaleX, shape.scaleY);
-    ctx.translate(-def.basePoint.x, -def.basePoint.y);
-
-    // Draw each child entity
-    for (const entity of def.entities) {
-      if (!entity.visible) continue;
-      if (isSelected || isHovered) {
-        // When instance is selected/hovered, draw children with selection/hover color
-        this.drawShape(entity, isSelected, isHovered, invertColors, true);
-      } else {
-        this.drawShapeSimple(entity, invertColors);
-      }
-    }
-
-    ctx.restore();
   }
 
   private drawImage(shape: ImageShape): void {
@@ -2490,7 +4301,12 @@ export class ShapeRenderer extends BaseRenderer {
         if (isSvgHatchPattern(customPattern)) {
           this.drawSvgPattern(customPattern, minX, minY, maxX, maxY, pScale, pAngle);
         } else if (customPattern.lineFamilies.length > 0) {
-          this.drawCustomPatternLines(customPattern.lineFamilies, minX, minY, maxX, maxY, pScale, pAngle, pColor, strokeWidth);
+          // Special case: insulation patterns get zigzag rendering (NEN standard)
+          if (pCustomId === 'nen47-isolatie' || pCustomId === 'insulation') {
+            this.drawInsulationZigzag(minX, minY, maxX, maxY, pScale, pAngle, pColor, strokeWidth);
+          } else {
+            this.drawCustomPatternLines(customPattern.lineFamilies, minX, minY, maxX, maxY, pScale, pAngle, pColor, strokeWidth);
+          }
         } else {
           ctx.fillStyle = pColor;
           ctx.fill();
@@ -2545,15 +4361,32 @@ export class ShapeRenderer extends BaseRenderer {
    * Shows beam as a rectangle with optional centerline and label
    */
   private drawBeam(shape: BeamShape, invertColors: boolean = false): void {
+    const viewMode = shape.viewMode || 'plan';
+
+    if (viewMode === 'section') {
+      this.drawBeamSection(shape, invertColors);
+    } else if (viewMode === 'elevation') {
+      this.drawBeamElevation(shape, invertColors);
+    } else if (viewMode === 'side') {
+      this.drawBeamSide(shape, invertColors);
+    } else {
+      this.drawBeamPlan(shape, invertColors);
+    }
+  }
+
+  /** Draw beam in plan view (top-down rectangle, with miter polygon support) */
+  private drawBeamPlan(shape: BeamShape, invertColors: boolean = false): void {
+    // Delegate to arc renderer when the beam has a non-zero bulge
+    if (shape.bulge && Math.abs(shape.bulge) > 0.0001) {
+      this.drawArcBeam(shape, invertColors);
+      return;
+    }
+
     const ctx = this.ctx;
-    const { start, end, flangeWidth, showCenterline, showLabel, labelText, presetName, material } = shape;
+    const { start, end, showCenterline, showLabel, material } = shape;
+    const startCap = shape.startCap || 'butt';
+    const endCap = shape.endCap || 'butt';
 
-    const beamAngle = Math.atan2(end.y - start.y, end.x - start.x);
-    const halfWidth = flangeWidth / 2;
-    const perpX = Math.sin(beamAngle) * halfWidth;
-    const perpY = Math.cos(beamAngle) * halfWidth;
-
-    // Determine line style based on material
     const originalLineWidth = ctx.lineWidth;
     if (material === 'concrete') {
       ctx.lineWidth = originalLineWidth * 1.5;
@@ -2561,36 +4394,48 @@ export class ShapeRenderer extends BaseRenderer {
       ctx.lineWidth = originalLineWidth * 1.2;
     }
 
-    // Draw beam outline (two parallel lines for flanges)
+    // Compute beam polygon corners (handles miter caps)
+    const corners = this.computeBeamCorners(shape);
+
+    // Draw beam outline edges selectively: skip mitered edges to avoid visible
+    // line at the intersection where two mitered beams meet.
+    // Corner order: [startLeft(0), endLeft(1), endRight(2), startRight(3)]
+    // Edges: 0->1 (left side), 1->2 (end cap), 2->3 (right side), 3->0 (start cap)
+    const hasStartMiterBeam = startCap === 'miter';
+    const hasEndMiterBeam = endCap === 'miter';
+
+    // Left side edge: startLeft -> endLeft (always drawn)
     ctx.beginPath();
-    // Top flange edge
-    ctx.moveTo(start.x + perpX, start.y - perpY);
-    ctx.lineTo(end.x + perpX, end.y - perpY);
+    ctx.moveTo(corners[0].x, corners[0].y);
+    ctx.lineTo(corners[1].x, corners[1].y);
     ctx.stroke();
 
-    // Bottom flange edge
+    // End cap edge: endLeft -> endRight (skip if end is mitered)
+    if (!hasEndMiterBeam) {
+      ctx.beginPath();
+      ctx.moveTo(corners[1].x, corners[1].y);
+      ctx.lineTo(corners[2].x, corners[2].y);
+      ctx.stroke();
+    }
+
+    // Right side edge: endRight -> startRight (always drawn)
     ctx.beginPath();
-    ctx.moveTo(start.x - perpX, start.y + perpY);
-    ctx.lineTo(end.x - perpX, end.y + perpY);
+    ctx.moveTo(corners[2].x, corners[2].y);
+    ctx.lineTo(corners[3].x, corners[3].y);
     ctx.stroke();
 
-    // Draw end lines (perpendicular caps at start and end)
-    ctx.beginPath();
-    ctx.moveTo(start.x + perpX, start.y - perpY);
-    ctx.lineTo(start.x - perpX, start.y + perpY);
-    ctx.moveTo(end.x + perpX, end.y - perpY);
-    ctx.lineTo(end.x - perpX, end.y + perpY);
-    ctx.stroke();
+    // Start cap edge: startRight -> startLeft (skip if start is mitered)
+    if (!hasStartMiterBeam) {
+      ctx.beginPath();
+      ctx.moveTo(corners[3].x, corners[3].y);
+      ctx.lineTo(corners[0].x, corners[0].y);
+      ctx.stroke();
+    }
 
-    // Draw centerline (dashed)
     if (showCenterline) {
       ctx.save();
-      ctx.setLineDash([10, 5, 2, 5]); // Dash-dot pattern for centerline
-      let centerColor = 'rgba(255, 255, 255, 0.4)';
-      if (invertColors) {
-        centerColor = 'rgba(0, 0, 0, 0.4)';
-      }
-      ctx.strokeStyle = centerColor;
+      ctx.setLineDash(this.getLineDash('dashdot'));
+      ctx.strokeStyle = invertColors ? 'rgba(0, 0, 0, 0.4)' : 'rgba(255, 255, 255, 0.4)';
       ctx.lineWidth = originalLineWidth * 0.5;
       ctx.beginPath();
       ctx.moveTo(start.x, start.y);
@@ -2599,39 +4444,2040 @@ export class ShapeRenderer extends BaseRenderer {
       ctx.restore();
     }
 
-    // Draw label
     if (showLabel) {
-      const beamLabel = labelText || presetName || `${Math.round(flangeWidth)}mm`;
-      const midX = (start.x + end.x) / 2;
-      const midY = (start.y + end.y) / 2;
-      const zoom = ctx.getTransform().a / this.dpr;
-      const fontSize = Math.max(10 / zoom, flangeWidth * 0.3);
+      this.drawBeamLabel(shape, invertColors);
+    }
 
+    ctx.lineWidth = originalLineWidth;
+  }
+
+  /**
+   * Draw an arc beam shape (curved beam using bulge factor)
+   */
+  private drawArcBeam(shape: BeamShape, invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { start, end, flangeWidth, showCenterline, showLabel, material, justification } = shape;
+    const bulge = shape.bulge!;
+
+    const originalLineWidth = ctx.lineWidth;
+    if (material === 'concrete') {
+      ctx.lineWidth = originalLineWidth * 1.5;
+    } else if (material === 'timber') {
+      ctx.lineWidth = originalLineWidth * 1.2;
+    }
+
+    const { center, radius, startAngle, endAngle, clockwise } = bulgeToArc(start, end, bulge);
+
+    // Compute inner/outer radii based on justification
+    let innerR: number;
+    let outerR: number;
+    if (justification === 'left') {
+      innerR = radius;
+      outerR = radius + flangeWidth;
+    } else if (justification === 'right') {
+      innerR = radius - flangeWidth;
+      outerR = radius;
+    } else {
+      // center
+      innerR = radius - flangeWidth / 2;
+      outerR = radius + flangeWidth / 2;
+    }
+
+    // Ensure innerR is non-negative
+    if (innerR < 0) innerR = 0;
+
+    // Helper to build the beam arc path
+    const buildArcPath = () => {
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, outerR, startAngle, endAngle, clockwise);
+      ctx.lineTo(center.x + innerR * Math.cos(endAngle), center.y + innerR * Math.sin(endAngle));
+      ctx.arc(center.x, center.y, innerR, endAngle, startAngle, !clockwise);
+      ctx.closePath();
+    };
+
+    // Draw outline
+    buildArcPath();
+    ctx.stroke();
+
+    // Draw dashed centerline arc
+    if (showCenterline) {
       ctx.save();
-      ctx.translate(midX, midY);
-      // Rotate text to be readable (avoid upside-down text)
-      let textAngle = beamAngle;
-      if (textAngle > Math.PI / 2 || textAngle < -Math.PI / 2) {
-        textAngle += Math.PI;
-      }
-      ctx.rotate(textAngle);
+      ctx.setLineDash(this.getLineDash('dashdot'));
+      ctx.strokeStyle = invertColors ? 'rgba(0, 0, 0, 0.4)' : 'rgba(255, 255, 255, 0.4)';
+      ctx.lineWidth = originalLineWidth * 0.5;
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, radius, startAngle, endAngle, clockwise);
+      ctx.stroke();
+      ctx.restore();
+    }
 
-      let textColor = shape.style.strokeColor;
-      if (invertColors && textColor === '#ffffff') {
-        textColor = '#000000';
+    if (showLabel) {
+      this.drawBeamLabel(shape, invertColors);
+    }
+
+    ctx.lineWidth = originalLineWidth;
+  }
+
+  /** Draw beam in section view (cross-section at midpoint) */
+  private drawBeamSection(shape: BeamShape, invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { start, end, profileType, profileParameters } = shape;
+
+    const midX = (start.x + end.x) / 2;
+    const midY = (start.y + end.y) / 2;
+
+    try {
+      const geometry = generateProfileGeometry(
+        profileType as ProfileType,
+        profileParameters as ParameterValues,
+        { x: midX, y: midY },
+        shape.rotation,
+        1
+      );
+
+      for (let i = 0; i < geometry.outlines.length; i++) {
+        const outline = geometry.outlines[i];
+        const closed = geometry.closed[i];
+        if (outline.length < 2) continue;
+
+        ctx.beginPath();
+        ctx.moveTo(outline[0].x, outline[0].y);
+        for (let j = 1; j < outline.length; j++) {
+          ctx.lineTo(outline[j].x, outline[j].y);
+        }
+        if (closed) ctx.closePath();
+        ctx.stroke();
       }
+    } catch {
+      // Fallback: draw a simple rectangle
+      this.drawBeamPlan(shape, invertColors);
+      return;
+    }
+
+    if (shape.showLabel) {
+      this.drawBeamLabel(shape, invertColors);
+    }
+  }
+
+  /** Draw beam in elevation view (side view showing depth) */
+  private drawBeamElevation(shape: BeamShape, invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { start, end, profileParameters, material } = shape;
+
+    // Use profile height (webHeight or height parameter) as the visible depth
+    const depth = (profileParameters.webHeight as number)
+      || (profileParameters.height as number)
+      || (profileParameters.outerDiameter as number)
+      || shape.flangeWidth;
+
+    const beamAngle = Math.atan2(end.y - start.y, end.x - start.x);
+    const halfDepth = depth / 2;
+    const perpX = Math.sin(beamAngle) * halfDepth;
+    const perpY = Math.cos(beamAngle) * halfDepth;
+
+    const originalLineWidth = ctx.lineWidth;
+    if (material === 'concrete') {
+      ctx.lineWidth = originalLineWidth * 1.5;
+    } else if (material === 'timber') {
+      ctx.lineWidth = originalLineWidth * 1.2;
+    }
+
+    // Draw elevation outline (two parallel lines for top/bottom)
+    ctx.beginPath();
+    ctx.moveTo(start.x + perpX, start.y - perpY);
+    ctx.lineTo(end.x + perpX, end.y - perpY);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(start.x - perpX, start.y + perpY);
+    ctx.lineTo(end.x - perpX, end.y + perpY);
+    ctx.stroke();
+
+    // End caps
+    ctx.beginPath();
+    ctx.moveTo(start.x + perpX, start.y - perpY);
+    ctx.lineTo(start.x - perpX, start.y + perpY);
+    ctx.moveTo(end.x + perpX, end.y - perpY);
+    ctx.lineTo(end.x - perpX, end.y + perpY);
+    ctx.stroke();
+
+    // Centerline
+    if (shape.showCenterline) {
+      ctx.save();
+      ctx.setLineDash(this.getLineDash('dashdot'));
+      ctx.strokeStyle = invertColors ? 'rgba(0, 0, 0, 0.4)' : 'rgba(255, 255, 255, 0.4)';
+      ctx.lineWidth = originalLineWidth * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    if (shape.showLabel) {
+      this.drawBeamLabel(shape, invertColors);
+    }
+
+    ctx.lineWidth = originalLineWidth;
+  }
+
+  /** Draw beam in side view (shows flange width as visible depth) */
+  private drawBeamSide(shape: BeamShape, invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { start, end, flangeWidth, material } = shape;
+
+    // Side view shows flange width as the visible depth (perpendicular to elevation which shows web height)
+    const depth = flangeWidth;
+
+    const beamAngle = Math.atan2(end.y - start.y, end.x - start.x);
+    const halfDepth = depth / 2;
+    const perpX = Math.sin(beamAngle) * halfDepth;
+    const perpY = Math.cos(beamAngle) * halfDepth;
+
+    const originalLineWidth = ctx.lineWidth;
+    if (material === 'concrete') {
+      ctx.lineWidth = originalLineWidth * 1.5;
+    } else if (material === 'timber') {
+      ctx.lineWidth = originalLineWidth * 1.2;
+    }
+
+    // Draw side outline (two parallel lines for top/bottom of flange)
+    ctx.beginPath();
+    ctx.moveTo(start.x + perpX, start.y - perpY);
+    ctx.lineTo(end.x + perpX, end.y - perpY);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(start.x - perpX, start.y + perpY);
+    ctx.lineTo(end.x - perpX, end.y + perpY);
+    ctx.stroke();
+
+    // End caps
+    ctx.beginPath();
+    ctx.moveTo(start.x + perpX, start.y - perpY);
+    ctx.lineTo(start.x - perpX, start.y + perpY);
+    ctx.moveTo(end.x + perpX, end.y - perpY);
+    ctx.lineTo(end.x - perpX, end.y + perpY);
+    ctx.stroke();
+
+    // Centerline
+    if (shape.showCenterline) {
+      ctx.save();
+      ctx.setLineDash(this.getLineDash('dashdot'));
+      ctx.strokeStyle = invertColors ? 'rgba(0, 0, 0, 0.4)' : 'rgba(255, 255, 255, 0.4)';
+      ctx.lineWidth = originalLineWidth * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    if (shape.showLabel) {
+      this.drawBeamLabel(shape, invertColors);
+    }
+
+    ctx.lineWidth = originalLineWidth;
+  }
+
+  /** Draw beam label at midpoint */
+  private drawBeamLabel(shape: BeamShape, invertColors: boolean): void {
+    const ctx = this.ctx;
+    const { start, end, flangeWidth, labelText, presetName } = shape;
+    const beamAngle = Math.atan2(end.y - start.y, end.x - start.x);
+    const halfWidth = flangeWidth / 2;
+
+    const beamLabel = labelText || presetName || `${Math.round(flangeWidth)}mm`;
+    const midX = (start.x + end.x) / 2;
+    const midY = (start.y + end.y) / 2;
+    const zoom = ctx.getTransform().a / this.dpr;
+    const fontSize = Math.max(10 / zoom, flangeWidth * 0.3);
+
+    ctx.save();
+    ctx.translate(midX, midY);
+    let textAngle = beamAngle;
+    if (textAngle > Math.PI / 2 || textAngle < -Math.PI / 2) {
+      textAngle += Math.PI;
+    }
+    ctx.rotate(textAngle);
+
+    let textColor = shape.style.strokeColor;
+    if (invertColors && textColor === '#ffffff') {
+      textColor = '#000000';
+    }
+    ctx.fillStyle = textColor;
+    ctx.font = `${fontSize}px ${CAD_DEFAULT_FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(beamLabel, 0, -halfWidth - fontSize * 0.8);
+    ctx.restore();
+  }
+
+  /**
+   * Draw a gridline shape (structural grid / stramien)
+   * Shows a dash-dot line with labeled circle(s) (bubbles) at the endpoints
+   */
+  private drawGridline(shape: GridlineShape, invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { start, end, label, bubblePosition } = shape;
+
+    // Scale bubble/text/extension so they appear at constant paper size across drawing scales
+    const scaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+    const bubbleRadius = shape.bubbleRadius * scaleFactor;
+    const fontSize = shape.fontSize * scaleFactor;
+
+    const angle = Math.atan2(end.y - start.y, end.x - start.x);
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+
+    // Save original state
+    const origLineWidth = ctx.lineWidth;
+
+    // Line extends beyond start/end (at reference scale); bubble sits at the extended tip
+    const ext = this.gridlineExtension * scaleFactor;
+    ctx.save();
+    ctx.setLineDash(this.getLineDash('dashdot'));
+    ctx.beginPath();
+    ctx.moveTo(start.x - dx * ext, start.y - dy * ext);
+    ctx.lineTo(end.x + dx * ext, end.y + dy * ext);
+    ctx.stroke();
+    ctx.restore();
+
+    // Draw bubble(s)
+    ctx.setLineDash([]);
+    ctx.lineWidth = origLineWidth;
+
+    let textColor = shape.style.strokeColor;
+    if (invertColors && textColor === '#ffffff') {
+      textColor = '#000000';
+    }
+
+    const drawBubble = (cx: number, cy: number) => {
+      // Draw circle
+      ctx.beginPath();
+      ctx.arc(cx, cy, bubbleRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Draw label text centered in circle
+      ctx.save();
       ctx.fillStyle = textColor;
       ctx.font = `${fontSize}px ${CAD_DEFAULT_FONT}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
+      ctx.fillText(label, cx, cy);
+      ctx.restore();
+    };
 
-      // Offset text above centerline
-      ctx.fillText(beamLabel, 0, -halfWidth - fontSize * 0.8);
+    if (bubblePosition === 'start' || bubblePosition === 'both') {
+      // Bubble center at extended start (extension beyond start, plus bubble radius)
+      drawBubble(start.x - dx * (ext + bubbleRadius), start.y - dy * (ext + bubbleRadius));
+    }
+    if (bubblePosition === 'end' || bubblePosition === 'both') {
+      // Bubble center at extended end (extension beyond end, plus bubble radius)
+      drawBubble(end.x + dx * (ext + bubbleRadius), end.y + dy * (ext + bubbleRadius));
+    }
+  }
+
+  /**
+   * Draw a level shape (horizontal reference plane: dashed line + right-side triangle marker)
+   * Only shows the peil marker on the right (end) side with optional description text below.
+   */
+  private drawLevel(shape: LevelShape, invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { start, end, label } = shape;
+
+    // Scale marker/text so they appear at constant paper size across drawing scales
+    const scaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+    const bubbleRadius = shape.bubbleRadius * scaleFactor;
+    const fontSize = shape.fontSize * scaleFactor;
+
+    const angle = Math.atan2(end.y - start.y, end.x - start.x);
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+
+    const origLineWidth = ctx.lineWidth;
+
+    // Draw dashed line from start to end
+    ctx.save();
+    ctx.setLineDash(this.getLineDash('dashed'));
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+    ctx.restore();
+
+    // Draw right-side (end) triangle marker only
+    ctx.setLineDash([]);
+    ctx.lineWidth = origLineWidth;
+
+    let textColor = shape.style.strokeColor;
+    if (invertColors && textColor === '#ffffff') {
+      textColor = '#000000';
+    }
+
+    // Triangle/arrow marker at the end of the line
+    const sz = bubbleRadius * 0.7;
+    const tipX = end.x;
+    const tipY = end.y;
+    // Perpendicular direction for triangle width
+    const perpX = -dy;
+    const perpY = dx;
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY); // Arrow tip touches the line end
+    ctx.lineTo(tipX + dx * sz + perpX * sz * 0.4, tipY + dy * sz + perpY * sz * 0.4);
+    ctx.lineTo(tipX + dx * sz - perpX * sz * 0.4, tipY + dy * sz - perpY * sz * 0.4);
+    ctx.closePath();
+    ctx.fillStyle = textColor;
+    ctx.fill();
+    ctx.stroke();
+
+    // Peil value text to the right of the marker
+    const textX = end.x + dx * (sz * 1.5 + bubbleRadius * 0.3);
+    const textY = end.y + dy * (sz * 1.5 + bubbleRadius * 0.3);
+
+    ctx.save();
+    ctx.fillStyle = textColor;
+    ctx.font = `${fontSize}px ${CAD_DEFAULT_FONT}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+
+    // Build display text: peil label + NAP elevation when datum is set
+    let displayText = label;
+    if (this.seaLevelDatum !== 0) {
+      // NAP elevation = seaLevelDatum (m) + peil (mm converted to m)
+      const napElevation = this.seaLevelDatum + (shape.elevation / 1000);
+      const napSign = napElevation >= 0 ? '+' : '';
+      const napStr = napElevation.toFixed(napElevation === Math.round(napElevation) ? 1 : 2);
+      displayText = `${label}  (NAP ${napSign}${napStr} m)`;
+    }
+    ctx.fillText(displayText, textX, textY);
+
+    // Optional description text below the peil value
+    if (shape.description) {
+      const descFontSize = fontSize * 0.8;
+      ctx.font = `${descFontSize}px ${CAD_DEFAULT_FONT}`;
+      ctx.textBaseline = 'top';
+      ctx.fillText(shape.description, textX, textY + fontSize * 0.1);
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Draw a pile shape (foundation pile: circle + cross + label)
+   */
+  private drawPile(shape: PileShape, invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { position, diameter, label, fontSize, showCross, pileSymbol } = shape;
+    const radius = diameter / 2;
+
+    // Draw based on pile symbol type (if assigned from pile plan) or default
+    if (pileSymbol && pileSymbol !== 'open-circle') {
+      this.drawPileSymbol(position.x, position.y, radius, pileSymbol, shape.style.strokeColor);
+    } else {
+      // Default: draw circle
+      ctx.beginPath();
+      ctx.arc(position.x, position.y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Draw cross (X) inside circle (only for default mode without pile symbol)
+    if (showCross && !pileSymbol) {
+      const crossR = radius * 0.707; // cos(45°)
+      ctx.beginPath();
+      ctx.moveTo(position.x - crossR, position.y - crossR);
+      ctx.lineTo(position.x + crossR, position.y + crossR);
+      ctx.moveTo(position.x + crossR, position.y - crossR);
+      ctx.lineTo(position.x - crossR, position.y + crossR);
+      ctx.stroke();
+    }
+
+    // Draw label below pile
+    if (label) {
+      let textColor = shape.style.strokeColor;
+      if (invertColors && textColor === '#ffffff') {
+        textColor = '#000000';
+      }
+      ctx.save();
+      ctx.fillStyle = textColor;
+      ctx.font = `${fontSize}px ${CAD_DEFAULT_FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(label, position.x, position.y + radius + fontSize * 0.3);
+      ctx.restore();
+    }
+  }
+
+  /**
+   * Draw a pile plan symbol at a given position
+   */
+  private drawPileSymbol(cx: number, cy: number, radius: number, symbolType: string, color: string): void {
+    const ctx = this.ctx;
+    switch (symbolType) {
+      case 'filled-circle':
+        ctx.save();
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+        break;
+      case 'open-circle':
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+      case 'cross': {
+        const r = radius * 0.707;
+        ctx.beginPath();
+        ctx.moveTo(cx - r, cy - r);
+        ctx.lineTo(cx + r, cy + r);
+        ctx.moveTo(cx + r, cy - r);
+        ctx.lineTo(cx - r, cy + r);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+      }
+      case 'triangle': {
+        const h = radius * 1.5;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - h * 0.6);
+        ctx.lineTo(cx - h * 0.5, cy + h * 0.4);
+        ctx.lineTo(cx + h * 0.5, cy + h * 0.4);
+        ctx.closePath();
+        ctx.stroke();
+        break;
+      }
+      case 'diamond': {
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - radius);
+        ctx.lineTo(cx + radius, cy);
+        ctx.lineTo(cx, cy + radius);
+        ctx.lineTo(cx - radius, cy);
+        ctx.closePath();
+        ctx.stroke();
+        break;
+      }
+      case 'square': {
+        const half = radius * 0.8;
+        ctx.beginPath();
+        ctx.rect(cx - half, cy - half, half * 2, half * 2);
+        ctx.stroke();
+        break;
+      }
+      case 'plus': {
+        ctx.beginPath();
+        ctx.moveTo(cx - radius, cy);
+        ctx.lineTo(cx + radius, cy);
+        ctx.moveTo(cx, cy - radius);
+        ctx.lineTo(cx, cy + radius);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+      }
+      case 'star': {
+        const outer = radius;
+        const inner = radius * 0.4;
+        ctx.beginPath();
+        for (let i = 0; i < 5; i++) {
+          const outerAngle = (Math.PI / 2) + (i * 2 * Math.PI / 5);
+          const innerAngle = outerAngle + Math.PI / 5;
+          if (i === 0) {
+            ctx.moveTo(cx + outer * Math.cos(outerAngle), cy - outer * Math.sin(outerAngle));
+          } else {
+            ctx.lineTo(cx + outer * Math.cos(outerAngle), cy - outer * Math.sin(outerAngle));
+          }
+          ctx.lineTo(cx + inner * Math.cos(innerAngle), cy - inner * Math.sin(innerAngle));
+        }
+        ctx.closePath();
+        ctx.stroke();
+        break;
+      }
+      default:
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+    }
+  }
+
+  /**
+   * Draw a CPT (Cone Penetration Test) marker shape
+   */
+  private drawCPT(shape: CPTShape, invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { position, name, fontSize, markerSize } = shape;
+    const sf = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+    const ms = (markerSize || 300) * sf;
+
+    // Draw inverted triangle marker (point down, like a cone tip)
+    ctx.beginPath();
+    ctx.moveTo(position.x, position.y + ms * 0.6);
+    ctx.lineTo(position.x - ms * 0.5, position.y - ms * 0.4);
+    ctx.lineTo(position.x + ms * 0.5, position.y - ms * 0.4);
+    ctx.closePath();
+    ctx.stroke();
+
+    // Fill with semi-transparent orange
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 165, 0, 0.3)';
+    ctx.fill();
+    ctx.restore();
+
+    // Draw "CPT" text inside the triangle
+    const innerFontSize = ms * 0.25;
+    ctx.save();
+    let textColor = shape.style.strokeColor;
+    if (invertColors && textColor === '#ffffff') {
+      textColor = '#000000';
+    }
+    ctx.fillStyle = textColor;
+    ctx.font = `bold ${innerFontSize}px ${CAD_DEFAULT_FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('CPT', position.x, position.y);
+    ctx.restore();
+
+    // Draw name below marker
+    if (name) {
+      const labelFontSize = fontSize * sf;
+      ctx.save();
+      ctx.fillStyle = textColor;
+      ctx.font = `${labelFontSize}px ${CAD_DEFAULT_FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(name, position.x, position.y + ms * 0.6 + labelFontSize * 0.3);
+      ctx.restore();
+    }
+  }
+
+  /**
+   * Draw a foundation zone (colored polygon region)
+   */
+  private drawFoundationZone(shape: FoundationZoneShape, _invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { contourPoints, fillColor, fillOpacity } = shape;
+    if (contourPoints.length < 3) return;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(contourPoints[0].x, contourPoints[0].y);
+    for (let i = 1; i < contourPoints.length; i++) {
+      ctx.lineTo(contourPoints[i].x, contourPoints[i].y);
+    }
+    ctx.closePath();
+
+    // Fill with zone color
+    const opacity = fillOpacity ?? 0.15;
+    const color = fillColor || '#4488ff';
+    ctx.fillStyle = color;
+    ctx.globalAlpha = opacity;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Stroke boundary dashed
+    ctx.setLineDash([50, 30]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  /**
+   * Draw a spot elevation shape (cross/circle marker with elevation label)
+   */
+  private drawSpotElevation(shape: SpotElevationShape, invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { position, elevation, labelPosition, showLeader, fontSize: rawFontSize, markerSize: rawMarkerSize } = shape;
+
+    // Scale marker/text for consistent paper size across drawing scales
+    const scaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+    const markerSize = rawMarkerSize * scaleFactor;
+    const fontSize = rawFontSize * scaleFactor;
+
+    let textColor = shape.style.strokeColor;
+    if (invertColors && textColor === '#ffffff') {
+      textColor = '#000000';
+    }
+
+    // Draw cross marker at position
+    ctx.beginPath();
+    ctx.moveTo(position.x - markerSize, position.y);
+    ctx.lineTo(position.x + markerSize, position.y);
+    ctx.moveTo(position.x, position.y - markerSize);
+    ctx.lineTo(position.x, position.y + markerSize);
+    ctx.stroke();
+
+    // Draw circle around cross
+    ctx.beginPath();
+    ctx.arc(position.x, position.y, markerSize * 0.8, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Draw leader line from marker to label
+    if (showLeader) {
+      ctx.beginPath();
+      ctx.moveTo(position.x, position.y);
+      ctx.lineTo(labelPosition.x, labelPosition.y);
+      ctx.stroke();
+    }
+
+    // Draw elevation text at label position
+    const label = elevation >= 0 ? `+${(elevation / 1000).toFixed(3)}` : `${(elevation / 1000).toFixed(3)}`;
+    ctx.save();
+    ctx.fillStyle = textColor;
+    ctx.font = `${fontSize}px ${CAD_DEFAULT_FONT}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(label, labelPosition.x + markerSize * 0.3, labelPosition.y);
+    ctx.restore();
+  }
+
+  /**
+   * Compute the intersection of two infinite lines, each defined by a point and direction.
+   * Returns null if lines are parallel.
+   */
+  private static lineIntersection(
+    p1: { x: number; y: number }, d1: { x: number; y: number },
+    p2: { x: number; y: number }, d2: { x: number; y: number }
+  ): { x: number; y: number } | null {
+    const cross = d1.x * d2.y - d1.y * d2.x;
+    if (Math.abs(cross) < 1e-10) return null; // parallel
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const t = (dx * d2.y - dy * d2.x) / cross;
+    return { x: p1.x + t * d1.x, y: p1.y + t * d1.y };
+  }
+
+  /**
+   * Compute the four polygon corners of a wall, taking miter caps into account.
+   *
+   * Standard (butt) corners are perpendicular to the wall direction.
+   * Miter corners are computed by intersecting this wall's outline edges with
+   * the other wall's outline edges, producing an angled cut at the join.
+   *
+   * Corner order: [startLeft, endLeft, endRight, startRight]
+   * ("left" = the +perpendicular side, "right" = the -perpendicular side)
+   */
+  private computeWallCorners(shape: WallShape): { x: number; y: number }[] {
+    const { start, end, thickness, startCap, endCap, startMiterAngle, endMiterAngle, justification } = shape;
+    const wallAngle = Math.atan2(end.y - start.y, end.x - start.x);
+    const halfThick = thickness / 2;
+
+    // Determine how much thickness goes to each side based on justification.
+    // "left" means ALL thickness extends to the left side when looking from start toward end.
+    // "right" means ALL thickness extends to the right side.
+    // "center" (default) means half on each side.
+    let leftThick: number;
+    let rightThick: number;
+    if (justification === 'left') {
+      leftThick = thickness;
+      rightThick = 0;
+    } else if (justification === 'right') {
+      leftThick = 0;
+      rightThick = thickness;
+    } else {
+      // center (default)
+      leftThick = halfThick;
+      rightThick = halfThick;
+    }
+
+    // Perpendicular unit vector direction (left side = +perp, right side = -perp)
+    const perpUnitX = Math.sin(wallAngle);
+    const perpUnitY = Math.cos(wallAngle);
+
+    // Wall direction unit vector
+    const dirX = Math.cos(wallAngle);
+    const dirY = Math.sin(wallAngle);
+
+    // Default butt-cut corners using asymmetric offsets
+    let startLeft  = { x: start.x + perpUnitX * leftThick, y: start.y - perpUnitY * leftThick };
+    let startRight = { x: start.x - perpUnitX * rightThick, y: start.y + perpUnitY * rightThick };
+    let endLeft    = { x: end.x + perpUnitX * leftThick,   y: end.y - perpUnitY * leftThick };
+    let endRight   = { x: end.x - perpUnitX * rightThick,   y: end.y + perpUnitY * rightThick };
+
+    // --- Miter at start ---
+    if (startCap === 'miter' && startMiterAngle !== undefined) {
+      // The other wall's direction (away from intersection, i.e. from intersection outward)
+      const otherDirX = Math.cos(startMiterAngle);
+      const otherDirY = Math.sin(startMiterAngle);
+      // Other wall's perpendicular offset (use halfThick as we don't know the other wall's justification)
+      const otherPerpX = Math.sin(startMiterAngle) * halfThick;
+      const otherPerpY = Math.cos(startMiterAngle) * halfThick;
+
+      // The intersection point is `start` (the centerline already meets there).
+      const otherLeftBase = { x: start.x + otherPerpX, y: start.y - otherPerpY };
+      const otherRightBase = { x: start.x - otherPerpX, y: start.y + otherPerpY };
+
+      const wallDir = { x: dirX, y: dirY };
+      const otherDir = { x: otherDirX, y: otherDirY };
+
+      // Intersect our left edge with both of the other wall's edges; pick the nearest.
+      const leftWithOtherLeft = ShapeRenderer.lineIntersection(startLeft, wallDir, otherLeftBase, otherDir);
+      const leftWithOtherRight = ShapeRenderer.lineIntersection(startLeft, wallDir, otherRightBase, otherDir);
+
+      if (leftWithOtherLeft && leftWithOtherRight) {
+        const dLL = Math.hypot(leftWithOtherLeft.x - start.x, leftWithOtherLeft.y - start.y);
+        const dLR = Math.hypot(leftWithOtherRight.x - start.x, leftWithOtherRight.y - start.y);
+        startLeft = dLL < dLR ? leftWithOtherLeft : leftWithOtherRight;
+      } else if (leftWithOtherLeft) {
+        startLeft = leftWithOtherLeft;
+      } else if (leftWithOtherRight) {
+        startLeft = leftWithOtherRight;
+      }
+
+      // Intersect our right edge with both of the other wall's edges; pick the nearest.
+      const rightWithOtherLeft = ShapeRenderer.lineIntersection(startRight, wallDir, otherLeftBase, otherDir);
+      const rightWithOtherRight = ShapeRenderer.lineIntersection(startRight, wallDir, otherRightBase, otherDir);
+
+      if (rightWithOtherLeft && rightWithOtherRight) {
+        const dRL = Math.hypot(rightWithOtherLeft.x - start.x, rightWithOtherLeft.y - start.y);
+        const dRR = Math.hypot(rightWithOtherRight.x - start.x, rightWithOtherRight.y - start.y);
+        startRight = dRL < dRR ? rightWithOtherLeft : rightWithOtherRight;
+      } else if (rightWithOtherLeft) {
+        startRight = rightWithOtherLeft;
+      } else if (rightWithOtherRight) {
+        startRight = rightWithOtherRight;
+      }
+    }
+
+    // --- Miter at end ---
+    if (endCap === 'miter' && endMiterAngle !== undefined) {
+      const otherDirX = Math.cos(endMiterAngle);
+      const otherDirY = Math.sin(endMiterAngle);
+      const otherPerpX = Math.sin(endMiterAngle) * halfThick;
+      const otherPerpY = Math.cos(endMiterAngle) * halfThick;
+
+      const otherLeftBase = { x: end.x + otherPerpX, y: end.y - otherPerpY };
+      const otherRightBase = { x: end.x - otherPerpX, y: end.y + otherPerpY };
+
+      const wallDir = { x: dirX, y: dirY };
+      const otherDir = { x: otherDirX, y: otherDirY };
+
+      // Our left edge at end
+      const leftWithOtherLeft = ShapeRenderer.lineIntersection(endLeft, wallDir, otherLeftBase, otherDir);
+      const leftWithOtherRight = ShapeRenderer.lineIntersection(endLeft, wallDir, otherRightBase, otherDir);
+
+      if (leftWithOtherLeft && leftWithOtherRight) {
+        const dLL = Math.hypot(leftWithOtherLeft.x - end.x, leftWithOtherLeft.y - end.y);
+        const dLR = Math.hypot(leftWithOtherRight.x - end.x, leftWithOtherRight.y - end.y);
+        endLeft = dLL < dLR ? leftWithOtherLeft : leftWithOtherRight;
+      } else if (leftWithOtherLeft) {
+        endLeft = leftWithOtherLeft;
+      } else if (leftWithOtherRight) {
+        endLeft = leftWithOtherRight;
+      }
+
+      // Our right edge at end
+      const rightWithOtherLeft = ShapeRenderer.lineIntersection(endRight, wallDir, otherLeftBase, otherDir);
+      const rightWithOtherRight = ShapeRenderer.lineIntersection(endRight, wallDir, otherRightBase, otherDir);
+
+      if (rightWithOtherLeft && rightWithOtherRight) {
+        const dRL = Math.hypot(rightWithOtherLeft.x - end.x, rightWithOtherLeft.y - end.y);
+        const dRR = Math.hypot(rightWithOtherRight.x - end.x, rightWithOtherRight.y - end.y);
+        endRight = dRL < dRR ? rightWithOtherLeft : rightWithOtherRight;
+      } else if (rightWithOtherLeft) {
+        endRight = rightWithOtherLeft;
+      } else if (rightWithOtherRight) {
+        endRight = rightWithOtherRight;
+      }
+    }
+
+    return [startLeft, endLeft, endRight, startRight];
+  }
+
+  /**
+   * Compute the four polygon corners of a beam in plan view, taking miter caps into account.
+   *
+   * Uses the same miter algorithm as computeWallCorners but with flangeWidth as thickness.
+   *
+   * Corner order: [startLeft, endLeft, endRight, startRight]
+   */
+  private computeBeamCorners(shape: BeamShape): { x: number; y: number }[] {
+    const { start, end, flangeWidth, startMiterAngle, endMiterAngle } = shape;
+    const startCap = shape.startCap || 'butt';
+    const endCap = shape.endCap || 'butt';
+    const beamAngle = Math.atan2(end.y - start.y, end.x - start.x);
+    const halfWidth = flangeWidth / 2;
+
+    // Perpendicular offset (left side = +perp, right side = -perp)
+    const perpX = Math.sin(beamAngle) * halfWidth;
+    const perpY = Math.cos(beamAngle) * halfWidth;
+
+    // Beam direction unit vector
+    const dirX = Math.cos(beamAngle);
+    const dirY = Math.sin(beamAngle);
+
+    // Default butt-cut corners
+    let startLeft  = { x: start.x + perpX, y: start.y - perpY };
+    let startRight = { x: start.x - perpX, y: start.y + perpY };
+    let endLeft    = { x: end.x + perpX,   y: end.y - perpY };
+    let endRight   = { x: end.x - perpX,   y: end.y + perpY };
+
+    // --- Miter at start ---
+    // Simple cut-line approach: a single line through `start` at `startMiterAngle`
+    // is intersected with the beam's left and right edge lines.
+    if (startCap === 'miter' && startMiterAngle !== undefined) {
+      const cutDir = { x: Math.cos(startMiterAngle), y: Math.sin(startMiterAngle) };
+      const beamDir = { x: dirX, y: dirY };
+
+      const newStartLeft = ShapeRenderer.lineIntersection(startLeft, beamDir, start, cutDir);
+      const newStartRight = ShapeRenderer.lineIntersection(startRight, beamDir, start, cutDir);
+
+      if (newStartLeft) startLeft = newStartLeft;
+      if (newStartRight) startRight = newStartRight;
+    }
+
+    // --- Miter at end ---
+    // Simple cut-line approach: a single line through `end` at `endMiterAngle`
+    // is intersected with the beam's left and right edge lines.
+    if (endCap === 'miter' && endMiterAngle !== undefined) {
+      const cutDir = { x: Math.cos(endMiterAngle), y: Math.sin(endMiterAngle) };
+      const beamDir = { x: dirX, y: dirY };
+
+      const newEndLeft = ShapeRenderer.lineIntersection(endLeft, beamDir, end, cutDir);
+      const newEndRight = ShapeRenderer.lineIntersection(endRight, beamDir, end, cutDir);
+
+      if (newEndLeft) endLeft = newEndLeft;
+      if (newEndRight) endRight = newEndRight;
+    }
+
+    return [startLeft, endLeft, endRight, startRight];
+  }
+
+  /**
+   * Draw a wall shape (rectangular plan view + optional centerline)
+   */
+  private drawWall(shape: WallShape, invertColors: boolean = false): void {
+    // Delegate to arc renderer when the wall has a non-zero bulge
+    if (shape.bulge && Math.abs(shape.bulge) > 0.0001) {
+      this.drawArcWall(shape, invertColors);
+      return;
+    }
+
+    const ctx = this.ctx;
+    const { start, end, showCenterline } = shape;
+
+    const wallAngle = Math.atan2(end.y - start.y, end.x - start.x);
+
+    // Compute wall polygon corners (handles miter caps)
+    const corners = this.computeWallCorners(shape);
+
+    // Draw wall outline edges selectively: skip mitered edges to avoid visible
+    // line at the intersection where two mitered walls meet.
+    // Corner order: [startLeft(0), endLeft(1), endRight(2), startRight(3)]
+    // Edges: 0->1 (left side), 1->2 (end cap), 2->3 (right side), 3->0 (start cap)
+    const hasStartMiter = shape.startCap === 'miter';
+    const hasEndMiter = shape.endCap === 'miter';
+
+    // Left side edge: startLeft -> endLeft (always drawn)
+    ctx.beginPath();
+    ctx.moveTo(corners[0].x, corners[0].y);
+    ctx.lineTo(corners[1].x, corners[1].y);
+    ctx.stroke();
+
+    // End cap edge: endLeft -> endRight (skip if end is mitered)
+    if (!hasEndMiter) {
+      ctx.beginPath();
+      ctx.moveTo(corners[1].x, corners[1].y);
+      ctx.lineTo(corners[2].x, corners[2].y);
+      ctx.stroke();
+    }
+
+    // Right side edge: endRight -> startRight (always drawn)
+    ctx.beginPath();
+    ctx.moveTo(corners[2].x, corners[2].y);
+    ctx.lineTo(corners[3].x, corners[3].y);
+    ctx.stroke();
+
+    // Start cap edge: startRight -> startLeft (skip if start is mitered)
+    if (!hasStartMiter) {
+      ctx.beginPath();
+      ctx.moveTo(corners[3].x, corners[3].y);
+      ctx.lineTo(corners[0].x, corners[0].y);
+      ctx.stroke();
+    }
+
+    // Resolve hatch settings from Drawing Standards materialHatchSettings via wall type's material.
+    // Priority: material-name-specific setting > category default > built-in default
+    let effectiveHatchType: string = shape.hatchType || 'none';
+    let effectiveHatchAngle: number = shape.hatchAngle || 45;
+    let effectiveHatchSpacing: number = shape.hatchSpacing || 50;
+    let effectiveHatchColor: string | undefined = shape.hatchColor;
+    let effectivePatternId: string | undefined;
+    let effectiveBackgroundColor: string | undefined;
+
+    if (shape.wallTypeId) {
+      const wallType = this.wallTypes.find(wt => wt.id === shape.wallTypeId);
+      if (wallType) {
+        // Check for material-name-specific override first, then fall back to category
+        const matSetting = this.materialHatchSettings[wallType.name]
+          || this.materialHatchSettings[wallType.material]
+          || DEFAULT_MATERIAL_HATCH_SETTINGS[wallType.material];
+        if (matSetting) {
+          effectiveHatchType = matSetting.hatchType;
+          effectiveHatchAngle = matSetting.hatchAngle;
+          effectiveHatchSpacing = matSetting.hatchSpacing;
+          effectiveHatchColor = matSetting.hatchColor;
+          effectivePatternId = matSetting.hatchPatternId;
+          effectiveBackgroundColor = matSetting.backgroundColor;
+        }
+      }
+    }
+
+    // Hatch fill
+    if ((effectiveHatchType && effectiveHatchType !== 'none') || effectivePatternId) {
+      const strokeWidth = ctx.lineWidth;
+      ctx.save();
+      // Clip to wall polygon
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      ctx.lineTo(corners[1].x, corners[1].y);
+      ctx.lineTo(corners[2].x, corners[2].y);
+      ctx.lineTo(corners[3].x, corners[3].y);
+      ctx.closePath();
+      ctx.clip();
+
+      // Fill solid background color first (under hatch lines)
+      if (effectiveBackgroundColor) {
+        ctx.fillStyle = effectiveBackgroundColor;
+        ctx.beginPath();
+        ctx.moveTo(corners[0].x, corners[0].y);
+        ctx.lineTo(corners[1].x, corners[1].y);
+        ctx.lineTo(corners[2].x, corners[2].y);
+        ctx.lineTo(corners[3].x, corners[3].y);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      const hatchColor = effectiveHatchColor || ctx.strokeStyle;
+      const spacing = effectiveHatchSpacing || 50;
+      ctx.strokeStyle = hatchColor as string;
+      ctx.lineWidth = strokeWidth * 0.5;
+      ctx.setLineDash([]);
+
+      const minX = Math.min(...corners.map(c => c.x));
+      const minY = Math.min(...corners.map(c => c.y));
+      const maxX = Math.max(...corners.map(c => c.x));
+      const maxY = Math.max(...corners.map(c => c.y));
+
+      // Make hatch perpendicular to wall direction
+      const wallAngleDeg = wallAngle * 180 / Math.PI;
+
+      // If we have a custom pattern ID, render its line families directly
+      const customPattern = effectivePatternId ? this.getPatternById(effectivePatternId) : undefined;
+      if (customPattern && customPattern.lineFamilies.length > 0) {
+        // Special case: insulation patterns get zigzag rendering (NEN standard)
+        if (effectivePatternId === 'nen47-isolatie' || effectivePatternId === 'insulation') {
+          const patternScale = spacing / 10;
+          this.drawInsulationZigzag(
+            minX, minY, maxX, maxY,
+            patternScale,
+            wallAngleDeg,
+            hatchColor as string,
+            strokeWidth,
+            shape.thickness
+          );
+        } else {
+          // Custom pattern with line families: render with drawCustomPatternLines
+          const patternScale = spacing / 10; // Scale from pattern units to world units
+          this.drawCustomPatternLines(
+            customPattern.lineFamilies,
+            minX, minY, maxX, maxY,
+            patternScale,
+            wallAngleDeg, // Rotate pattern to align with wall
+            hatchColor as string,
+            strokeWidth
+          );
+        }
+      } else if (customPattern && customPattern.lineFamilies.length === 0) {
+        // Solid fill pattern (e.g., NEN47-5 concrete, NEN47-18 steel)
+        ctx.fillStyle = hatchColor as string;
+        ctx.beginPath();
+        ctx.moveTo(corners[0].x, corners[0].y);
+        ctx.lineTo(corners[1].x, corners[1].y);
+        ctx.lineTo(corners[2].x, corners[2].y);
+        ctx.lineTo(corners[3].x, corners[3].y);
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        // Fallback to basic hatch types
+        const baseAngle = (effectiveHatchAngle || 45) + wallAngleDeg;
+
+        if (effectiveHatchType === 'solid') {
+          ctx.fillStyle = hatchColor as string;
+          ctx.beginPath();
+          ctx.moveTo(corners[0].x, corners[0].y);
+          ctx.lineTo(corners[1].x, corners[1].y);
+          ctx.lineTo(corners[2].x, corners[2].y);
+          ctx.lineTo(corners[3].x, corners[3].y);
+          ctx.closePath();
+          ctx.fill();
+        } else if (effectiveHatchType === 'diagonal') {
+          this.drawLineFamilySimple(baseAngle, spacing, minX, minY, maxX, maxY);
+        } else if (effectiveHatchType === 'crosshatch') {
+          this.drawLineFamilySimple(baseAngle, spacing, minX, minY, maxX, maxY);
+          this.drawLineFamilySimple(baseAngle + 90, spacing, minX, minY, maxX, maxY);
+        } else if (effectiveHatchType === 'horizontal') {
+          this.drawLineFamilySimple(wallAngleDeg + 90, spacing, minX, minY, maxX, maxY);
+        }
+      }
+
       ctx.restore();
     }
 
-    // Restore original line width
-    ctx.lineWidth = originalLineWidth;
+    // Draw centerline (dashed)
+    if (showCenterline) {
+      const origLineWidth = ctx.lineWidth;
+      ctx.save();
+      ctx.setLineDash(this.getLineDash('dashdot'));
+      let centerColor = 'rgba(255, 255, 255, 0.4)';
+      if (invertColors) {
+        centerColor = 'rgba(0, 0, 0, 0.4)';
+      }
+      ctx.strokeStyle = centerColor;
+      ctx.lineWidth = origLineWidth * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  /**
+   * Draw an arc wall shape (curved wall using bulge factor)
+   */
+  private drawArcWall(shape: WallShape, invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { start, end, thickness, showCenterline, justification } = shape;
+    const bulge = shape.bulge!;
+
+    const { center, radius, startAngle, endAngle, clockwise } = bulgeToArc(start, end, bulge);
+
+    // Compute inner/outer radii based on justification
+    let innerR: number;
+    let outerR: number;
+    if (justification === 'left') {
+      innerR = radius;
+      outerR = radius + thickness;
+    } else if (justification === 'right') {
+      innerR = radius - thickness;
+      outerR = radius;
+    } else {
+      // center
+      innerR = radius - thickness / 2;
+      outerR = radius + thickness / 2;
+    }
+
+    // Ensure innerR is non-negative
+    if (innerR < 0) innerR = 0;
+
+    const hasStartMiter = shape.startCap === 'miter';
+    const hasEndMiter = shape.endCap === 'miter';
+
+    // Helper to build the full closed wall arc path (used for hatch clipping)
+    const buildArcPath = () => {
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, outerR, startAngle, endAngle, clockwise);
+      // End cap (radial line from outer to inner at endAngle)
+      ctx.lineTo(center.x + innerR * Math.cos(endAngle), center.y + innerR * Math.sin(endAngle));
+      ctx.arc(center.x, center.y, innerR, endAngle, startAngle, !clockwise);
+      // Start cap (radial line from inner to outer at startAngle) - closePath handles this
+      ctx.closePath();
+    };
+
+    // Draw outline edges selectively: skip mitered end caps to avoid visible
+    // line at the intersection where a mitered arc wall meets another wall.
+    // Outer arc
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, outerR, startAngle, endAngle, clockwise);
+    ctx.stroke();
+
+    // End cap (radial line from outer to inner at endAngle) - skip if mitered
+    if (!hasEndMiter) {
+      ctx.beginPath();
+      ctx.moveTo(center.x + outerR * Math.cos(endAngle), center.y + outerR * Math.sin(endAngle));
+      ctx.lineTo(center.x + innerR * Math.cos(endAngle), center.y + innerR * Math.sin(endAngle));
+      ctx.stroke();
+    }
+
+    // Inner arc (reverse direction)
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, innerR, endAngle, startAngle, !clockwise);
+    ctx.stroke();
+
+    // Start cap (radial line from inner to outer at startAngle) - skip if mitered
+    if (!hasStartMiter) {
+      ctx.beginPath();
+      ctx.moveTo(center.x + innerR * Math.cos(startAngle), center.y + innerR * Math.sin(startAngle));
+      ctx.lineTo(center.x + outerR * Math.cos(startAngle), center.y + outerR * Math.sin(startAngle));
+      ctx.stroke();
+    }
+
+    // Resolve hatch settings from Drawing Standards materialHatchSettings via wall type's material
+    let effectiveHatchType: string = shape.hatchType || 'none';
+    let effectiveHatchSpacing: number = shape.hatchSpacing || 50;
+    let effectiveHatchColor: string | undefined = shape.hatchColor;
+    let effectiveBackgroundColor: string | undefined;
+    let effectivePatternId: string | undefined;
+
+    if (shape.wallTypeId) {
+      const wallType = this.wallTypes.find(wt => wt.id === shape.wallTypeId);
+      if (wallType) {
+        const matSetting = this.materialHatchSettings[wallType.name]
+          || this.materialHatchSettings[wallType.material]
+          || DEFAULT_MATERIAL_HATCH_SETTINGS[wallType.material];
+        if (matSetting) {
+          effectiveHatchType = matSetting.hatchType;
+          effectiveHatchSpacing = matSetting.hatchSpacing;
+          effectiveHatchColor = matSetting.hatchColor;
+          effectivePatternId = matSetting.hatchPatternId;
+          effectiveBackgroundColor = matSetting.backgroundColor;
+        }
+      }
+    }
+
+    // Hatch fill
+    if ((effectiveHatchType && effectiveHatchType !== 'none') || effectivePatternId) {
+      const strokeWidth = ctx.lineWidth;
+      ctx.save();
+
+      // Clip to wall arc path
+      buildArcPath();
+      ctx.clip();
+
+      // Fill solid background color first (under hatch lines)
+      if (effectiveBackgroundColor) {
+        ctx.fillStyle = effectiveBackgroundColor;
+        buildArcPath();
+        ctx.fill();
+      }
+
+      const hatchColor = effectiveHatchColor || ctx.strokeStyle;
+      const spacing = effectiveHatchSpacing || 50;
+      ctx.strokeStyle = hatchColor as string;
+      ctx.lineWidth = strokeWidth * 0.5;
+      ctx.setLineDash([]);
+
+      // Check for custom pattern
+      const customPattern = effectivePatternId ? this.getPatternById(effectivePatternId) : undefined;
+      if (customPattern && customPattern.lineFamilies.length > 0) {
+        // For custom patterns on arc walls, use bounding box approach
+        const bboxPad = outerR;
+        const minX = center.x - bboxPad;
+        const minY = center.y - bboxPad;
+        const maxX = center.x + bboxPad;
+        const maxY = center.y + bboxPad;
+        const patternScale = spacing / 10;
+        // Special case: insulation patterns get zigzag rendering (NEN standard)
+        if (effectivePatternId === 'nen47-isolatie' || effectivePatternId === 'insulation') {
+          this.drawInsulationZigzagArc(
+            center, innerR, outerR,
+            startAngle, endAngle, clockwise,
+            hatchColor as string,
+            strokeWidth
+          );
+        } else {
+          this.drawCustomPatternLines(
+            customPattern.lineFamilies,
+            minX, minY, maxX, maxY,
+            patternScale,
+            0,
+            hatchColor as string,
+            strokeWidth
+          );
+        }
+      } else if (customPattern && customPattern.lineFamilies.length === 0) {
+        // Solid fill pattern
+        ctx.fillStyle = hatchColor as string;
+        buildArcPath();
+        ctx.fill();
+      } else if (effectiveHatchType === 'solid') {
+        ctx.fillStyle = hatchColor as string;
+        buildArcPath();
+        ctx.fill();
+      } else {
+        // Draw radial hatch lines for arc walls
+        const angularStep = spacing / radius;
+        // Determine angular sweep direction
+        const step = clockwise ? -angularStep : angularStep;
+        const isInRange = (angle: number) => {
+          if (!clockwise) {
+            // CCW: sweep from startAngle to endAngle
+            let normalizedAngle = angle - startAngle;
+            let normalizedEnd = endAngle - startAngle;
+            if (normalizedEnd < 0) normalizedEnd += Math.PI * 2;
+            if (normalizedAngle < 0) normalizedAngle += Math.PI * 2;
+            return normalizedAngle <= normalizedEnd + 0.0001;
+          } else {
+            // CW: sweep from startAngle to endAngle (decreasing)
+            let normalizedAngle = startAngle - angle;
+            let normalizedEnd = startAngle - endAngle;
+            if (normalizedEnd < 0) normalizedEnd += Math.PI * 2;
+            if (normalizedAngle < 0) normalizedAngle += Math.PI * 2;
+            return normalizedAngle <= normalizedEnd + 0.0001;
+          }
+        };
+
+        ctx.beginPath();
+        let a = startAngle + step; // skip the first line (it's the start cap)
+        for (let i = 0; i < 10000; i++) {
+          if (!isInRange(a)) break;
+          ctx.moveTo(center.x + innerR * Math.cos(a), center.y + innerR * Math.sin(a));
+          ctx.lineTo(center.x + outerR * Math.cos(a), center.y + outerR * Math.sin(a));
+          a += step;
+        }
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
+
+    // Draw dashed centerline arc
+    if (showCenterline) {
+      const origLineWidth = ctx.lineWidth;
+      ctx.save();
+      ctx.setLineDash(this.getLineDash('dashdot'));
+      let centerColor = 'rgba(255, 255, 255, 0.4)';
+      if (invertColors) {
+        centerColor = 'rgba(0, 0, 0, 0.4)';
+      }
+      ctx.strokeStyle = centerColor;
+      ctx.lineWidth = origLineWidth * 0.5;
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, radius, startAngle, endAngle, clockwise);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  /**
+   * Draw a slab shape (closed polygon with hatch fill)
+   */
+  private drawSlab(shape: SlabShape, invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { points } = shape;
+
+    if (points.length < 3) return;
+
+    // Resolve hatch from materialHatchSettings via the slab's material
+    const matSetting = this.materialHatchSettings[shape.material] || DEFAULT_MATERIAL_HATCH_SETTINGS[shape.material] || DEFAULT_MATERIAL_HATCH_SETTINGS.generic;
+    const effectiveHatchType = matSetting.hatchType || 'none';
+    const effectiveHatchAngle = matSetting.hatchAngle ?? 45;
+    const effectiveHatchSpacing = matSetting.hatchSpacing || 100;
+    const effectiveHatchColor = matSetting.hatchColor;
+    const effectivePatternId = matSetting.hatchPatternId;
+    const effectiveBackgroundColor = matSetting.backgroundColor;
+
+    // Draw slab outline (closed polygon)
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(points[i].x, points[i].y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+
+    // Hatch fill
+    if ((effectiveHatchType && effectiveHatchType !== 'none') || effectivePatternId) {
+      const strokeWidth = ctx.lineWidth;
+      ctx.save();
+
+      // Clip to slab polygon
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x, points[i].y);
+      }
+      ctx.closePath();
+      ctx.clip();
+
+      // Fill solid background color first (under hatch lines)
+      if (effectiveBackgroundColor) {
+        ctx.fillStyle = effectiveBackgroundColor;
+        ctx.fill();
+      }
+
+      let hatchColor: string | CanvasGradient | CanvasPattern = effectiveHatchColor || ctx.strokeStyle;
+      if (invertColors && hatchColor === '#ffffff') {
+        hatchColor = '#000000';
+      }
+
+      const spacing = effectiveHatchSpacing;
+      ctx.strokeStyle = hatchColor;
+      ctx.lineWidth = strokeWidth * 0.5;
+      ctx.setLineDash([]);
+
+      // Get bounding box
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of points) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+
+      // If we have a custom pattern ID, render its line families directly
+      const customPattern = effectivePatternId ? this.getPatternById(effectivePatternId) : undefined;
+      if (customPattern && customPattern.lineFamilies.length > 0) {
+        const patternScale = spacing / 10;
+        // Special case: insulation patterns get zigzag rendering (NEN standard)
+        if (effectivePatternId === 'nen47-isolatie' || effectivePatternId === 'insulation') {
+          this.drawInsulationZigzag(
+            minX, minY, maxX, maxY,
+            patternScale,
+            0, // No rotation offset for slabs
+            hatchColor as string,
+            strokeWidth
+          );
+        } else {
+          // Custom pattern with line families
+          this.drawCustomPatternLines(
+            customPattern.lineFamilies,
+            minX, minY, maxX, maxY,
+            patternScale,
+            0, // No rotation offset for slabs
+            hatchColor as string,
+            strokeWidth
+          );
+        }
+      } else if (customPattern && customPattern.lineFamilies.length === 0) {
+        // Solid fill pattern (e.g., NEN47-5 concrete, NEN47-18 steel)
+        ctx.fillStyle = hatchColor;
+        ctx.fill();
+      } else {
+        // Fallback to basic hatch types
+        const hatchAngle = effectiveHatchAngle;
+
+        if (effectiveHatchType === 'solid') {
+          ctx.fillStyle = hatchColor;
+          ctx.fill();
+        } else if (effectiveHatchType === 'diagonal') {
+          this.drawLineFamilySimple(hatchAngle, spacing, minX, minY, maxX, maxY);
+        } else if (effectiveHatchType === 'crosshatch') {
+          this.drawLineFamilySimple(hatchAngle, spacing, minX, minY, maxX, maxY);
+          this.drawLineFamilySimple(hatchAngle + 90, spacing, minX, minY, maxX, maxY);
+        } else if (effectiveHatchType === 'horizontal') {
+          this.drawLineFamilySimple(0, spacing, minX, minY, maxX, maxY);
+        } else if (effectiveHatchType === 'vertical') {
+          this.drawLineFamilySimple(90, spacing, minX, minY, maxX, maxY);
+        } else if (effectiveHatchType === 'dots') {
+          this.drawLineFamilySimple(hatchAngle, spacing, minX, minY, maxX, maxY);
+        }
+      }
+
+      ctx.restore();
+    }
+
+    // Draw label if present
+    if (shape.label) {
+      let textColor = shape.style.strokeColor;
+      if (invertColors && textColor === '#ffffff') {
+        textColor = '#000000';
+      }
+
+      // Calculate centroid for label placement
+      let cx = 0, cy = 0;
+      for (const p of points) {
+        cx += p.x;
+        cy += p.y;
+      }
+      cx /= points.length;
+      cy /= points.length;
+
+      const fontSize = Math.max(80, effectiveHatchSpacing * 0.8);
+      ctx.save();
+      ctx.fillStyle = textColor;
+      ctx.font = `${fontSize}px ${CAD_DEFAULT_FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(shape.label, cx, cy);
+      ctx.restore();
+    }
+  }
+
+  /**
+   * Draw a space shape (IfcSpace - room/area with filled polygon and label)
+   */
+  private drawSpace(shape: SpaceShape, _invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { contourPoints, name, number: spaceNumber, area, labelPosition, fillColor, fillOpacity } = shape;
+
+    if (contourPoints.length < 3) return;
+
+    // Draw filled polygon
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(contourPoints[0].x, contourPoints[0].y);
+    for (let i = 1; i < contourPoints.length; i++) {
+      ctx.lineTo(contourPoints[i].x, contourPoints[i].y);
+    }
+    ctx.closePath();
+
+    // Fill with semi-transparent color
+    ctx.globalAlpha = fillOpacity ?? 0.1;
+    ctx.fillStyle = fillColor || '#00ff00';
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Draw boundary as thin dashed line
+    ctx.setLineDash([100, 50]);
+    ctx.lineWidth = this.getLineWidth(1);
+    ctx.strokeStyle = fillColor || '#00ff00';
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    // Draw label at labelPosition
+    ctx.save();
+    const scaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+    const fontSize = 150 * scaleFactor;
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold ${fontSize}px ${CAD_DEFAULT_FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Build label text: name + number + area
+    let labelText = name;
+    if (spaceNumber) {
+      labelText = `${spaceNumber} - ${labelText}`;
+    }
+    ctx.fillText(labelText, labelPosition.x, labelPosition.y);
+
+    // Draw area below the name
+    if (area !== undefined) {
+      const areaFontSize = fontSize * 0.7;
+      ctx.font = `${areaFontSize}px ${CAD_DEFAULT_FONT}`;
+      ctx.fillText(`${area.toFixed(2)} m\u00B2`, labelPosition.x, labelPosition.y + fontSize * 1.2);
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Draw a plate system shape (contour boundary with parallel joist/stud members inside)
+   */
+  private drawPlateSystem(shape: PlateSystemShape, _invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { contourPoints, contourBulges, mainProfile, edgeProfile, layers, fillColor, fillOpacity, name } = shape;
+
+    if (contourPoints.length < 3) return;
+
+    // When childShapeIds are present, child beams (joists + edge beams) are rendered
+    // as individual BeamShape elements. The plate system only draws the contour,
+    // fill, layers, and label.
+    const hasChildBeams = shape.childShapeIds && shape.childShapeIds.length > 0;
+
+    // Helper to build the contour path (supports bulge/arc segments)
+    const buildContourPath = () => {
+      ctx.moveTo(contourPoints[0].x, contourPoints[0].y);
+      for (let i = 0; i < contourPoints.length; i++) {
+        const j = (i + 1) % contourPoints.length;
+        const b = contourBulges?.[i] ?? 0;
+        if (b !== 0 && Math.abs(b) > 0.0001) {
+          const arc = bulgeToArc(contourPoints[i], contourPoints[j], b);
+          ctx.arc(arc.center.x, arc.center.y, arc.radius, arc.startAngle, arc.endAngle, arc.clockwise);
+        } else if (j !== 0) {
+          ctx.lineTo(contourPoints[j].x, contourPoints[j].y);
+        } else {
+          ctx.closePath();
+        }
+      }
+    };
+
+    // 1. Draw the contour boundary (thick line)
+    ctx.save();
+    const savedLW = ctx.lineWidth;
+    ctx.lineWidth = savedLW * 1.5;
+    ctx.beginPath();
+    buildContourPath();
+    ctx.stroke();
+    ctx.lineWidth = savedLW;
+
+    // 2. Fill contour with light color
+    if (fillColor) {
+      ctx.globalAlpha = fillOpacity ?? 0.15;
+      ctx.fillStyle = fillColor;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // If child beams exist, skip internal joist/edge rendering (they are separate shapes)
+    if (!hasChildBeams) {
+      // 3. Clip to the contour for internal drawing
+      ctx.beginPath();
+      buildContourPath();
+      ctx.clip();
+
+      // 4. Draw edge profiles along the contour boundary (legacy)
+      if (edgeProfile) {
+        const edgeW = edgeProfile.width;
+        ctx.strokeStyle = ctx.strokeStyle; // Keep current stroke
+        ctx.lineWidth = savedLW * 0.5;
+        ctx.setLineDash([]);
+
+        for (let i = 0; i < contourPoints.length; i++) {
+          const j = (i + 1) % contourPoints.length;
+          const p1 = contourPoints[i];
+          const p2 = contourPoints[j];
+          const edgeAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+          // Inward normal (assuming clockwise polygon, normal points inward)
+          const nx = Math.sin(edgeAngle);
+          const ny = -Math.cos(edgeAngle);
+
+          // Draw the inner edge line offset by edgeWidth
+          ctx.beginPath();
+          ctx.moveTo(p1.x + nx * edgeW, p1.y + ny * edgeW);
+          ctx.lineTo(p2.x + nx * edgeW, p2.y + ny * edgeW);
+          ctx.stroke();
+        }
+      }
+
+      // 5. Draw main profiles (joists) as parallel lines within the contour (legacy)
+      const dir = mainProfile.direction;
+      const spacing = mainProfile.spacing;
+      const joistWidth = mainProfile.width;
+      const cosD = Math.cos(dir);
+      const sinD = Math.sin(dir);
+
+      // Get bounding box
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of contourPoints) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+
+      const diag = Math.sqrt((maxX - minX) ** 2 + (maxY - minY) ** 2);
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+
+      // Normal perpendicular to direction
+      const norm = { x: -sinD, y: cosD };
+      const numLines = Math.ceil(diag / spacing) + 1;
+
+      // Draw each joist as a pair of parallel lines (representing the width)
+      const halfW = joistWidth / 2;
+      ctx.setLineDash([]);
+
+      // Joist fill color (light timber tone)
+      const joistFillColor = mainProfile.material === 'timber' ? 'rgba(210, 180, 130, 0.3)'
+        : mainProfile.material === 'steel' ? 'rgba(180, 190, 200, 0.3)'
+        : 'rgba(200, 200, 200, 0.2)';
+
+      for (let i = -numLines; i <= numLines; i++) {
+        const offset = i * spacing;
+        const ox = cx + norm.x * offset;
+        const oy = cy + norm.y * offset;
+
+        // Joist rectangle (width in plan = joistWidth, along direction = long)
+        const p1x = ox - cosD * diag;
+        const p1y = oy - sinD * diag;
+        const p2x = ox + cosD * diag;
+        const p2y = oy + sinD * diag;
+
+        // Fill the joist rectangle
+        ctx.fillStyle = joistFillColor;
+        ctx.beginPath();
+        ctx.moveTo(p1x + norm.x * halfW, p1y + norm.y * halfW);
+        ctx.lineTo(p2x + norm.x * halfW, p2y + norm.y * halfW);
+        ctx.lineTo(p2x - norm.x * halfW, p2y - norm.y * halfW);
+        ctx.lineTo(p1x - norm.x * halfW, p1y - norm.y * halfW);
+        ctx.closePath();
+        ctx.fill();
+
+        // Stroke the joist edges
+        ctx.lineWidth = savedLW * 0.4;
+        ctx.beginPath();
+        ctx.moveTo(p1x + norm.x * halfW, p1y + norm.y * halfW);
+        ctx.lineTo(p2x + norm.x * halfW, p2y + norm.y * halfW);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(p1x - norm.x * halfW, p1y - norm.y * halfW);
+        ctx.lineTo(p2x - norm.x * halfW, p2y - norm.y * halfW);
+        ctx.stroke();
+      }
+    }
+
+    // 6. Draw layer indicators (thin colored lines near contour edge)
+    if (layers && layers.length > 0) {
+      // Need clip if not already clipped (when hasChildBeams, we didn't clip above)
+      if (hasChildBeams) {
+        ctx.beginPath();
+        buildContourPath();
+        ctx.clip();
+      }
+
+      const layerColors: Record<string, string> = {
+        timber: 'rgba(180, 140, 80, 0.5)',
+        gypsum: 'rgba(220, 220, 220, 0.5)',
+        steel: 'rgba(160, 170, 180, 0.5)',
+        insulation: 'rgba(255, 220, 100, 0.4)',
+        generic: 'rgba(200, 200, 200, 0.4)',
+      };
+      // Just show a thin indicator line near the contour boundary for each layer
+      let layerOffset = 0;
+      for (const layer of layers) {
+        layerOffset += layer.thickness;
+        ctx.strokeStyle = layerColors[layer.material] || layerColors.generic;
+        ctx.lineWidth = Math.max(layer.thickness * 0.5, savedLW * 0.3);
+        ctx.setLineDash([]);
+        // Draw offset contour for each layer (simplified: offset each segment)
+        const sign = layer.position === 'top' ? 1 : -1;
+        const off = sign * layerOffset;
+        ctx.beginPath();
+        for (let i = 0; i < contourPoints.length; i++) {
+          const j = (i + 1) % contourPoints.length;
+          const p1 = contourPoints[i];
+          const p2 = contourPoints[j];
+          const edgeAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+          const nx = Math.sin(edgeAngle) * off;
+          const ny = -Math.cos(edgeAngle) * off;
+          if (i === 0) {
+            ctx.moveTo(p1.x + nx, p1.y + ny);
+          }
+          ctx.lineTo(p2.x + nx, p2.y + ny);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
+
+    // 7. Draw label (system name) at centroid
+    if (name) {
+      let labelCx = 0, labelCy = 0;
+      for (const p of contourPoints) {
+        labelCx += p.x;
+        labelCy += p.y;
+      }
+      labelCx /= contourPoints.length;
+      labelCy /= contourPoints.length;
+
+      const scaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+      const fontSize = 120 * scaleFactor;
+      ctx.save();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `bold ${fontSize}px ${CAD_DEFAULT_FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(name, labelCx, labelCy);
+
+      // System type below
+      const typeFontSize = fontSize * 0.7;
+      ctx.font = `${typeFontSize}px ${CAD_DEFAULT_FONT}`;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+      ctx.fillText(shape.systemType, labelCx, labelCy + fontSize * 1.2);
+      ctx.restore();
+    }
+
+    // 8. Draw openings (sparingen) as dashed rectangles
+    if (shape.openings && shape.openings.length > 0) {
+      const store = useAppStore.getState();
+      const isEditMode = store.plateSystemEditMode && store.editingPlateSystemId === shape.id;
+      const selectedOpeningId = store.selectedOpeningId;
+      const zoom = ctx.getTransform().a / this.dpr;
+
+      for (const opening of shape.openings) {
+        ctx.save();
+        ctx.translate(opening.position.x, opening.position.y);
+        if (opening.rotation) {
+          ctx.rotate(opening.rotation);
+        }
+
+        const hw = opening.width / 2;
+        const hh = opening.height / 2;
+
+        // Fill with semi-transparent dark color to indicate void
+        ctx.fillStyle = 'rgba(40, 20, 20, 0.35)';
+        ctx.fillRect(-hw, -hh, opening.width, opening.height);
+
+        // Dashed rectangle outline
+        const isSelected = isEditMode && selectedOpeningId === opening.id;
+        ctx.strokeStyle = isSelected ? 'rgba(0, 220, 255, 1.0)' : 'rgba(255, 100, 80, 0.8)';
+        ctx.lineWidth = isSelected ? 2 / zoom : 1.5 / zoom;
+        ctx.setLineDash([6 / zoom, 3 / zoom]);
+        ctx.strokeRect(-hw, -hh, opening.width, opening.height);
+        ctx.setLineDash([]);
+
+        // Draw diagonal cross lines to indicate opening
+        ctx.strokeStyle = isSelected ? 'rgba(0, 200, 255, 0.5)' : 'rgba(255, 100, 80, 0.3)';
+        ctx.lineWidth = 0.8 / zoom;
+        ctx.beginPath();
+        ctx.moveTo(-hw, -hh);
+        ctx.lineTo(hw, hh);
+        ctx.moveTo(hw, -hh);
+        ctx.lineTo(-hw, hh);
+        ctx.stroke();
+
+        // In edit mode, draw grip handles at corners and midpoints
+        if (isEditMode && isSelected) {
+          const gripSize = 4 / zoom;
+          ctx.fillStyle = 'rgba(0, 220, 255, 1.0)';
+          const gripPositions = [
+            { x: -hw, y: -hh }, { x: hw, y: -hh },
+            { x: hw, y: hh }, { x: -hw, y: hh },
+            { x: 0, y: -hh }, { x: hw, y: 0 },
+            { x: 0, y: hh }, { x: -hw, y: 0 },
+          ];
+          for (const gp of gripPositions) {
+            ctx.fillRect(gp.x - gripSize / 2, gp.y - gripSize / 2, gripSize, gripSize);
+          }
+        }
+
+        // Label: opening dimensions
+        if (isEditMode) {
+          const dimFontSize = 10 / zoom;
+          ctx.font = `${dimFontSize}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillStyle = 'rgba(255, 180, 160, 0.9)';
+          ctx.fillText(`${opening.width} x ${opening.height}`, 0, hh + 4 / zoom);
+        }
+
+        ctx.restore();
+      }
+    }
+  }
+
+  /**
+   * Draw a dashed cyan border and "Edit Mode" label around a plate system
+   * when it is in edit mode (TAB to enter, TAB/ESC to exit).
+   */
+  private drawPlateSystemEditModeIndicator(shape: PlateSystemShape): void {
+    const ctx = this.ctx;
+    const { contourPoints, contourBulges } = shape;
+    if (contourPoints.length < 3) return;
+
+    const zoom = ctx.getTransform().a / this.dpr;
+    const store = useAppStore.getState();
+    const openingMode = store.plateSystemOpeningMode;
+
+    ctx.save();
+
+    // Draw dashed cyan border around the contour
+    ctx.strokeStyle = 'rgba(0, 200, 255, 0.7)';
+    ctx.lineWidth = 2 / zoom;
+    ctx.setLineDash([8 / zoom, 4 / zoom]);
+
+    ctx.beginPath();
+    ctx.moveTo(contourPoints[0].x, contourPoints[0].y);
+    for (let i = 0; i < contourPoints.length; i++) {
+      const j = (i + 1) % contourPoints.length;
+      const b = contourBulges?.[i] ?? 0;
+      if (b !== 0 && Math.abs(b) > 0.0001) {
+        const arc = bulgeToArc(contourPoints[i], contourPoints[j], b);
+        ctx.arc(arc.center.x, arc.center.y, arc.radius, arc.startAngle, arc.endAngle, arc.clockwise);
+      } else if (j !== 0) {
+        ctx.lineTo(contourPoints[j].x, contourPoints[j].y);
+      } else {
+        ctx.closePath();
+      }
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // The interactive toolbar (Edit Mode, Add Opening, TAB to exit) is rendered
+    // as a React overlay (PlateSystemEditToolbar in Canvas.tsx). Here we only
+    // draw the opening-mode cursor hint if placing an opening.
+    if (openingMode) {
+      let labelCx = 0;
+      let minYForHint = Infinity;
+      for (const p of contourPoints) {
+        labelCx += p.x;
+        if (p.y < minYForHint) minYForHint = p.y;
+      }
+      labelCx /= contourPoints.length;
+
+      const hintFontSize = 10 / zoom;
+      ctx.font = `${hintFontSize}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = 'rgba(255, 180, 100, 0.9)';
+      ctx.fillText('Click to place opening', labelCx, minYForHint - 50 / zoom);
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Draw a subtle "Tab to edit" hint below a plate system when it is selected
+   * but NOT in edit mode.
+   */
+  private drawPlateSystemTabHint(shape: PlateSystemShape): void {
+    const ctx = this.ctx;
+    const { contourPoints } = shape;
+    if (contourPoints.length < 3) return;
+
+    const zoom = ctx.getTransform().a / this.dpr;
+
+    ctx.save();
+
+    // Find the bottom of the contour and center X
+    let maxY = -Infinity;
+    let labelCx = 0;
+    for (const p of contourPoints) {
+      if (p.y > maxY) maxY = p.y;
+      labelCx += p.x;
+    }
+    labelCx /= contourPoints.length;
+
+    const labelFontSize = 10 / zoom;
+    ctx.font = `${labelFontSize}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    const hintText = 'TAB to edit';
+    const labelY = maxY + 10 / zoom;
+
+    // Background pill
+    const metrics = ctx.measureText(hintText);
+    const pad = 3 / zoom;
+    ctx.fillStyle = 'rgba(40, 40, 60, 0.75)';
+    const rx = labelCx - metrics.width / 2 - pad;
+    const ry = labelY - pad;
+    const rw = metrics.width + pad * 2;
+    const rh = labelFontSize + pad * 2;
+    ctx.beginPath();
+    ctx.roundRect(rx, ry, rw, rh, 2 / zoom);
+    ctx.fill();
+
+    // Text
+    ctx.fillStyle = 'rgba(200, 200, 220, 0.85)';
+    ctx.fillText(hintText, labelCx, labelY);
+
+    ctx.restore();
+  }
+
+  /**
+   * Draw a section callout shape (section cut line with markers and direction arrows)
+   */
+  private drawSectionCallout(shape: SectionCalloutShape, invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { start, end, label, flipDirection } = shape;
+
+    // Scale text/sizing so they appear at constant paper size across drawing scales
+    const scaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+    const bubbleRadius = shape.bubbleRadius * scaleFactor; // sizing parameter (name kept for compatibility)
+    const fontSize = shape.fontSize * scaleFactor;
+
+    const angle = Math.atan2(end.y - start.y, end.x - start.x);
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+
+    // Perpendicular direction for viewing arrows (negated so default points correct way)
+    const perpSign = flipDirection ? 1 : -1;
+    const perpX = -dy * perpSign;
+    const perpY = dx * perpSign;
+
+    const origLineWidth = ctx.lineWidth;
+
+    let textColor = shape.style.strokeColor;
+    if (invertColors && textColor === '#ffffff') {
+      textColor = '#000000';
+    }
+
+    // Draw view depth area (semi-transparent rectangle on the viewing direction side)
+    const viewDepth = shape.viewDepth ?? 5000;
+    if (viewDepth > 0) {
+      ctx.save();
+      // Build rectangle: from start along section line to end, then extend perpendicular by viewDepth
+      ctx.beginPath();
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(end.x, end.y);
+      ctx.lineTo(end.x + perpX * viewDepth, end.y + perpY * viewDepth);
+      ctx.lineTo(start.x + perpX * viewDepth, start.y + perpY * viewDepth);
+      ctx.closePath();
+      // Semi-transparent light blue fill
+      ctx.fillStyle = 'rgba(100, 180, 255, 0.08)';
+      ctx.fill();
+      // Dashed border on the far edge (view depth extent line)
+      ctx.strokeStyle = 'rgba(100, 180, 255, 0.4)';
+      ctx.lineWidth = origLineWidth;
+      ctx.setLineDash([bubbleRadius * 0.15, bubbleRadius * 0.1]);
+      ctx.beginPath();
+      ctx.moveTo(start.x + perpX * viewDepth, start.y + perpY * viewDepth);
+      ctx.lineTo(end.x + perpX * viewDepth, end.y + perpY * viewDepth);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    // Draw the cut line with alternating long-dash / short-dash pattern
+    ctx.save();
+    ctx.lineWidth = origLineWidth * 2;
+    ctx.setLineDash([bubbleRadius * 0.3, bubbleRadius * 0.15, bubbleRadius * 0.05, bubbleRadius * 0.15]);
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+    ctx.restore();
+
+    // Reset line style for arrows and labels
+    ctx.setLineDash([]);
+    ctx.lineWidth = origLineWidth;
+
+    // Draw simple text labels at each endpoint (NO circles/bubbles)
+    const labelOffset = bubbleRadius * 1.2; // offset text from the endpoint along the line
+    const drawSectionLabel = (px: number, py: number, offsetDx: number, offsetDy: number) => {
+      ctx.save();
+      const lx = px + offsetDx * labelOffset;
+      const ly = py + offsetDy * labelOffset;
+      ctx.fillStyle = textColor;
+      ctx.font = `bold ${fontSize * 1.4}px ${CAD_DEFAULT_FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, lx, ly);
+      ctx.restore();
+    };
+
+    // Labels at endpoints (offset outward along line direction)
+    // Skip label + arrow on hidden sides
+    const showStart = !shape.hideStartHead;
+    const showEnd = !shape.hideEndHead;
+
+    if (showStart) drawSectionLabel(start.x, start.y, -dx, -dy);
+    if (showEnd) drawSectionLabel(end.x, end.y, dx, dy);
+
+    // Draw direction arrows at each endpoint (perpendicular to cut line)
+    const arrowLen = bubbleRadius * 1.5;
+    ctx.lineWidth = origLineWidth * 1.5;
+
+    ctx.beginPath();
+    // Arrow stem at start
+    if (showStart) {
+      ctx.moveTo(start.x, start.y);
+      ctx.lineTo(start.x + perpX * arrowLen, start.y + perpY * arrowLen);
+    }
+    // Arrow stem at end
+    if (showEnd) {
+      ctx.moveTo(end.x, end.y);
+      ctx.lineTo(end.x + perpX * arrowLen, end.y + perpY * arrowLen);
+    }
+    ctx.stroke();
+
+    // Filled arrowheads
+    const arrowHeadSize = bubbleRadius * 0.5;
+    const drawArrowHead = (tipX: number, tipY: number, dirX: number, dirY: number) => {
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(tipX - dirX * arrowHeadSize + dirY * arrowHeadSize * 0.4, tipY - dirY * arrowHeadSize - dirX * arrowHeadSize * 0.4);
+      ctx.lineTo(tipX - dirX * arrowHeadSize - dirY * arrowHeadSize * 0.4, tipY - dirY * arrowHeadSize + dirX * arrowHeadSize * 0.4);
+      ctx.closePath();
+      ctx.fillStyle = textColor;
+      ctx.fill();
+    };
+
+    if (showStart) drawArrowHead(start.x + perpX * arrowLen, start.y + perpY * arrowLen, perpX, perpY);
+    if (showEnd) drawArrowHead(end.x + perpX * arrowLen, end.y + perpY * arrowLen, perpX, perpY);
+
+    ctx.lineWidth = origLineWidth;
   }
 
   /**
@@ -2735,6 +6581,204 @@ export class ShapeRenderer extends BaseRenderer {
       ctx.lineTo(x2, y2);
     }
     ctx.stroke();
+  }
+
+  /**
+   * Draw NEN-standard insulation zigzag hatch pattern.
+   * Renders connected zigzag (V-shape) lines at 60 degrees, filling the
+   * bounding area. Each row is a continuous zigzag path running horizontally
+   * (relative to the rotation offset), with segments alternating between
+   * +60 and -60 degrees.
+   */
+  private drawInsulationZigzag(
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    scale: number,
+    rotationOffset: number,
+    color: string,
+    defaultStrokeWidth: number,
+    wallThickness?: number
+  ): void {
+    const ctx = this.ctx;
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = defaultStrokeWidth * 0.5;
+    ctx.setLineDash([]);
+
+    // Rotate the coordinate system around the center of the bounding box
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const rotRad = (rotationOffset * Math.PI) / 180;
+
+    ctx.translate(cx, cy);
+    ctx.rotate(rotRad);
+    ctx.translate(-cx, -cy);
+
+    if (wallThickness && wallThickness > 0) {
+      // ── Wall-specific insulation zigzag ──
+      // A single continuous zigzag line that bounces between the inner and
+      // outer wall edges at 60 degrees from the wall direction.
+      //
+      // In the rotated coordinate system the wall runs along the X-axis.
+      // The wall strip is centred on cy with total height = wallThickness.
+      //   innerEdgeY = cy - wallThickness / 2   (top in canvas coords)
+      //   outerEdgeY = cy + wallThickness / 2   (bottom in canvas coords)
+      //
+      // Each leg of the zigzag travels from one edge to the other.
+      // At 60 degrees from the wall direction the horizontal step per leg is:
+      //   dx = wallThickness / tan(60°)
+
+      const halfThick = wallThickness / 2;
+      const innerEdgeY = cy - halfThick;
+      const outerEdgeY = cy + halfThick;
+
+      const tan60 = Math.tan((60 * Math.PI) / 180); // ~1.732
+      const dx = wallThickness / tan60; // horizontal step per zigzag leg
+
+      // We need to cover the full diagonal extent along X so the clipped
+      // region is completely filled regardless of wall rotation.
+      const diagonal = Math.sqrt((maxX - minX) ** 2 + (maxY - minY) ** 2);
+      const halfDiag = diagonal / 2;
+      const startX = cx - halfDiag - dx; // start well before the visible area
+      const endX = cx + halfDiag + dx;   // end well after
+
+      // Number of zigzag legs needed
+      const numLegs = Math.ceil((endX - startX) / dx) + 2;
+
+      ctx.beginPath();
+      // Start at the inner edge (top)
+      let curX = startX;
+      let onInner = true;
+      ctx.moveTo(curX, onInner ? innerEdgeY : outerEdgeY);
+
+      for (let i = 0; i < numLegs; i++) {
+        curX += dx;
+        // Alternate between outer and inner edge
+        onInner = !onInner;
+        ctx.lineTo(curX, onInner ? innerEdgeY : outerEdgeY);
+      }
+      ctx.stroke();
+    } else {
+      // ── Fallback for non-wall shapes (slabs, generic) ──
+      // Uses scale-based parameters with multiple rows of zigzag.
+      const zigzagSpacing = 1.5 * scale;
+      const zigzagAmplitude = zigzagSpacing * 0.5;
+      const zigzagAngleRad = (60 * Math.PI) / 180;
+      const legHorizontal = zigzagAmplitude / Math.tan(zigzagAngleRad);
+      const wavelength = legHorizontal * 2;
+      const halfWavelength = wavelength / 2;
+
+      // After rotation, we need to cover a larger area to fill the original bbox
+      const diagonal = Math.sqrt((maxX - minX) ** 2 + (maxY - minY) ** 2);
+      const halfDiag = diagonal / 2;
+      const aMinX = cx - halfDiag;
+      const aMaxX = cx + halfDiag;
+      const aMinY = cy - halfDiag;
+      const aMaxY = cy + halfDiag;
+
+      // Number of zigzag rows needed
+      const numRows = Math.ceil((aMaxY - aMinY) / zigzagSpacing) + 2;
+      // Number of V segments per row
+      const numSegments = Math.ceil((aMaxX - aMinX) / wavelength) + 2;
+
+      ctx.beginPath();
+      for (let row = -1; row <= numRows; row++) {
+        const rowY = aMinY + row * zigzagSpacing;
+
+        // Start the zigzag row
+        const startX = aMinX - wavelength;
+        ctx.moveTo(startX, rowY);
+
+        for (let seg = 0; seg <= numSegments + 1; seg++) {
+          const segStartX = startX + seg * wavelength;
+          // Go up to peak
+          ctx.lineTo(segStartX + halfWavelength, rowY - zigzagAmplitude);
+          // Go down to trough
+          ctx.lineTo(segStartX + wavelength, rowY);
+        }
+      }
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Draw an insulation zigzag that follows an arc wall.
+   * The zigzag is a single continuous line whose vertices alternate between
+   * the inner and outer arc radii, producing peaks that always touch the
+   * wall edges.  The angular step is chosen so that each leg of the zigzag
+   * makes a 60-degree angle with the tangent direction at the midpoint.
+   */
+  private drawInsulationZigzagArc(
+    center: { x: number; y: number },
+    innerR: number,
+    outerR: number,
+    startAngle: number,
+    endAngle: number,
+    clockwise: boolean,
+    color: string,
+    strokeWidth: number
+  ): void {
+    const ctx = this.ctx;
+
+    const wallThickness = outerR - innerR;
+    if (wallThickness <= 0) return;
+
+    // The midpoint radius is used to compute the angular step.
+    // Each zigzag leg spans the wall thickness radially.
+    // At 60 degrees from the tangent direction, the arc-length per leg
+    // (measured at the mid-radius) equals: wallThickness / tan(60deg).
+    const midR = (innerR + outerR) / 2;
+    if (midR <= 0) return;
+
+    const tan60 = Math.tan((60 * Math.PI) / 180); // ~1.732
+    const arcLengthPerLeg = wallThickness / tan60;
+    const angularStep = arcLengthPerLeg / midR; // radians per leg
+
+    // Determine total angular sweep
+    let totalSweep: number;
+    if (clockwise) {
+      totalSweep = startAngle - endAngle;
+      if (totalSweep < 0) totalSweep += Math.PI * 2;
+    } else {
+      totalSweep = endAngle - startAngle;
+      if (totalSweep < 0) totalSweep += Math.PI * 2;
+    }
+
+    const numLegs = Math.ceil(totalSweep / angularStep);
+    const direction = clockwise ? -1 : 1;
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = strokeWidth * 0.5;
+    ctx.setLineDash([]);
+
+    ctx.beginPath();
+
+    // Start on the inner arc at startAngle
+    let onInner = true;
+    let angle = startAngle;
+    ctx.moveTo(
+      center.x + innerR * Math.cos(angle),
+      center.y + innerR * Math.sin(angle)
+    );
+
+    for (let i = 0; i < numLegs; i++) {
+      angle += direction * angularStep;
+      onInner = !onInner;
+      const r = onInner ? innerR : outerR;
+      ctx.lineTo(
+        center.x + r * Math.cos(angle),
+        center.y + r * Math.sin(angle)
+      );
+    }
+
+    ctx.stroke();
+    ctx.restore();
   }
 
   /**

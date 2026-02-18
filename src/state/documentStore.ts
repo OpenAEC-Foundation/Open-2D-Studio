@@ -18,6 +18,7 @@ import type {
   Shape,
   Layer,
   Drawing,
+  DrawingType,
   DrawingBoundary,
   Sheet,
   SheetViewport,
@@ -89,6 +90,10 @@ import {
 
 import type { AnnotationEditState } from './slices/annotationSlice';
 import { initialAnnotationEditState } from './slices/annotationSlice';
+import {
+  computeSectionReferences,
+  isSectionReferenceShape,
+} from '../services/section/sectionReferenceService';
 
 enablePatches();
 
@@ -162,6 +167,7 @@ export interface DocumentState {
   selectedShapeIds: string[];
   hoveredShapeId: string | null;
   selectionBox: SelectionBox | null;
+  selectionFilter: string | null;
 
   // History
   historyStack: HistoryEntry[];
@@ -249,12 +255,18 @@ export interface DocumentActions {
   deleteSelectedShapes: () => void;
 
   // Drawing actions
-  addDrawing: (name?: string) => void;
+  addDrawing: (name?: string, drawingType?: DrawingType) => void;
+  addDrawingSilent: (name?: string, drawingType?: DrawingType) => string;
   deleteDrawing: (id: string) => void;
   renameDrawing: (id: string, name: string) => void;
+  updateDrawingType: (id: string, drawingType: DrawingType) => void;
+  updateDrawingStorey: (id: string, storeyId: string | undefined) => void;
   updateDrawingBoundary: (id: string, boundary: Partial<DrawingBoundary>) => void;
   fitBoundaryToContent: (id: string, padding?: number) => void;
   switchToDrawing: (id: string) => void;
+  syncSectionReferences: (sectionDrawingId: string) => void;
+  syncAllSectionReferences: () => void;
+  syncSectionReferenceToSource: (sectionRefShapeId: string) => void;
 
   // Sheet actions
   addSheet: (name?: string, paperSize?: PaperSize, orientation?: PaperOrientation, svgTitleBlockId?: string) => string;
@@ -457,6 +469,7 @@ export function createEmptyDocumentState(projectName = 'Untitled'): DocumentStat
       name: 'Drawing 1',
       boundary: { ...DEFAULT_DRAWING_BOUNDARY },
       scale: DEFAULT_DRAWING_SCALE,
+      drawingType: 'standalone',
       createdAt: new Date().toISOString(),
       modifiedAt: new Date().toISOString(),
     }],
@@ -486,6 +499,7 @@ export function createEmptyDocumentState(projectName = 'Untitled'): DocumentStat
     selectedShapeIds: [],
     hoveredShapeId: null,
     selectionBox: null,
+    selectionFilter: null,
     historyStack: [],
     historyIndex: -1,
     maxHistorySize: 50,
@@ -601,7 +615,8 @@ function withHistory(state: DocumentState, mutate: (draft: Shape[]) => void): vo
   );
   if (patches.length === 0) return;
 
-  if (state.historyIndex >= 0 && state.historyIndex < state.historyStack.length - 1) {
+  // Truncate future entries. When historyIndex is -1 (all undone), clear the entire stack.
+  if (state.historyIndex < state.historyStack.length - 1) {
     state.historyStack = state.historyStack.slice(0, state.historyIndex + 1);
   }
   state.historyStack.push({ patches, inversePatches });
@@ -730,14 +745,29 @@ export function createDocumentStoreInstance(initial?: Partial<DocumentState>): S
       // Drawing Actions
       // ======================================================================
 
-      addDrawing: (name) =>
+      addDrawing: (name, drawingType = 'standalone') =>
         set((state) => {
           const id = generateId();
+          // For plan drawings, auto-assign the first available storey
+          let autoStoreyId: string | undefined;
+          if (drawingType === 'plan') {
+            const ps = useAppStore.getState().projectStructure;
+            if (ps?.buildings) {
+              for (const building of ps.buildings) {
+                if (building.storeys.length > 0) {
+                  autoStoreyId = building.storeys[0].id;
+                  break;
+                }
+              }
+            }
+          }
           const newDrawing: Drawing = {
             id,
             name: name || `Drawing ${state.drawings.length + 1}`,
             boundary: { ...DEFAULT_DRAWING_BOUNDARY },
             scale: DEFAULT_DRAWING_SCALE,
+            drawingType,
+            storeyId: autoStoreyId,
             createdAt: new Date().toISOString(),
             modifiedAt: new Date().toISOString(),
           };
@@ -774,6 +804,61 @@ export function createDocumentStoreInstance(initial?: Partial<DocumentState>): S
           state.isModified = true;
         }),
 
+      addDrawingSilent: (name, drawingType = 'standalone') => {
+        const id = generateId();
+        set((state) => {
+          // For plan drawings, auto-assign the first available storey
+          let autoStoreyId: string | undefined;
+          if (drawingType === 'plan') {
+            const ps = useAppStore.getState().projectStructure;
+            if (ps?.buildings) {
+              for (const building of ps.buildings) {
+                if (building.storeys.length > 0) {
+                  autoStoreyId = building.storeys[0].id;
+                  break;
+                }
+              }
+            }
+          }
+          const newDrawing: Drawing = {
+            id,
+            name: name || `Drawing ${state.drawings.length + 1}`,
+            boundary: { ...DEFAULT_DRAWING_BOUNDARY },
+            scale: DEFAULT_DRAWING_SCALE,
+            drawingType,
+            storeyId: autoStoreyId,
+            createdAt: new Date().toISOString(),
+            modifiedAt: new Date().toISOString(),
+          };
+          state.drawings.push(newDrawing);
+
+          const newLayer: Layer = {
+            id: generateId(),
+            name: 'Layer 0',
+            drawingId: id,
+            visible: true,
+            locked: false,
+            color: '#ffffff',
+            lineStyle: 'solid',
+            lineWidth: 1,
+          };
+          state.layers.push(newLayer);
+
+          const canvasSize = useAppStore.getState().canvasSize;
+          const b = newDrawing.boundary;
+          const centerX = b.x + b.width / 2;
+          const centerY = b.y + b.height / 2;
+          state.drawingViewports[id] = {
+            offsetX: canvasSize.width / 2 - centerX,
+            offsetY: canvasSize.height / 2 - centerY,
+            zoom: 1,
+          };
+
+          state.isModified = true;
+        });
+        return id;
+      },
+
       deleteDrawing: (id) =>
         set((state) => {
           if (state.drawings.length <= 1) return;
@@ -800,6 +885,41 @@ export function createDocumentStoreInstance(initial?: Partial<DocumentState>): S
           const drawing = state.drawings.find((d) => d.id === id);
           if (drawing) {
             drawing.name = name;
+            drawing.modifiedAt = new Date().toISOString();
+            state.isModified = true;
+          }
+        }),
+
+      updateDrawingType: (id, drawingType) =>
+        set((state) => {
+          const drawing = state.drawings.find((d) => d.id === id);
+          if (drawing) {
+            drawing.drawingType = drawingType;
+            if (drawingType !== 'plan') {
+              // Clear storeyId if switching away from plan type
+              delete drawing.storeyId;
+            } else if (!drawing.storeyId) {
+              // Auto-assign the first available storey when switching to plan type
+              const ps = useAppStore.getState().projectStructure;
+              if (ps?.buildings) {
+                for (const building of ps.buildings) {
+                  if (building.storeys.length > 0) {
+                    drawing.storeyId = building.storeys[0].id;
+                    break;
+                  }
+                }
+              }
+            }
+            drawing.modifiedAt = new Date().toISOString();
+            state.isModified = true;
+          }
+        }),
+
+      updateDrawingStorey: (id, storeyId) =>
+        set((state) => {
+          const drawing = state.drawings.find((d) => d.id === id);
+          if (drawing) {
+            drawing.storeyId = storeyId;
             drawing.modifiedAt = new Date().toISOString();
             state.isModified = true;
           }
@@ -892,7 +1012,97 @@ export function createDocumentStoreInstance(initial?: Partial<DocumentState>): S
           const layerInDrawing = state.layers.find((l) => l.drawingId === id);
           if (layerInDrawing) state.activeLayerId = layerInDrawing.id;
           state.selectedShapeIds = [];
+
+          // Auto-sync section references when switching to a section drawing
+          if (drawing.drawingType === 'section') {
+            const sectionLayerId = layerInDrawing?.id || `section-layer-${id}`;
+            const ps = useAppStore.getState().projectStructure;
+            if (ps) {
+              const result = computeSectionReferences(
+                drawing,
+                state.shapes as Shape[],
+                state.drawings as Drawing[],
+                ps,
+              );
+              if (result) {
+                // Remove old section reference shapes
+                state.shapes = (state.shapes as Shape[]).filter(
+                  s => !(s.drawingId === id && isSectionReferenceShape(s))
+                ) as typeof state.shapes;
+                // Add new ones with correct layer ID
+                for (const gl of result.gridlines) {
+                  (state.shapes as Shape[]).push({ ...gl, layerId: sectionLayerId } as unknown as Shape);
+                }
+                for (const lv of result.levels) {
+                  (state.shapes as Shape[]).push({ ...lv, layerId: sectionLayerId } as unknown as Shape);
+                }
+                drawing.sectionReferences = result.references;
+              }
+            }
+          }
         }),
+
+      syncSectionReferences: (sectionDrawingId) =>
+        set((state) => {
+          const drawing = state.drawings.find((d) => d.id === sectionDrawingId);
+          if (!drawing || drawing.drawingType !== 'section') return;
+          const layerInDrawing = state.layers.find((l) => l.drawingId === sectionDrawingId);
+          const sectionLayerId = layerInDrawing?.id || `section-layer-${sectionDrawingId}`;
+          const ps = useAppStore.getState().projectStructure;
+          if (!ps) return;
+          const result = computeSectionReferences(
+            drawing,
+            state.shapes as Shape[],
+            state.drawings as Drawing[],
+            ps,
+          );
+          if (result) {
+            state.shapes = (state.shapes as Shape[]).filter(
+              s => !(s.drawingId === sectionDrawingId && isSectionReferenceShape(s))
+            ) as typeof state.shapes;
+            for (const gl of result.gridlines) {
+              (state.shapes as Shape[]).push({ ...gl, layerId: sectionLayerId } as unknown as Shape);
+            }
+            for (const lv of result.levels) {
+              (state.shapes as Shape[]).push({ ...lv, layerId: sectionLayerId } as unknown as Shape);
+            }
+            drawing.sectionReferences = result.references;
+            drawing.modifiedAt = new Date().toISOString();
+            state.isModified = true;
+          }
+        }),
+
+      syncAllSectionReferences: () =>
+        set((state) => {
+          const ps = useAppStore.getState().projectStructure;
+          if (!ps) return;
+          const sectionDrawings = state.drawings.filter(d => d.drawingType === 'section');
+          for (const sectionDrawing of sectionDrawings) {
+            const layerInDrawing = state.layers.find((l) => l.drawingId === sectionDrawing.id);
+            const sectionLayerId = layerInDrawing?.id || `section-layer-${sectionDrawing.id}`;
+            const result = computeSectionReferences(
+              sectionDrawing, state.shapes as Shape[], state.drawings as Drawing[], ps,
+            );
+            if (result) {
+              state.shapes = (state.shapes as Shape[]).filter(
+                s => !(s.drawingId === sectionDrawing.id && isSectionReferenceShape(s))
+              ) as typeof state.shapes;
+              for (const gl of result.gridlines) {
+                (state.shapes as Shape[]).push({ ...gl, layerId: sectionLayerId } as unknown as Shape);
+              }
+              for (const lv of result.levels) {
+                (state.shapes as Shape[]).push({ ...lv, layerId: sectionLayerId } as unknown as Shape);
+              }
+              sectionDrawing.sectionReferences = result.references;
+            }
+          }
+        }),
+
+      syncSectionReferenceToSource: (_sectionRefShapeId) => {
+        // Delegate to appStore's implementation (model slice)
+        // The documentStore uses the appStore for cross-slice operations
+        useAppStore.getState().syncSectionReferenceToSource?.(_sectionRefShapeId);
+      },
 
       // ======================================================================
       // Sheet Actions
@@ -1358,7 +1568,7 @@ export function createDocumentStoreInstance(initial?: Partial<DocumentState>): S
         set((state) => { state.viewport.zoom = Math.min(state.viewport.zoom * 1.2, 100); }),
 
       zoomOut: () =>
-        set((state) => { state.viewport.zoom = Math.max(state.viewport.zoom / 1.2, 0.01); }),
+        set((state) => { state.viewport.zoom = Math.max(state.viewport.zoom / 1.2, 0.001); }),
 
       zoomToFit: () =>
         set((state) => { state.viewport = { offsetX: 0, offsetY: 0, zoom: 1 }; }),
@@ -1412,7 +1622,18 @@ export function createDocumentStoreInstance(initial?: Partial<DocumentState>): S
           if (state.historyIndex < 0) return;
           const entry = state.historyStack[state.historyIndex];
           if (!entry) return;
-          state.shapes = applyPatches(current(state.shapes as any) as Shape[], entry.inversePatches) as any;
+          const target = entry.target || 'shapes';
+          if (target === 'parametricShapes') {
+            state.parametricShapes = applyPatches(
+              current(state.parametricShapes as any),
+              entry.inversePatches
+            ) as any;
+          } else {
+            state.shapes = applyPatches(
+              current(state.shapes as any) as Shape[],
+              entry.inversePatches
+            ) as any;
+          }
           state.historyIndex--;
           state.selectedShapeIds = [];
           success = true;
@@ -1427,7 +1648,18 @@ export function createDocumentStoreInstance(initial?: Partial<DocumentState>): S
           if (nextIndex >= state.historyStack.length) return;
           const entry = state.historyStack[nextIndex];
           if (!entry) return;
-          state.shapes = applyPatches(current(state.shapes as any) as Shape[], entry.patches) as any;
+          const target = entry.target || 'shapes';
+          if (target === 'parametricShapes') {
+            state.parametricShapes = applyPatches(
+              current(state.parametricShapes as any),
+              entry.patches
+            ) as any;
+          } else {
+            state.shapes = applyPatches(
+              current(state.shapes as any) as Shape[],
+              entry.patches
+            ) as any;
+          }
           state.historyIndex = nextIndex;
           state.selectedShapeIds = [];
           success = true;
@@ -1442,13 +1674,21 @@ export function createDocumentStoreInstance(initial?: Partial<DocumentState>): S
         set((state) => {
           if (fromIndex > state.historyIndex || fromIndex < 0) return;
           if (fromIndex === state.historyIndex) return;
+
+          // Only collapse entries that share the same target
+          const baseTarget = state.historyStack[fromIndex].target || 'shapes';
+          const allSameTarget = state.historyStack
+            .slice(fromIndex, state.historyIndex + 1)
+            .every(e => (e.target || 'shapes') === baseTarget);
+          if (!allSameTarget) return;
+
           const mergedPatches: Patch[] = [];
           const mergedInversePatches: Patch[] = [];
           for (let i = fromIndex; i <= state.historyIndex; i++) {
             mergedPatches.push(...state.historyStack[i].patches);
             mergedInversePatches.unshift(...state.historyStack[i].inversePatches);
           }
-          const collapsed: HistoryEntry = { patches: mergedPatches, inversePatches: mergedInversePatches };
+          const collapsed: HistoryEntry = { patches: mergedPatches, inversePatches: mergedInversePatches, target: baseTarget };
           state.historyStack.splice(fromIndex, state.historyIndex - fromIndex + 1, collapsed);
           state.historyIndex = fromIndex;
         }),
@@ -2308,6 +2548,7 @@ export function createDocumentStoreInstance(initial?: Partial<DocumentState>): S
               id: newDrawingId, name: 'Drawing 1',
               boundary: { ...DEFAULT_DRAWING_BOUNDARY },
               scale: DEFAULT_DRAWING_SCALE,
+              drawingType: 'standalone',
               createdAt: new Date().toISOString(), modifiedAt: new Date().toISOString(),
             }];
             state.sheets = [];

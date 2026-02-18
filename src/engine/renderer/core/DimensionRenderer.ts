@@ -17,14 +17,50 @@ import {
   angleBetweenPoints,
 } from '../../geometry/DimensionUtils';
 
+/** Color used for associative dimension text when parent element is selected */
+const ASSOCIATION_HIGHLIGHT_COLOR = '#00B400';
+
 export class DimensionRenderer extends BaseRenderer {
   private drawingScale: number = 0.02;
+  private selectedShapeIds: Set<string> = new Set();
 
   /**
    * Set the drawing scale for dimension text/arrow scaling
    */
   setDrawingScale(scale: number): void {
     this.drawingScale = scale;
+  }
+
+  /**
+   * Set the currently selected shape IDs so associative dimension text
+   * can be highlighted when a linked element is selected.
+   */
+  setSelectedShapeIds(ids: Set<string>): void {
+    this.selectedShapeIds = ids;
+  }
+
+  /**
+   * Check if any of the dimension's linked elements are currently selected.
+   * Used to highlight associative dimension text in green.
+   */
+  private isLinkedElementSelected(dimension: DimensionShape): boolean {
+    if (this.selectedShapeIds.size === 0) return false;
+
+    // Check linkedGridlineIds
+    if (dimension.linkedGridlineIds) {
+      for (const id of dimension.linkedGridlineIds) {
+        if (this.selectedShapeIds.has(id)) return true;
+      }
+    }
+
+    // Check associative references
+    if (dimension.references) {
+      for (const ref of dimension.references) {
+        if (this.selectedShapeIds.has(ref.shapeId)) return true;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -41,26 +77,34 @@ export class DimensionRenderer extends BaseRenderer {
       extensionLineOvershoot: dimension.dimensionStyle.extensionLineOvershoot * scaleFactor,
     };
 
+    // Determine if linked element is selected (for green text highlight)
+    const linkedSelected = !isSelected && this.isLinkedElementSelected(dimension);
+
     // Set drawing style
     const highlightColor = isSelected ? COLORS.selection : isHovered ? COLORS.hover : null;
     ctx.strokeStyle = highlightColor || style.lineColor;
     ctx.fillStyle = highlightColor || style.textColor;
-    ctx.lineWidth = 1;
+    // Use style strokeWidth if specified, otherwise default (2.5 when selected, 1 otherwise)
+    const baseLineWidth = style.strokeWidth != null ? style.strokeWidth : 1;
+    ctx.lineWidth = isSelected ? Math.max(2.5, baseLineWidth) : baseLineWidth;
     ctx.setLineDash([]);
+
+    // If a linked element is selected, override the text color to green
+    const textColorOverride = linkedSelected ? ASSOCIATION_HIGHLIGHT_COLOR : undefined;
 
     switch (dimension.dimensionType) {
       case 'aligned':
       case 'linear':
-        this.drawAlignedDimension(dimension, style, isSelected);
+        this.drawAlignedDimension(dimension, style, isSelected, textColorOverride);
         break;
       case 'angular':
-        this.drawAngularDimension(dimension, style, isSelected);
+        this.drawAngularDimension(dimension, style, isSelected, textColorOverride);
         break;
       case 'radius':
-        this.drawRadiusDimension(dimension, style, isSelected);
+        this.drawRadiusDimension(dimension, style, isSelected, textColorOverride);
         break;
       case 'diameter':
-        this.drawDiameterDimension(dimension, style, isSelected);
+        this.drawDiameterDimension(dimension, style, isSelected, textColorOverride);
         break;
     }
   }
@@ -71,7 +115,8 @@ export class DimensionRenderer extends BaseRenderer {
   private drawAlignedDimension(
     dimension: DimensionShape,
     style: DimensionStyle,
-    isSelected: boolean
+    isSelected: boolean,
+    textColorOverride?: string
   ): void {
     if (dimension.points.length < 2) return;
 
@@ -162,7 +207,8 @@ export class DimensionRenderer extends BaseRenderer {
       dimension.value,
       dimension.prefix,
       dimension.suffix,
-      style
+      style,
+      textColorOverride
     );
 
     // Draw selection handles if selected
@@ -177,7 +223,8 @@ export class DimensionRenderer extends BaseRenderer {
   private drawAngularDimension(
     dimension: DimensionShape,
     style: DimensionStyle,
-    isSelected: boolean
+    isSelected: boolean,
+    textColorOverride?: string
   ): void {
     if (dimension.points.length < 3) return;
 
@@ -236,7 +283,8 @@ export class DimensionRenderer extends BaseRenderer {
       dimension.value,
       dimension.prefix,
       dimension.suffix,
-      style
+      style,
+      textColorOverride
     );
 
     if (isSelected) {
@@ -250,7 +298,8 @@ export class DimensionRenderer extends BaseRenderer {
   private drawRadiusDimension(
     dimension: DimensionShape,
     style: DimensionStyle,
-    isSelected: boolean
+    isSelected: boolean,
+    textColorOverride?: string
   ): void {
     if (dimension.points.length < 2) return;
 
@@ -280,7 +329,8 @@ export class DimensionRenderer extends BaseRenderer {
       dimension.value,
       dimension.prefix || 'R',
       dimension.suffix,
-      style
+      style,
+      textColorOverride
     );
 
     if (isSelected) {
@@ -294,7 +344,8 @@ export class DimensionRenderer extends BaseRenderer {
   private drawDiameterDimension(
     dimension: DimensionShape,
     style: DimensionStyle,
-    isSelected: boolean
+    isSelected: boolean,
+    textColorOverride?: string
   ): void {
     if (dimension.points.length < 2) return;
 
@@ -325,7 +376,8 @@ export class DimensionRenderer extends BaseRenderer {
       dimension.value,
       dimension.prefix || '\u2300', // diameter symbol
       dimension.suffix,
-      style
+      style,
+      textColorOverride
     );
 
     if (isSelected) {
@@ -366,8 +418,16 @@ export class DimensionRenderer extends BaseRenderer {
       }
       case 'dot': {
         ctx.beginPath();
-        ctx.arc(tip.x, tip.y, size / 2, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.arc(tip.x, tip.y, size / 4, 0, Math.PI * 2);
+        if (style.dotFilled) {
+          // Filled dot: use the stroke color as fill for a solid circle
+          const prevFill = ctx.fillStyle;
+          ctx.fillStyle = ctx.strokeStyle;
+          ctx.fill();
+          ctx.fillStyle = prevFill;
+        } else {
+          ctx.stroke();
+        }
         break;
       }
       case 'tick': {
@@ -409,6 +469,7 @@ export class DimensionRenderer extends BaseRenderer {
 
   /**
    * Draw dimension text
+   * @param textColorOverride - Optional color override for the text (e.g. green for linked element highlight)
    */
   private drawDimensionText(
     position: Point,
@@ -416,7 +477,8 @@ export class DimensionRenderer extends BaseRenderer {
     value: string,
     prefix?: string,
     suffix?: string,
-    style?: DimensionStyle
+    style?: DimensionStyle,
+    textColorOverride?: string
   ): void {
     const ctx = this.ctx;
     const textHeight = style?.textHeight || 3;
@@ -461,8 +523,8 @@ export class DimensionRenderer extends BaseRenderer {
       );
     }
 
-    // Draw text
-    ctx.fillStyle = style?.textColor || '#00ffff';
+    // Draw text - use override color (green) when linked element is selected
+    ctx.fillStyle = textColorOverride || style?.textColor || '#00ffff';
     ctx.fillText(displayText, 0, yOffset);
 
     ctx.restore();
@@ -578,6 +640,9 @@ export class DimensionRenderer extends BaseRenderer {
         handleSize
       );
     }
+
+    // 5. Axis indicator at dimension line midpoint
+    this.drawAxisIndicator(dimLineMidpoint, handleSize * 2.5);
   }
 
   /**
@@ -606,6 +671,51 @@ export class DimensionRenderer extends BaseRenderer {
         handleSize
       );
     }
+  }
+
+  /**
+   * Draw a small X/Y axis indicator (crosshair) at a given point.
+   * Shown when a dimension is selected, at the dimension line midpoint.
+   */
+  private drawAxisIndicator(center: Point, size: number): void {
+    const ctx = this.ctx;
+    const halfSize = size;
+
+    ctx.save();
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([]);
+
+    // X axis (red, pointing right)
+    ctx.strokeStyle = '#ff4444';
+    ctx.beginPath();
+    ctx.moveTo(center.x, center.y);
+    ctx.lineTo(center.x + halfSize, center.y);
+    ctx.stroke();
+
+    // X axis arrowhead
+    ctx.beginPath();
+    ctx.moveTo(center.x + halfSize, center.y);
+    ctx.lineTo(center.x + halfSize - size * 0.25, center.y - size * 0.15);
+    ctx.moveTo(center.x + halfSize, center.y);
+    ctx.lineTo(center.x + halfSize - size * 0.25, center.y + size * 0.15);
+    ctx.stroke();
+
+    // Y axis (green, pointing up = negative Y in canvas)
+    ctx.strokeStyle = '#44ff44';
+    ctx.beginPath();
+    ctx.moveTo(center.x, center.y);
+    ctx.lineTo(center.x, center.y - halfSize);
+    ctx.stroke();
+
+    // Y axis arrowhead
+    ctx.beginPath();
+    ctx.moveTo(center.x, center.y - halfSize);
+    ctx.lineTo(center.x - size * 0.15, center.y - halfSize + size * 0.25);
+    ctx.moveTo(center.x, center.y - halfSize);
+    ctx.lineTo(center.x + size * 0.15, center.y - halfSize + size * 0.25);
+    ctx.stroke();
+
+    ctx.restore();
   }
 
   /**

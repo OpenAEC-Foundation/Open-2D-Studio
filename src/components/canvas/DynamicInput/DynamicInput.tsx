@@ -8,6 +8,22 @@ import {
   rotateTransform,
   getShapeTransformUpdates,
 } from '../../../engine/geometry/Modify';
+import { evaluateExpression } from '../../../utils/expressionParser';
+import {
+  isGridlineHorizontal,
+  getNextGridlineLabel,
+  getNextIncrementedLabel,
+} from '../../../utils/gridlineUtils';
+
+/**
+ * Snap an angle (in radians) to the nearest 45-degree increment.
+ * Returns the snapped angle in radians.
+ */
+function snapAngleTo45(angle: number): number {
+  const degrees = angle * (180 / Math.PI);
+  const snappedDegrees = Math.round(degrees / 45) * 45;
+  return snappedDegrees * (Math.PI / 180);
+}
 
 /**
  * Field configuration per tool
@@ -24,6 +40,9 @@ const TOOL_FIELDS: Record<string, FieldConfig> = {
   arc: { field1Label: 'Radius', field2Label: 'Sweep' },
   ellipse: { field1Label: 'Radius X', field2Label: 'Radius Y' },
   polyline: { field1Label: 'Distance', field2Label: 'Angle' },
+  wall: { field1Label: 'Distance', field2Label: 'Angle' },
+  gridline: { field1Label: 'Distance', field2Label: 'Angle' },
+  beam: { field1Label: 'Distance', field2Label: 'Angle' },
 };
 
 /**
@@ -48,7 +67,13 @@ export function DynamicInput() {
     directDistanceAngle,
     dynamicInputEnabled,
     unitSettings,
-    moveAxisLock,
+    // Structural tool pending states
+    pendingWall,
+    pendingGridline,
+    pendingBeam,
+    // Array tool state
+    arrayCount,
+    setArrayCount,
   } = useAppStore();
 
   const [focusedField, setFocusedField] = useState<0 | 1 | -1>(-1); // -1 = none, 0 = field1, 1 = field2
@@ -58,14 +83,21 @@ export function DynamicInput() {
   const field2Ref = useRef<HTMLInputElement>(null);
 
   const supportedDrawingTools = ['line', 'rectangle', 'circle', 'arc', 'ellipse', 'polyline'];
-  const supportedModifyTools = ['move', 'copy'];
+  const supportedModifyTools = ['move', 'copy', 'copy2'];
 
   const isModifyMode = supportedModifyTools.includes(activeTool) && drawingPoints.length >= 1;
   const isRotateMode = activeTool === 'rotate' && drawingPoints.length >= 2;
   const isDrawingMode = isDrawing && drawingPoints.length > 0 && supportedDrawingTools.includes(activeTool);
+  const isArrayMode = activeTool === 'array' && drawingPoints.length >= 1;
+
+  // Structural tools: wall, gridline, beam - active when pending state is set and first point is placed
+  const isStructuralMode =
+    (activeTool === 'wall' && !!pendingWall && drawingPoints.length >= 1) ||
+    (activeTool === 'gridline' && !!pendingGridline && drawingPoints.length >= 1) ||
+    (activeTool === 'beam' && !!pendingBeam && drawingPoints.length >= 1);
 
   // Only show when enabled and drawing with supported tools OR during move/copy/rotate with points set
-  const showDynamicInput = dynamicInputEnabled && (isDrawingMode || isModifyMode || isRotateMode);
+  const showDynamicInput = dynamicInputEnabled && (isDrawingMode || isModifyMode || isRotateMode || isStructuralMode || isArrayMode);
 
   // Reset when drawing ends or tool changes
   useEffect(() => {
@@ -89,56 +121,109 @@ export function DynamicInput() {
     }
   }, [focusedField]);
 
-  // Execute move/copy with typed distance
-  const executeModifyWithDistance = useCallback((dist: number) => {
-    if (!isModifyMode || drawingPoints.length < 1) return;
+  // Real-time preview: update lockedDistance and ghost preview as user types during modify mode
+  useEffect(() => {
+    if (!isModifyMode || focusedField !== 0) return;
+    const dist = field1Text !== '' ? evaluateExpression(field1Text) : null;
+    if (dist === null) {
+      setLockedDistance(null);
+      return;
+    }
+    setLockedDistance(dist);
 
+    // Directly compute and set the preview ghost shapes
+    const state = useAppStore.getState();
     const basePoint = drawingPoints[0];
+    if (!basePoint) return;
+    const constrainAxis = state.modifyConstrainAxis;
     const worldMX = (mousePosition.x - viewport.offsetX) / viewport.zoom;
     const worldMY = (mousePosition.y - viewport.offsetY) / viewport.zoom;
 
     let dx: number, dy: number;
-    if (moveAxisLock === 'x') {
-      // Constrained to X axis — sign from mouse offset
-      dx = dist * Math.sign(worldMX - basePoint.x || 1);
+    if (constrainAxis === 'x') {
+      dx = Math.sign(worldMX - basePoint.x) * Math.abs(dist);
       dy = 0;
-    } else if (moveAxisLock === 'y') {
-      // Constrained to Y axis — sign from mouse offset
+    } else if (constrainAxis === 'y') {
       dx = 0;
-      dy = dist * Math.sign(worldMY - basePoint.y || 1);
+      dy = Math.sign(worldMY - basePoint.y) * Math.abs(dist);
     } else {
-      // Free direction from mouse
-      const dirX = worldMX - basePoint.x;
-      const dirY = worldMY - basePoint.y;
-      const dirLen = Math.hypot(dirX, dirY);
-      if (dirLen < 0.001) return;
-      const ux = dirX / dirLen;
-      const uy = dirY / dirLen;
-      dx = ux * dist;
-      dy = uy * dist;
+      let dirAngle = Math.atan2(worldMY - basePoint.y, worldMX - basePoint.x);
+
+      // Snap direction to 45-degree increments when ortho is active
+      if (state.modifyOrtho) {
+        dirAngle = snapAngleTo45(dirAngle);
+      }
+
+      dx = dist * Math.cos(dirAngle);
+      dy = dist * Math.sin(dirAngle);
     }
+
     const transform = translateTransform(dx, dy);
+    const idSet = new Set(state.selectedShapeIds);
+    const selected = state.shapes.filter(s => idSet.has(s.id));
+    if (selected.length > 0) {
+      const ghosts = selected.map(s => transformShape(s, transform));
+      state.setDrawingPreview({ type: 'modifyPreview', shapes: ghosts });
+    }
+  }, [isModifyMode, focusedField, field1Text, setLockedDistance, drawingPoints, mousePosition, viewport]);
+
+  // Execute move/copy with typed distance
+  const executeModifyWithDistance = useCallback((dist: number, shiftKey: boolean = false) => {
+    if (!isModifyMode || drawingPoints.length < 1) return;
 
     const state = useAppStore.getState();
+    const constrainAxis = state.modifyConstrainAxis;
+    const basePoint = drawingPoints[0];
+
+    let dx: number, dy: number;
+
+    if (constrainAxis === 'x') {
+      // Distance along X axis only
+      const worldMX = (mousePosition.x - viewport.offsetX) / viewport.zoom;
+      dx = Math.sign(worldMX - basePoint.x) * Math.abs(dist);
+      dy = 0;
+    } else if (constrainAxis === 'y') {
+      // Distance along Y axis only
+      const worldMY = (mousePosition.y - viewport.offsetY) / viewport.zoom;
+      dy = Math.sign(worldMY - basePoint.y) * Math.abs(dist);
+      dx = 0;
+    } else {
+      // No constraint: use mouse direction
+      const worldMX = (mousePosition.x - viewport.offsetX) / viewport.zoom;
+      const worldMY = (mousePosition.y - viewport.offsetY) / viewport.zoom;
+      let dirAngle = Math.atan2(worldMY - basePoint.y, worldMX - basePoint.x);
+
+      // Snap direction to 45-degree increments when ortho is active
+      if (shiftKey || state.modifyOrtho) {
+        dirAngle = snapAngleTo45(dirAngle);
+      }
+
+      dx = dist * Math.cos(dirAngle);
+      dy = dist * Math.sin(dirAngle);
+    }
+
+    const transform = translateTransform(dx, dy);
+
     const idSet = new Set(state.selectedShapeIds);
     const selected = state.shapes.filter((s) => idSet.has(s.id));
     if (selected.length === 0) return;
 
-    if (activeTool === 'copy' || state.modifyCopy) {
+    if (activeTool === 'copy' || activeTool === 'copy2' || state.modifyCopy) {
       const copies = selected.map((s) => transformShape(s, transform));
       state.addShapes(copies);
-      // Keep base point active for repeated copies
-      state.setDrawingPreview(null);
-    } else {
+    }
+    if (!state.modifyCopy && activeTool === 'move') {
       const updates = selected.map((s) => ({
         id: s.id,
         updates: getShapeTransformUpdates(s, transform),
       }));
       state.updateShapes(updates);
-      state.clearDrawingPoints();
-      state.setDrawingPreview(null);
     }
-  }, [isModifyMode, drawingPoints, mousePosition, viewport, activeTool, moveAxisLock]);
+    state.clearDrawingPoints();
+    state.setDrawingPreview(null);
+    state.setLockedDistance(null);
+    state.setActiveTool('select');
+  }, [isModifyMode, drawingPoints, mousePosition, viewport, activeTool]);
 
   // Execute rotate with typed angle, direction from mouse position
   const executeRotateWithAngle = useCallback((angleDeg: number) => {
@@ -182,16 +267,24 @@ export function DynamicInput() {
 
   // Execute direct distance entry for line/polyline drawing
   // Places a point at the typed distance in the current tracking direction (or mouse direction)
-  const executeDirectDistanceEntry = useCallback((dist: number) => {
+  // angleDeg: explicit angle in degrees typed by user (0 is valid); null means no angle was typed
+  const executeDirectDistanceEntry = useCallback((dist: number, shiftKey: boolean = false, angleDeg: number | null = null) => {
     if (drawingPoints.length < 1) return;
     if (!['line', 'polyline'].includes(activeTool)) return;
 
     const basePoint = drawingPoints[drawingPoints.length - 1];
     const state = useAppStore.getState();
 
-    // Get direction: use tracking angle if available, otherwise calculate from mouse position
     let directionAngle: number;
-    if (state.directDistanceAngle !== null) {
+
+    if (angleDeg !== null) {
+      // Explicit angle typed by user (in degrees, CAD convention: 0=right, CCW positive)
+      // Convert to radians for math
+      directionAngle = angleDeg * (Math.PI / 180);
+    } else if (shiftKey) {
+      // Shift held without explicit angle: force 0 degrees (horizontal right)
+      directionAngle = 0;
+    } else if (state.directDistanceAngle !== null) {
       // Use tracking angle (already in radians, math coords)
       directionAngle = state.directDistanceAngle;
     } else {
@@ -351,11 +444,158 @@ export function DynamicInput() {
     state.setDrawingPreview(null);
   }, [drawingPoints, activeTool]);
 
+  // Execute structural tool (wall/gridline/beam) distance entry
+  // Computes the endpoint from typed distance + mouse direction, then creates the shape
+  // angleDeg: explicit angle in degrees typed by user (0 is valid); null means no angle was typed
+  const executeStructuralDistanceEntry = useCallback((dist: number, shiftKey: boolean = false, angleDeg: number | null = null) => {
+    if (drawingPoints.length < 1) return;
+    if (!['wall', 'gridline', 'beam'].includes(activeTool)) return;
+
+    const basePoint = drawingPoints[0];
+    const state = useAppStore.getState();
+
+    let directionAngle: number;
+
+    if (angleDeg !== null) {
+      // Explicit angle typed by user (in degrees, CAD convention: 0=right, CCW positive)
+      directionAngle = angleDeg * (Math.PI / 180);
+    } else if (shiftKey) {
+      // Shift held without explicit angle: force 0 degrees (horizontal right)
+      directionAngle = 0;
+    } else if (state.directDistanceAngle !== null) {
+      directionAngle = state.directDistanceAngle;
+    } else {
+      const worldMX = (mousePosition.x - viewport.offsetX) / viewport.zoom;
+      const worldMY = (mousePosition.y - viewport.offsetY) / viewport.zoom;
+      directionAngle = Math.atan2(worldMY - basePoint.y, worldMX - basePoint.x);
+    }
+
+    // Calculate endpoint
+    const endPoint = {
+      x: basePoint.x + dist * Math.cos(directionAngle),
+      y: basePoint.y + dist * Math.sin(directionAngle),
+    };
+
+    // Only create if there's a meaningful distance
+    const dx = Math.abs(endPoint.x - basePoint.x);
+    const dy = Math.abs(endPoint.y - basePoint.y);
+    if (dx <= 1 && dy <= 1) return;
+
+    if (activeTool === 'wall' && state.pendingWall) {
+      const pw = state.pendingWall;
+      const wallShape = {
+        id: crypto.randomUUID(),
+        type: 'wall' as const,
+        layerId: state.activeLayerId,
+        drawingId: state.activeDrawingId,
+        style: { ...state.currentStyle },
+        visible: true,
+        locked: false,
+        start: basePoint,
+        end: endPoint,
+        thickness: pw.thickness,
+        wallTypeId: pw.wallTypeId,
+        justification: pw.justification,
+        showCenterline: pw.showCenterline,
+        startCap: pw.startCap,
+        endCap: pw.endCap,
+        // Legacy hatch fields - renderer resolves hatch from materialHatchSettings
+        hatchType: 'none' as const,
+        hatchAngle: 45,
+        hatchSpacing: 50,
+      };
+      state.addShape(wallShape);
+
+      // Chain drawing: clear and start next segment from endpoint
+      state.clearDrawingPoints();
+      state.setDrawingPreview(null);
+      if (pw.continueDrawing !== false) {
+        state.addDrawingPoint(endPoint);
+      }
+    } else if (activeTool === 'gridline' && state.pendingGridline) {
+      const pg = state.pendingGridline;
+
+      // Auto-detect orientation and resolve label:
+      //   Horizontal (|dx| > |dy|) → letters (A, B, C...)
+      //   Vertical   (|dy| > |dx|) → numbers (1, 2, 3...)
+      const horizontal = isGridlineHorizontal(basePoint, endPoint);
+      const label = getNextGridlineLabel(pg.label, horizontal, state.activeDrawingId);
+
+      const gridlineShape = {
+        id: crypto.randomUUID(),
+        type: 'gridline' as const,
+        layerId: state.activeLayerId,
+        drawingId: state.activeDrawingId,
+        style: {
+          ...state.currentStyle,
+          lineStyle: 'dashdot' as const,
+        },
+        visible: true,
+        locked: false,
+        start: basePoint,
+        end: endPoint,
+        label,
+        bubblePosition: pg.bubblePosition,
+        bubbleRadius: pg.bubbleRadius,
+        fontSize: pg.fontSize,
+      };
+      state.addShape(gridlineShape);
+
+      // Auto-increment label for next gridline
+      const nextLabel = getNextIncrementedLabel(label, state.activeDrawingId);
+
+      state.clearDrawingPoints();
+      state.setDrawingPreview(null);
+      state.setPendingGridline({
+        ...pg,
+        label: nextLabel,
+      });
+    } else if (activeTool === 'beam' && state.pendingBeam) {
+      const pb = state.pendingBeam;
+      const beamShape = {
+        id: crypto.randomUUID(),
+        type: 'beam' as const,
+        layerId: state.activeLayerId,
+        drawingId: state.activeDrawingId,
+        style: { ...state.currentStyle },
+        visible: true,
+        locked: false,
+        start: basePoint,
+        end: endPoint,
+        profileType: pb.profileType,
+        profileParameters: pb.parameters,
+        presetId: pb.presetId,
+        presetName: pb.presetName,
+        flangeWidth: pb.flangeWidth,
+        justification: pb.justification,
+        material: pb.material,
+        showCenterline: pb.showCenterline,
+        showLabel: pb.showLabel,
+        rotation: 0,
+        viewMode: pb.viewMode || 'plan',
+      };
+      state.addShape(beamShape);
+
+      // Chain drawing: clear and start next segment from endpoint
+      state.clearDrawingPoints();
+      state.setDrawingPreview(null);
+      if (pb.continueDrawing !== false) {
+        state.addDrawingPoint(endPoint);
+      }
+    }
+
+    // Clear tracking state
+    state.setCurrentTrackingLines([]);
+    state.setTrackingPoint(null);
+    state.setDirectDistanceAngle(null);
+  }, [drawingPoints, activeTool, mousePosition, viewport]);
+
   // Apply values and notify store
-  const applyValues = useCallback(() => {
+  // shiftKey indicates whether Shift was held when Enter was pressed (for ortho snapping)
+  const applyValues = useCallback((shiftKey: boolean = false) => {
     if (isRotateMode) {
-      const v1 = field1Text !== '' ? Number(field1Text) : null;
-      if (v1 !== null && !isNaN(v1)) {
+      const v1 = field1Text !== '' ? evaluateExpression(field1Text) : null;
+      if (v1 !== null) {
         executeRotateWithAngle(v1);
       }
       setFocusedField(-1);
@@ -364,21 +604,52 @@ export function DynamicInput() {
     }
 
     if (isModifyMode) {
-      const v1 = field1Text !== '' ? Number(field1Text) : null;
-      if (v1 !== null && !isNaN(v1)) {
-        executeModifyWithDistance(v1);
+      const v1 = field1Text !== '' ? evaluateExpression(field1Text) : null;
+      if (v1 !== null) {
+        executeModifyWithDistance(v1, shiftKey);
       }
       setFocusedField(-1);
       setField1Text('');
       return;
     }
 
+    // Array tool: typing a count updates arrayCount in the store
+    if (isArrayMode) {
+      const typedCount = field1Text !== '' ? evaluateExpression(field1Text) : null;
+      if (typedCount !== null && typedCount >= 2) {
+        setArrayCount(Math.round(typedCount));
+      }
+      setFocusedField(-1);
+      setField1Text('');
+      setField2Text('');
+      return;
+    }
+
     // Direct distance entry for line/polyline tools
     // When user types a distance and presses Enter, place the point immediately
     if ((activeTool === 'line' || activeTool === 'polyline') && drawingPoints.length > 0) {
-      const v1 = field1Text !== '' ? Number(field1Text) : null;
-      if (v1 !== null && !isNaN(v1) && v1 > 0) {
-        executeDirectDistanceEntry(v1);
+      const v1 = field1Text !== '' ? evaluateExpression(field1Text) : null;
+      if (v1 !== null && v1 > 0) {
+        // Parse angle from field2 if entered (0 is a valid angle, so check for non-empty string)
+        const typedAngle = field2Text !== '' ? evaluateExpression(field2Text) : null;
+        // Also use lockedAngle from state if it was set via Tab (and no new angle typed)
+        const effectiveAngle = typedAngle !== null ? typedAngle : useAppStore.getState().lockedAngle;
+        executeDirectDistanceEntry(v1, shiftKey, effectiveAngle);
+        setFocusedField(-1);
+        setField1Text('');
+        setField2Text('');
+        return;
+      }
+    }
+
+    // Structural tools (wall, gridline, beam) direct distance entry
+    if (['wall', 'gridline', 'beam'].includes(activeTool) && drawingPoints.length > 0) {
+      const v1 = field1Text !== '' ? evaluateExpression(field1Text) : null;
+      if (v1 !== null && v1 > 0) {
+        // Parse angle from field2 if entered (0 is a valid angle, so check for non-empty string)
+        const typedAngle = field2Text !== '' ? evaluateExpression(field2Text) : null;
+        const effectiveAngle = typedAngle !== null ? typedAngle : useAppStore.getState().lockedAngle;
+        executeStructuralDistanceEntry(v1, shiftKey, effectiveAngle);
         setFocusedField(-1);
         setField1Text('');
         setField2Text('');
@@ -392,23 +663,23 @@ export function DynamicInput() {
       let width: number | null = null;
       let height: number | null = null;
 
-      // Check for comma-separated input in field1 (e.g., "400,500")
+      // Check for comma-separated input in field1 (e.g., "400,500" or "3*100,250+250")
       if (field1Text.includes(',')) {
         const parts = field1Text.split(',').map(s => s.trim());
         if (parts.length >= 2) {
-          const w = Number(parts[0]);
-          const h = Number(parts[1]);
-          if (!isNaN(w) && !isNaN(h) && w > 0 && h > 0) {
+          const w = evaluateExpression(parts[0]);
+          const h = evaluateExpression(parts[1]);
+          if (w !== null && h !== null && w > 0 && h > 0) {
             width = w;
             height = h;
           }
         }
       } else {
         // Use separate fields
-        const w = field1Text !== '' ? Number(field1Text) : null;
-        const h = field2Text !== '' ? Number(field2Text) : null;
-        if (w !== null && !isNaN(w) && w > 0) width = w;
-        if (h !== null && !isNaN(h) && h > 0) height = h;
+        const w = field1Text !== '' ? evaluateExpression(field1Text) : null;
+        const h = field2Text !== '' ? evaluateExpression(field2Text) : null;
+        if (w !== null && w > 0) width = w;
+        if (h !== null && h > 0) height = h;
       }
 
       // If we have both dimensions, create the rectangle
@@ -424,8 +695,8 @@ export function DynamicInput() {
     // Circle direct radius entry
     // Type radius and press Enter to create circle
     if (activeTool === 'circle' && drawingPoints.length > 0) {
-      const radius = field1Text !== '' ? Number(field1Text) : null;
-      if (radius !== null && !isNaN(radius) && radius > 0) {
+      const radius = field1Text !== '' ? evaluateExpression(field1Text) : null;
+      if (radius !== null && radius > 0) {
         executeCircleEntry(radius);
         setFocusedField(-1);
         setField1Text('');
@@ -440,23 +711,23 @@ export function DynamicInput() {
       let radiusX: number | null = null;
       let radiusY: number | null = null;
 
-      // Check for comma-separated input in field1 (e.g., "100,50")
+      // Check for comma-separated input in field1 (e.g., "100,50" or "50*2,25+25")
       if (field1Text.includes(',')) {
         const parts = field1Text.split(',').map(s => s.trim());
         if (parts.length >= 2) {
-          const rx = Number(parts[0]);
-          const ry = Number(parts[1]);
-          if (!isNaN(rx) && !isNaN(ry) && rx > 0 && ry > 0) {
+          const rx = evaluateExpression(parts[0]);
+          const ry = evaluateExpression(parts[1]);
+          if (rx !== null && ry !== null && rx > 0 && ry > 0) {
             radiusX = rx;
             radiusY = ry;
           }
         }
       } else {
         // Use separate fields
-        const rx = field1Text !== '' ? Number(field1Text) : null;
-        const ry = field2Text !== '' ? Number(field2Text) : null;
-        if (rx !== null && !isNaN(rx) && rx > 0) radiusX = rx;
-        if (ry !== null && !isNaN(ry) && ry > 0) radiusY = ry;
+        const rx = field1Text !== '' ? evaluateExpression(field1Text) : null;
+        const ry = field2Text !== '' ? evaluateExpression(field2Text) : null;
+        if (rx !== null && rx > 0) radiusX = rx;
+        if (ry !== null && ry > 0) radiusY = ry;
       }
 
       // If we have both radii, create the ellipse
@@ -470,18 +741,18 @@ export function DynamicInput() {
     }
 
     // For other tools or if no distance entered, just lock the values
-    const v1 = field1Text !== '' ? Number(field1Text) : null;
-    const v2 = field2Text !== '' ? Number(field2Text) : null;
+    const v1 = field1Text !== '' ? evaluateExpression(field1Text) : null;
+    const v2 = field2Text !== '' ? evaluateExpression(field2Text) : null;
 
-    if (v1 !== null && !isNaN(v1)) {
+    if (v1 !== null) {
       setLockedDistance(v1);
     }
-    if (v2 !== null && !isNaN(v2)) {
+    if (v2 !== null) {
       setLockedAngle(v2);
     }
 
     setFocusedField(-1);
-  }, [isRotateMode, isModifyMode, field1Text, field2Text, activeTool, drawingPoints, setLockedDistance, setLockedAngle, executeModifyWithDistance, executeRotateWithAngle, executeDirectDistanceEntry, executeRectangleEntry, executeCircleEntry, executeEllipseEntry]);
+  }, [isRotateMode, isModifyMode, isArrayMode, field1Text, field2Text, activeTool, drawingPoints, setLockedDistance, setLockedAngle, setArrayCount, executeModifyWithDistance, executeRotateWithAngle, executeDirectDistanceEntry, executeStructuralDistanceEntry, executeRectangleEntry, executeCircleEntry, executeEllipseEntry]);
 
   // Global keyboard handler for Tab, Enter, and numeric input
   useEffect(() => {
@@ -496,12 +767,12 @@ export function DynamicInput() {
         } else if (focusedField === 0) {
           if (isModifyMode || isRotateMode) {
             // For modify/rotate tools, Tab applies the value
-            applyValues();
+            applyValues(e.shiftKey);
             return;
           }
           // Apply field 1 value
-          const v1 = field1Text !== '' ? Number(field1Text) : null;
-          if (v1 !== null && !isNaN(v1)) {
+          const v1 = field1Text !== '' ? evaluateExpression(field1Text) : null;
+          if (v1 !== null) {
             setLockedDistance(v1);
           }
           const config = TOOL_FIELDS[activeTool];
@@ -512,8 +783,8 @@ export function DynamicInput() {
           }
         } else {
           // Apply field 2 value
-          const v2 = field2Text !== '' ? Number(field2Text) : null;
-          if (v2 !== null && !isNaN(v2)) {
+          const v2 = field2Text !== '' ? evaluateExpression(field2Text) : null;
+          if (v2 !== null) {
             setLockedAngle(v2);
           }
           setFocusedField(-1);
@@ -524,13 +795,13 @@ export function DynamicInput() {
       // Enter applies values
       if (e.key === 'Enter' && focusedField !== -1) {
         e.preventDefault();
-        applyValues();
+        applyValues(e.shiftKey);
         return;
       }
 
       // Typing a number auto-focuses field 1
       // Allow comma for "width,height" format (e.g., "400,500")
-      if (focusedField === -1 && /^[0-9.\-,]$/.test(e.key)) {
+      if (focusedField === -1 && /^[0-9.\-,+*/()]$/.test(e.key)) {
         e.preventDefault();
         setField1Text(e.key === '-' ? '-' : e.key);
         setFocusedField(0);
@@ -549,45 +820,9 @@ export function DynamicInput() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showDynamicInput, focusedField, field1Text, field2Text, activeTool, applyValues, setLockedDistance, setLockedAngle]);
 
-  // Live preview: as user types a distance in modify mode, update the ghost preview
-  useEffect(() => {
-    if (!isModifyMode || focusedField !== 0 || !field1Text) return;
-    const dist = Number(field1Text);
-    if (isNaN(dist) || dist === 0) return;
-
-    const basePoint = drawingPoints[0];
-    const state = useAppStore.getState();
-    const worldMX = (mousePosition.x - viewport.offsetX) / viewport.zoom;
-    const worldMY = (mousePosition.y - viewport.offsetY) / viewport.zoom;
-
-    let dx: number, dy: number;
-    if (state.moveAxisLock === 'x') {
-      dx = dist * Math.sign(worldMX - basePoint.x || 1);
-      dy = 0;
-    } else if (state.moveAxisLock === 'y') {
-      dx = 0;
-      dy = dist * Math.sign(worldMY - basePoint.y || 1);
-    } else {
-      const dirX = worldMX - basePoint.x;
-      const dirY = worldMY - basePoint.y;
-      const dirLen = Math.hypot(dirX, dirY);
-      if (dirLen < 0.001) return;
-      dx = (dirX / dirLen) * dist;
-      dy = (dirY / dirLen) * dist;
-    }
-
-    const transform = translateTransform(dx, dy);
-    const idSet = new Set(state.selectedShapeIds);
-    const selected = state.shapes.filter((s) => idSet.has(s.id));
-    if (selected.length === 0) return;
-
-    const ghosts = selected.map((s) => transformShape(s, transform));
-    state.setDrawingPreview({ type: 'modifyPreview', shapes: ghosts });
-  }, [isModifyMode, focusedField, field1Text, drawingPoints, mousePosition, viewport]);
-
   if (!showDynamicInput) return null;
 
-  const config = TOOL_FIELDS[activeTool] ?? (isRotateMode ? { field1Label: 'Angle', field2Label: '' } : isModifyMode ? { field1Label: 'Distance', field2Label: '' } : null);
+  const config = TOOL_FIELDS[activeTool] ?? (isRotateMode ? { field1Label: 'Angle', field2Label: '' } : isModifyMode ? { field1Label: 'Distance', field2Label: '' } : isArrayMode ? { field1Label: 'Count', field2Label: 'Distance' } : isStructuralMode ? { field1Label: 'Distance', field2Label: 'Angle' } : null);
   if (!config) return null;
 
   // Convert screen position to world coordinates
@@ -623,8 +858,12 @@ export function DynamicInput() {
   const tooltipY = Math.min(mousePosition.y + 20, canvasSize.height - 100);
 
   // Display values: use locked if set, otherwise live
-  const displayVal1 = formatLength(lockedDistance !== null ? lockedDistance : distance, unitSettings);
-  const displayVal2 = formatAngle(lockedAngle !== null ? lockedAngle : angle, unitSettings);
+  const displayVal1 = isArrayMode
+    ? String(arrayCount)
+    : formatLength(lockedDistance !== null ? lockedDistance : distance, unitSettings);
+  const displayVal2 = isArrayMode
+    ? formatLength(distance, unitSettings)
+    : formatAngle(lockedAngle !== null ? lockedAngle : angle, unitSettings);
 
   return (
     <div
@@ -647,8 +886,8 @@ export function DynamicInput() {
               value={field1Text}
               onChange={(e) => setField1Text(e.target.value)}
               onBlur={() => {
-                const v = field1Text !== '' ? Number(field1Text) : null;
-                if (v !== null && !isNaN(v)) {
+                const v = field1Text !== '' ? evaluateExpression(field1Text) : null;
+                if (v !== null) {
                   setLockedDistance(v);
                 }
               }}
@@ -681,8 +920,8 @@ export function DynamicInput() {
                 value={field2Text}
                 onChange={(e) => setField2Text(e.target.value)}
                 onBlur={() => {
-                  const v = field2Text !== '' ? Number(field2Text) : null;
-                  if (v !== null && !isNaN(v)) {
+                  const v = field2Text !== '' ? evaluateExpression(field2Text) : null;
+                  if (v !== null) {
                     setLockedAngle(v);
                   }
                 }}
@@ -724,12 +963,16 @@ export function DynamicInput() {
         {/* Hint */}
         {focusedField === -1 && (
           <div className="border-t border-cad-border mt-1.5 pt-1 text-cad-text-dim text-[9px]">
-            {activeTool === 'rectangle'
+            {activeTool === 'array'
+              ? 'Type count + Enter, click end point'
+              : activeTool === 'rectangle'
               ? 'Type W,H or W Tab H + Enter'
               : activeTool === 'circle'
               ? 'Type radius + Enter'
               : activeTool === 'ellipse'
               ? 'Type RX,RY or RX Tab RY + Enter'
+              : activeTool === 'wall' || activeTool === 'gridline' || activeTool === 'beam'
+              ? 'Type distance + Enter to place endpoint'
               : 'Type distance + Enter to place point'}
           </div>
         )}

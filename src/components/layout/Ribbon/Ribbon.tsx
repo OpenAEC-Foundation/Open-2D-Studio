@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, memo, useCallback } from 'react';
+import { useState, useRef, useEffect, memo, useCallback, useMemo } from 'react';
 import {
   MousePointer2,
   Hand,
@@ -19,6 +19,7 @@ import {
   Settings,
   ClipboardPaste,
   ChevronDown,
+  ChevronRight,
   CheckSquare,
   XSquare,
   Sun,
@@ -30,6 +31,21 @@ import {
   ArrowDown,
   ArrowDownToLine,
   ImageIcon,
+  Box,
+  Orbit,
+  Footprints,
+  Layers,
+  Eye,
+  EyeOff,
+  Download,
+  FileText,
+  FolderTree,
+  Link2,
+  Unlink,
+  RefreshCw,
+  FolderOpen,
+  ClipboardCopy,
+  Info,
 } from 'lucide-react';
 import type { UITheme } from '../../../state/slices/snapSlice';
 import { UI_THEMES } from '../../../state/slices/snapSlice';
@@ -66,9 +82,28 @@ import {
   AngularDimensionIcon,
   RadiusDimensionIcon,
   DiameterDimensionIcon,
-  SteelSectionIcon,
   BeamIcon,
+  GridLineIcon,
+  LevelIcon,
+  SectionDetailIcon,
+  PileIcon,
+  CPTIcon,
+  WallIcon,
+  SlabIcon,
+  SpaceIcon,
+  LabelIcon,
+  MiterJoinIcon,
+  PlateSystemIcon,
+  SpotElevationIcon,
 } from '../../shared/CadIcons';
+import { useFileOperations } from '../../../hooks/file/useFileOperations';
+import { SelectionFilterBar } from './SelectionFilterBar';
+import { QuickAccessBar } from './QuickAccessBar';
+import type { Shape, BeamShape } from '../../../types/geometry';
+import type { ProjectStructure } from '../../../state/slices/parametricSlice';
+import { triggerBonsaiSync, saveBonsaiSyncSettings, generateBlenderWatcherScript } from '../../../services/bonsaiSync';
+import { ALL_IFC_CATEGORIES, IFC_CATEGORY_LABELS, getIfcCategory } from '../../../utils/ifcCategoryUtils';
+import { getNextSectionLabel } from '../../../hooks/drawing/useSectionCalloutDrawing';
 import './Ribbon.css';
 
 /**
@@ -343,12 +378,205 @@ function ThemeSelector({ currentTheme, onThemeChange }: ThemeSelectorProps) {
   );
 }
 
+// ============================================================================
+// IFC Spatial Tree — helper to categorize shapes by IFC type
+// ============================================================================
+
+/** Map a shape to its IFC entity class name */
+function shapeToIfcClass(shape: Shape): string {
+  switch (shape.type) {
+    case 'wall': return 'IfcWall';
+    case 'beam': {
+      const beam = shape as BeamShape;
+      return beam.viewMode === 'section' ? 'IfcColumn' : 'IfcBeam';
+    }
+    case 'slab': return 'IfcSlab';
+    case 'pile': return 'IfcPile';
+    case 'cpt': return 'IfcBuildingElementProxy';
+    case 'foundation-zone': return 'IfcBuildingElementProxy';
+    case 'gridline': return 'IfcGrid';
+    case 'level': return 'IfcBuildingStorey';
+    case 'spot-elevation': return 'IfcAnnotation';
+    case 'space': return 'IfcSpace';
+    case 'line':
+    case 'arc':
+    case 'circle':
+    case 'polyline':
+    case 'rectangle':
+    case 'dimension':
+    case 'text':
+    case 'section-callout':
+      return 'IfcAnnotation';
+    default:
+      return 'Other';
+  }
+}
+
+/** Group shapes by IFC class and return sorted entries with counts */
+function groupShapesByIfcClass(shapes: Shape[]): { ifcClass: string; count: number }[] {
+  const map = new Map<string, number>();
+  for (const s of shapes) {
+    const cls = shapeToIfcClass(s);
+    if (cls === 'Other') continue;
+    map.set(cls, (map.get(cls) || 0) + 1);
+  }
+  // Sort: structural first, then annotation
+  const order = ['IfcWall', 'IfcColumn', 'IfcBeam', 'IfcSlab', 'IfcPile', 'IfcSpace', 'IfcGrid', 'IfcBuildingStorey', 'IfcAnnotation'];
+  return Array.from(map.entries())
+    .sort((a, b) => {
+      const ia = order.indexOf(a[0]);
+      const ib = order.indexOf(b[0]);
+      return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    })
+    .map(([ifcClass, count]) => ({ ifcClass, count }));
+}
+
+/** Collapsible tree node used in the IFC tab */
+function IfcTreeNode({ label, badge, children, defaultOpen = true, depth = 0 }: {
+  label: string;
+  badge?: string | number;
+  children?: React.ReactNode;
+  defaultOpen?: boolean;
+  depth?: number;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const hasChildren = !!children;
+  return (
+    <div style={{ paddingLeft: depth > 0 ? 12 : 0 }}>
+      <div
+        className="ifc-tree-node"
+        onClick={() => hasChildren && setOpen(!open)}
+        style={{ cursor: hasChildren ? 'pointer' : 'default' }}
+      >
+        {hasChildren ? (
+          open ? <ChevronDown size={10} className="ifc-tree-chevron" /> : <ChevronRight size={10} className="ifc-tree-chevron" />
+        ) : (
+          <span className="ifc-tree-dot" />
+        )}
+        <span className="ifc-tree-label">{label}</span>
+        {badge !== undefined && <span className="ifc-tree-badge">{badge}</span>}
+      </div>
+      {hasChildren && open && <div className="ifc-tree-children">{children}</div>}
+    </div>
+  );
+}
+
+/** The IFC spatial structure tree rendered inside the ribbon IFC tab */
+function IfcSpatialTree({ shapes, projectStructure }: { shapes: Shape[]; projectStructure: ProjectStructure }) {
+  const grouped = useMemo(() => groupShapesByIfcClass(shapes), [shapes]);
+  const totalElements = useMemo(() => grouped.reduce((sum, g) => sum + g.count, 0), [grouped]);
+
+  return (
+    <div className="ifc-tree-container">
+      <IfcTreeNode label="IfcProject" badge={`${totalElements} elements`} defaultOpen>
+        <IfcTreeNode label={`IfcSite: ${projectStructure.siteName}`} depth={1} defaultOpen>
+          {projectStructure.buildings.map((building) => (
+            <IfcTreeNode key={building.id} label={`IfcBuilding: ${building.name}`} depth={1} defaultOpen>
+              {building.storeys.length > 0 ? (
+                building.storeys
+                  .slice()
+                  .sort((a, b) => b.elevation - a.elevation)
+                  .map((storey) => (
+                    <IfcTreeNode
+                      key={storey.id}
+                      label={`IfcBuildingStorey: ${storey.name}`}
+                      badge={`${storey.elevation >= 0 ? '+' : ''}${storey.elevation} mm`}
+                      depth={1}
+                      defaultOpen={false}
+                    >
+                      {grouped.map((g) => (
+                        <IfcTreeNode
+                          key={g.ifcClass}
+                          label={g.ifcClass}
+                          badge={g.count}
+                          depth={1}
+                        />
+                      ))}
+                    </IfcTreeNode>
+                  ))
+              ) : (
+                <IfcTreeNode label="IfcBuildingStorey: Ground Floor" badge="+0 mm" depth={1} defaultOpen={false}>
+                  {grouped.map((g) => (
+                    <IfcTreeNode
+                      key={g.ifcClass}
+                      label={g.ifcClass}
+                      badge={g.count}
+                      depth={1}
+                    />
+                  ))}
+                </IfcTreeNode>
+              )}
+            </IfcTreeNode>
+          ))}
+        </IfcTreeNode>
+
+        {/* Summary row: element type counts */}
+        {grouped.length > 0 && (
+          <div className="ifc-tree-summary">
+            {grouped.map((g) => (
+              <span key={g.ifcClass} className="ifc-tree-summary-item">
+                {g.ifcClass.replace('Ifc', '')}: {g.count}
+              </span>
+            ))}
+          </div>
+        )}
+      </IfcTreeNode>
+    </div>
+  );
+}
+
+// ============================================================================
+// ShapeModeSelector — reusable Line / Arc / Rectangle toggle for structural tools
+// ============================================================================
+
+type ShapeMode = 'line' | 'arc' | 'rectangle' | 'circle';
+
+interface ShapeModeSelectorProps {
+  mode: ShapeMode;
+  onChange: (mode: ShapeMode) => void;
+}
+
+function ShapeModeSelector({ mode, onChange }: ShapeModeSelectorProps) {
+  return (
+    <RibbonGroup label="Shape">
+      <div className="flex gap-0.5">
+        <button
+          className={`px-2 py-1 text-xs rounded ${mode === 'line' ? 'bg-cad-accent/20 text-cad-accent border border-cad-accent/50' : 'bg-cad-bg border border-cad-border text-cad-text hover:bg-cad-hover'}`}
+          onClick={() => onChange('line')}
+        >
+          <LineIcon size={14} />
+        </button>
+        <button
+          className={`px-2 py-1 text-xs rounded ${mode === 'arc' ? 'bg-cad-accent/20 text-cad-accent border border-cad-accent/50' : 'bg-cad-bg border border-cad-border text-cad-text hover:bg-cad-hover'}`}
+          onClick={() => onChange('arc')}
+        >
+          <ArcIcon size={14} />
+        </button>
+        <button
+          className={`px-2 py-1 text-xs rounded ${mode === 'rectangle' ? 'bg-cad-accent/20 text-cad-accent border border-cad-accent/50' : 'bg-cad-bg border border-cad-border text-cad-text hover:bg-cad-hover'}`}
+          onClick={() => onChange('rectangle')}
+        >
+          <Square size={14} />
+        </button>
+        <button
+          className={`px-2 py-1 text-xs rounded ${mode === 'circle' ? 'bg-cad-accent/20 text-cad-accent border border-cad-accent/50' : 'bg-cad-bg border border-cad-border text-cad-text hover:bg-cad-hover'}`}
+          onClick={() => onChange('circle')}
+        >
+          <Circle size={14} />
+        </button>
+      </div>
+    </RibbonGroup>
+  );
+}
+
 interface RibbonProps {
   onOpenBackstage: () => void;
 }
 
 export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
   const [activeTab, setActiveTab] = useState<RibbonTab>('home');
+  const [ifcFilterOpen, setIfcFilterOpen] = useState(false);
+  const ifcFilterRef = useRef<HTMLDivElement>(null);
 
   const {
     activeTool,
@@ -360,6 +588,8 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
     toggleGrid,
     whiteBackground,
     toggleWhiteBackground,
+    showRotationGizmo,
+    toggleRotationGizmo,
     zoomIn,
     zoomOut,
     zoomToFit,
@@ -377,8 +607,20 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
     deselectAll,
     setFindReplaceDialogOpen,
     editorMode,
-    openSectionDialog,
     openBeamDialog,
+    setPendingGridline,
+    setPendingLevel,
+    openPileDialog,
+    setPendingCPT,
+    pendingWall,
+    setPendingWall,
+    lastUsedWallTypeId,
+    wallTypes,
+    pendingBeam,
+    setPendingBeam,
+    clearDrawingPoints,
+    setDrawingPreview,
+    setPendingSectionCallout,
     setPatternManagerOpen,
     setTextStyleManagerOpen,
 
@@ -395,16 +637,182 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
     // Extensions
     extensionRibbonTabs,
     extensionRibbonButtons,
+
+    // Wall dialog
+    openMaterialsDialog,
+    openWallTypesDialog,
+
+    // Slab
+    pendingSlab,
+    setPendingSlab,
+
+    // Space
+    setPendingSpace,
+
+    // Plate System
+    pendingPlateSystem,
+    setPendingPlateSystem,
+    openPlateSystemDialog,
+
+    // Project Structure
+    openProjectStructureDialog,
+
+    // IFC
+    ifcPanelOpen,
+    setIfcPanelOpen,
+    setIfcDashboardVisible,
+
+    // IFC category filter
+    hiddenIfcCategories,
+    toggleIfcCategoryVisibility,
+    setHiddenIfcCategories,
+
+    // Shapes & project structure (for IFC tab tree)
+    shapes,
+    projectStructure,
+    ifcEntityCount,
+    ifcFileSize,
+    regenerateIFC,
+
+    // Bonsai Sync
+    bonsaiSyncEnabled,
+    setBonsaiSyncEnabled,
+    bonsaiSyncPath,
+    setBonsaiSyncPath,
+    bonsaiLastSync,
+    bonsaiSyncStatus,
+    bonsaiSyncError,
+
+    // 3D view
+    show3DView,
+    setShow3DView,
+    viewMode3D,
+    setViewMode3D,
   } = useAppStore();
 
   const isSheetMode = editorMode !== 'drawing';
 
+  const { handleExportIFC } = useFileOperations();
+
+  // Bonsai Sync handlers
+  const handleBonsaiSyncToggle = useCallback(() => {
+    const newEnabled = !bonsaiSyncEnabled;
+    setBonsaiSyncEnabled(newEnabled);
+    saveBonsaiSyncSettings(bonsaiSyncPath, newEnabled);
+  }, [bonsaiSyncEnabled, bonsaiSyncPath, setBonsaiSyncEnabled]);
+
+  const handleBonsaiSetPath = useCallback(async () => {
+    const isTauri = !!(window as any).__TAURI_INTERNALS__;
+    if (isTauri) {
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        const result = await save({
+          filters: [{ name: 'IFC Files', extensions: ['ifc'] }],
+          title: 'Set Bonsai Sync Path',
+          defaultPath: bonsaiSyncPath || 'model.ifc',
+        });
+        if (result) {
+          setBonsaiSyncPath(result);
+          saveBonsaiSyncSettings(result, bonsaiSyncEnabled);
+        }
+      } catch {
+        // User cancelled
+      }
+    } else {
+      // Browser fallback: use a prompt dialog
+      const result = window.prompt(
+        'Enter the file path for Bonsai Sync IFC output:',
+        bonsaiSyncPath || 'model.ifc'
+      );
+      if (result) {
+        setBonsaiSyncPath(result);
+        saveBonsaiSyncSettings(result, bonsaiSyncEnabled);
+      }
+    }
+  }, [bonsaiSyncPath, bonsaiSyncEnabled, setBonsaiSyncPath]);
+
+  const handleBonsaiSyncNow = useCallback(() => {
+    triggerBonsaiSync();
+  }, []);
+
+  // Bonsai watcher script — copy to clipboard
+  const [scriptCopied, setScriptCopied] = useState(false);
+  const [showBonsaiInfo, setShowBonsaiInfo] = useState(false);
+  const bonsaiInfoRef = useRef<HTMLDivElement>(null);
+
+  const handleCopyBlenderScript = useCallback(() => {
+    const path = bonsaiSyncPath || 'C:\\model.ifc';
+    const script = generateBlenderWatcherScript(path);
+    navigator.clipboard.writeText(script).then(() => {
+      setScriptCopied(true);
+      setTimeout(() => setScriptCopied(false), 2000);
+    }).catch(() => {
+      // Fallback: open in a new window so user can copy manually
+      const win = window.open('', '_blank', 'width=700,height=500');
+      if (win) {
+        win.document.write(`<pre style="white-space:pre-wrap;font-size:12px;">${script.replace(/</g, '&lt;')}</pre>`);
+      }
+    });
+  }, [bonsaiSyncPath]);
+
+  // Close info popover on outside click
+  useEffect(() => {
+    if (!showBonsaiInfo) return;
+    const handler = (e: MouseEvent) => {
+      if (bonsaiInfoRef.current && !bonsaiInfoRef.current.contains(e.target as Node)) {
+        setShowBonsaiInfo(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showBonsaiInfo]);
+
+  // Close IFC filter dropdown on outside click
+  useEffect(() => {
+    if (!ifcFilterOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (ifcFilterRef.current && !ifcFilterRef.current.contains(e.target as Node)) {
+        setIfcFilterOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [ifcFilterOpen]);
+
+  // Count shapes per IFC category (for filter dropdown badge)
+  const ifcCategoryCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of shapes) {
+      const cat = getIfcCategory(s);
+      if (cat !== 'Other') {
+        map.set(cat, (map.get(cat) || 0) + 1);
+      }
+    }
+    return map;
+  }, [shapes]);
+
+  // Format the last sync time for display
+  const bonsaiLastSyncLabel = useMemo(() => {
+    if (!bonsaiLastSync) return 'Never';
+    const d = new Date(bonsaiLastSync);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }, [bonsaiLastSync]);
+
+  // Short display of sync path (filename only)
+  const bonsaiSyncPathShort = useMemo(() => {
+    if (!bonsaiSyncPath) return 'Not set';
+    const parts = bonsaiSyncPath.replace(/\\/g, '/').split('/');
+    return parts[parts.length - 1] || bonsaiSyncPath;
+  }, [bonsaiSyncPath]);
+
   const builtInTabs: { id: RibbonTab; label: string }[] = [
     { id: 'home', label: 'Home' },
     { id: 'modify', label: 'Modify' },
-    { id: 'structural', label: 'Structural' },
+    { id: 'structural', label: 'AEC' },
     { id: 'view', label: 'View' },
     { id: 'tools', label: 'Tools' },
+    { id: '3d', label: '3D' },
+    { id: 'ifc', label: 'IFC' },
   ];
 
   const extTabs = extensionRibbonTabs
@@ -460,7 +868,11 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
           <button
             key={tab.id}
             className={`ribbon-tab ${activeTab === tab.id ? 'active' : ''}`}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => {
+              setActiveTab(tab.id);
+              setIfcDashboardVisible(tab.id === 'ifc');
+              setShow3DView(tab.id === '3d');
+            }}
           >
             {tab.label}
           </button>
@@ -790,28 +1202,36 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 <RibbonSmallButton
                   icon={<Scissors size={14} />}
                   label="Trim"
-                  onClick={() => {}}
-                  disabled={true}
+                  onClick={() => switchToolAndCancelCommand('trim')}
+                  active={activeTool === 'trim'}
+                  disabled={isSheetMode}
+                  shortcut="TR"
                 />
                 <RibbonSmallButton
                   icon={<ExtendIcon size={14} />}
                   label="Extend"
-                  onClick={() => {}}
-                  disabled={true}
+                  onClick={() => switchToolAndCancelCommand('extend')}
+                  active={activeTool === 'extend'}
+                  disabled={isSheetMode}
+                  shortcut="EX"
                 />
                 <RibbonSmallButton
                   icon={<OffsetIcon size={14} />}
                   label="Offset"
-                  onClick={() => {}}
-                  disabled={true}
+                  onClick={() => switchToolAndCancelCommand('offset')}
+                  active={activeTool === 'offset'}
+                  disabled={isSheetMode}
+                  shortcut="OF"
                 />
               </RibbonButtonStack>
               <RibbonButtonStack>
                 <RibbonSmallButton
                   icon={<FilletIcon size={14} />}
                   label="Fillet"
-                  onClick={() => {}}
-                  disabled={true}
+                  onClick={() => switchToolAndCancelCommand('fillet')}
+                  active={activeTool === 'fillet'}
+                  disabled={isSheetMode}
+                  shortcut="FL"
                 />
                 <RibbonSmallButton
                   icon={<ChamferIcon size={14} />}
@@ -851,8 +1271,10 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 <RibbonSmallButton
                   icon={<StretchIcon size={14} />}
                   label="Stretch"
-                  onClick={() => {}}
-                  disabled={true}
+                  onClick={() => switchToolAndCancelCommand('elastic')}
+                  active={activeTool === 'elastic'}
+                  disabled={isSheetMode}
+                  shortcut="E"
                 />
                 <RibbonSmallButton
                   icon={<LengthenIcon size={14} />}
@@ -863,8 +1285,10 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 <RibbonSmallButton
                   icon={<AlignIcon size={14} />}
                   label="Align"
-                  onClick={() => {}}
-                  disabled={true}
+                  onClick={() => switchToolAndCancelCommand('align')}
+                  active={activeTool === 'align'}
+                  disabled={isSheetMode}
+                  shortcut="AL"
                 />
               </RibbonButtonStack>
               <RibbonSmallButton
@@ -950,25 +1374,218 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
         {/* Structural Tab */}
         <div className={`ribbon-content ${activeTab === 'structural' ? 'active' : ''}`}>
           <div className="ribbon-groups">
-            <RibbonGroup label="Section">
+            <RibbonGroup label="Elements">
               <RibbonButton
-                icon={<SteelSectionIcon size={24} />}
-                label="Section"
-                onClick={openSectionDialog}
+                icon={<BeamIcon size={24} />}
+                label="IfcBeam"
+                onClick={() => openBeamDialog()}
                 disabled={isSheetMode}
-                tooltip="Insert structural profile section"
-                shortcut="SE"
+                tooltip="Insert IfcColumn section or draw IfcBeam"
+                shortcut="BE"
+              />
+              <RibbonButton
+                icon={<WallIcon size={24} />}
+                label="IfcWall"
+                onClick={() => {
+                  const defaultTypeId = lastUsedWallTypeId ?? 'beton-200';
+                  const wt = wallTypes.find(w => w.id === defaultTypeId);
+                  setPendingWall({
+                    thickness: wt?.thickness ?? 200,
+                    wallTypeId: defaultTypeId,
+                    justification: 'center',
+                    showCenterline: true,
+                    startCap: 'butt',
+                    endCap: 'butt',
+                    continueDrawing: true,
+                    shapeMode: 'line',
+                    spaceBounding: true,
+                  });
+                  switchToDrawingTool('wall');
+                }}
+                disabled={isSheetMode}
+                tooltip="Draw IfcWall"
+                shortcut="WA"
+              />
+              <RibbonButton
+                icon={<SlabIcon size={24} />}
+                label="IfcSlab"
+                onClick={() => {
+                  setPendingSlab({
+                    thickness: 200,
+                    level: '0',
+                    elevation: 0,
+                    material: 'concrete',
+                    shapeMode: 'line',
+                  });
+                  switchToDrawingTool('slab');
+                }}
+                active={activeTool === 'slab'}
+                disabled={isSheetMode}
+                tooltip="Draw IfcSlab (closed polygon with hatch)"
+                shortcut="SL"
+              />
+              <RibbonButton
+                icon={<PlateSystemIcon size={24} />}
+                label="IfcPlateSystem"
+                onClick={openPlateSystemDialog}
+                disabled={isSheetMode}
+                tooltip="Draw IfcElementAssembly plate system (timber floor, HSB wall, ceiling)"
+                shortcut="PS"
+              />
+              <RibbonButton
+                icon={<PileIcon size={24} />}
+                label="IfcPile"
+                onClick={openPileDialog}
+                disabled={isSheetMode}
+                tooltip="Place IfcPile (IfcDeepFoundation)"
+                shortcut="PI"
+              />
+              <RibbonButton
+                icon={<CPTIcon size={24} />}
+                label="CPT"
+                onClick={() => {
+                  setPendingCPT({
+                    name: 'CPT-01',
+                    fontSize: 150,
+                    markerSize: 300,
+                  });
+                  switchToDrawingTool('cpt');
+                }}
+                active={activeTool === 'cpt'}
+                disabled={isSheetMode}
+                tooltip="Place CPT (Cone Penetration Test) marker for pile plan"
+                shortcut="CT"
+              />
+              <RibbonButton
+                icon={<SpaceIcon size={24} />}
+                label="IfcSpace"
+                onClick={() => {
+                  setPendingSpace({
+                    name: 'Room',
+                    fillColor: '#00ff00',
+                    fillOpacity: 0.1,
+                  });
+                  switchToDrawingTool('space');
+                }}
+                active={activeTool === 'space'}
+                disabled={isSheetMode}
+                tooltip="Detect and place IfcSpace (room) from surrounding walls"
+                shortcut="RM"
               />
             </RibbonGroup>
 
-            <RibbonGroup label="Framing">
+            {(activeTool === 'wall' || activeTool === 'beam' || activeTool === 'slab' || activeTool === 'plate-system') && (() => {
+              const mode: ShapeMode =
+                activeTool === 'wall' ? (pendingWall?.shapeMode ?? 'line') :
+                activeTool === 'beam' ? (pendingBeam?.shapeMode ?? 'line') :
+                activeTool === 'slab' ? (pendingSlab?.shapeMode ?? 'line') :
+                (pendingPlateSystem?.shapeMode ?? 'line');
+              const handleShapeModeChange = (m: ShapeMode) => {
+                // Clear any in-progress drawing points and preview when switching shape mode
+                clearDrawingPoints();
+                setDrawingPreview(null);
+                if (activeTool === 'wall' && pendingWall) {
+                  setPendingWall({ ...pendingWall, shapeMode: m });
+                } else if (activeTool === 'beam' && pendingBeam) {
+                  setPendingBeam({ ...pendingBeam, shapeMode: m });
+                } else if (activeTool === 'slab' && pendingSlab) {
+                  setPendingSlab({ ...pendingSlab, shapeMode: m });
+                } else if (activeTool === 'plate-system' && pendingPlateSystem) {
+                  setPendingPlateSystem({ ...pendingPlateSystem, shapeMode: m });
+                }
+              };
+              return (
+                <ShapeModeSelector mode={mode} onChange={handleShapeModeChange} />
+              );
+            })()}
+
+            <RibbonGroup label="Annotations">
               <RibbonButton
-                icon={<BeamIcon size={24} />}
-                label="Beam"
-                onClick={openBeamDialog}
+                icon={<GridLineIcon size={24} />}
+                label="IfcGrid"
+                onClick={() => {
+                  setPendingGridline({ label: '1', bubblePosition: 'both', bubbleRadius: 300, fontSize: 250 });
+                  switchToDrawingTool('gridline');
+                }}
                 disabled={isSheetMode}
-                tooltip="Draw structural beam in plan view"
-                shortcut="BE"
+                tooltip="Draw IfcGrid axis line (stramien)"
+                shortcut="GL"
+              />
+              <RibbonButton
+                icon={<LabelIcon size={24} />}
+                label="Label"
+                onClick={() => switchToDrawingTool('label')}
+                active={activeTool === 'label'}
+                disabled={isSheetMode}
+                tooltip="Place structural label with leader line"
+                shortcut="LB"
+              />
+              <RibbonButton
+                icon={<LevelIcon size={24} />}
+                label="2DLevel"
+                onClick={() => {
+                  setPendingLevel({ label: '0', labelPosition: 'end', bubbleRadius: 400, fontSize: 250, elevation: 0, peil: 0 });
+                  switchToDrawingTool('level');
+                }}
+                disabled={isSheetMode}
+                tooltip="Draw 2D level marker (annotation level)"
+                shortcut="LV"
+              />
+              <RibbonButton
+                icon={<SpotElevationIcon size={24} />}
+                label="IfcSpotElevation"
+                onClick={() => switchToDrawingTool('spot-elevation')}
+                active={activeTool === 'spot-elevation'}
+                disabled={isSheetMode}
+                tooltip="Place spot elevation marker with elevation label"
+                shortcut="SE"
+              />
+              <RibbonButton
+                icon={<SectionDetailIcon size={24} />}
+                label="Section/Detail"
+                onClick={() => {
+                  setPendingSectionCallout({ label: getNextSectionLabel(), bubbleRadius: 400, fontSize: 250, flipDirection: false, viewDepth: 5000 });
+                  switchToDrawingTool('section-callout');
+                }}
+                active={activeTool === 'section-callout'}
+                disabled={isSheetMode}
+                tooltip="Create section or detail callout"
+                shortcut="SD"
+              />
+            </RibbonGroup>
+
+            <RibbonGroup label="Connections">
+              <RibbonButton
+                icon={<MiterJoinIcon size={24} />}
+                label="Join"
+                onClick={() => switchToolAndCancelCommand('trim-walls')}
+                active={activeTool === 'trim-walls'}
+                disabled={isSheetMode}
+                tooltip="Miter join walls, beams or ducts at intersection (verstek)"
+                shortcut="TW"
+              />
+            </RibbonGroup>
+
+            <RibbonGroup label="Properties">
+              <RibbonButton
+                icon={<Palette size={24} />}
+                label="Materials"
+                onClick={openMaterialsDialog}
+                disabled={isSheetMode}
+                tooltip="Manage materials and wall types"
+              />
+              <RibbonButton
+                icon={<Settings size={24} />}
+                label="IfcTypes"
+                onClick={openWallTypesDialog}
+                disabled={isSheetMode}
+                tooltip="Manage IFC type definitions (walls, slabs)"
+              />
+              <RibbonButton
+                icon={<FolderTree size={24} />}
+                label="Project"
+                onClick={openProjectStructureDialog}
+                tooltip="Manage IFC project spatial hierarchy (Site / Building / Storey)"
               />
             </RibbonGroup>
             {renderExtensionButtonsForTab('structural')}
@@ -1018,6 +1635,71 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 onClick={toggleWhiteBackground}
                 active={whiteBackground}
               />
+              <RibbonButton
+                icon={<RotateCw size={24} />}
+                label="Rotation Gizmo"
+                onClick={toggleRotationGizmo}
+                active={showRotationGizmo}
+                tooltip="Show rotation handle on selected objects"
+              />
+            </RibbonGroup>
+
+            <RibbonGroup label="Filter">
+              <div ref={ifcFilterRef} style={{ position: 'relative', display: 'inline-block' }}>
+                <RibbonButton
+                  icon={hiddenIfcCategories.length > 0 ? <EyeOff size={24} /> : <Layers size={24} />}
+                  label="IFC Filter"
+                  onClick={() => setIfcFilterOpen(!ifcFilterOpen)}
+                  active={ifcFilterOpen || hiddenIfcCategories.length > 0}
+                  tooltip={hiddenIfcCategories.length > 0
+                    ? `IFC category filter — ${hiddenIfcCategories.length} categor${hiddenIfcCategories.length === 1 ? 'y' : 'ies'} hidden`
+                    : 'Show/hide IFC categories from the model view'}
+                />
+                {ifcFilterOpen && (
+                  <div
+                    className="absolute top-full left-0 mt-1 z-50 bg-cad-panel border border-cad-border rounded shadow-lg"
+                    style={{ minWidth: 260 }}
+                  >
+                    <div className="px-3 py-2 border-b border-cad-border flex items-center justify-between">
+                      <span className="text-xs font-semibold text-cad-text">IFC Categories</span>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => setHiddenIfcCategories([])}
+                          className="px-2 py-0.5 text-[10px] bg-cad-bg border border-cad-border text-cad-text hover:bg-cad-hover rounded"
+                        >
+                          Show All
+                        </button>
+                        <button
+                          onClick={() => setHiddenIfcCategories([...ALL_IFC_CATEGORIES])}
+                          className="px-2 py-0.5 text-[10px] bg-cad-bg border border-cad-border text-cad-text hover:bg-cad-hover rounded"
+                        >
+                          Hide All
+                        </button>
+                      </div>
+                    </div>
+                    <div className="py-1">
+                      {ALL_IFC_CATEGORIES.map(cat => {
+                        const isVisible = !hiddenIfcCategories.includes(cat);
+                        const count = ifcCategoryCounts.get(cat) || 0;
+                        return (
+                          <button
+                            key={cat}
+                            className={`w-full flex items-center gap-2 px-3 py-1 text-xs hover:bg-cad-hover ${!isVisible ? 'opacity-50' : ''}`}
+                            onClick={() => toggleIfcCategoryVisibility(cat)}
+                          >
+                            {isVisible
+                              ? <Eye size={12} className="text-cad-accent flex-shrink-0" />
+                              : <EyeOff size={12} className="text-cad-text-dim flex-shrink-0" />
+                            }
+                            <span className="text-cad-text flex-1 text-left">{IFC_CATEGORY_LABELS[cat] || cat}</span>
+                            <span className="text-cad-text-dim text-[10px] font-mono">{count}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
             </RibbonGroup>
 
             <RibbonGroup label="Appearance">
@@ -1030,6 +1712,15 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
               <ThemeSelector
                 currentTheme={uiTheme}
                 onThemeChange={setUITheme}
+              />
+            </RibbonGroup>
+            <RibbonGroup label="Panels">
+              <RibbonButton
+                icon={<span className="text-[11px] font-mono font-bold leading-none">IFC</span>}
+                label="IFC Model"
+                onClick={() => setIfcPanelOpen(!ifcPanelOpen)}
+                active={ifcPanelOpen}
+                tooltip="Toggle IFC model panel — view generated IFC4 STEP file"
               />
             </RibbonGroup>
             {renderExtensionButtonsForTab('view')}
@@ -1055,6 +1746,220 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
               />
             </RibbonGroup>
             {renderExtensionButtonsForTab('tools')}
+          </div>
+        </div>
+
+        {/* 3D Tab */}
+        <div className={`ribbon-content ${activeTab === '3d' ? 'active' : ''}`}>
+          <div className="ribbon-groups">
+            {/* View Group */}
+            <RibbonGroup label="View">
+              <RibbonButton
+                icon={<Box size={24} />}
+                label="3D View"
+                onClick={() => setShow3DView(!show3DView)}
+                active={show3DView}
+                tooltip="Switch to 3D perspective view"
+              />
+              <RibbonButton
+                icon={<Orbit size={24} />}
+                label="Orbit"
+                onClick={() => {}}
+                disabled={true}
+                tooltip="Orbit (coming soon)"
+              />
+              <RibbonButton
+                icon={<Footprints size={24} />}
+                label="Walk"
+                onClick={() => {}}
+                disabled={true}
+                tooltip="Walk (coming soon)"
+              />
+            </RibbonGroup>
+
+            {/* Display Group */}
+            <RibbonGroup label="Display">
+              <RibbonButton
+                icon={<Layers size={24} />}
+                label="Wireframe"
+                onClick={() => setViewMode3D('wireframe')}
+                active={viewMode3D === 'wireframe'}
+                disabled={!show3DView}
+                tooltip={show3DView ? 'Wireframe display mode' : 'Wireframe (enable 3D View first)'}
+              />
+              <RibbonButton
+                icon={<Eye size={24} />}
+                label="Shaded"
+                onClick={() => setViewMode3D('shaded')}
+                active={viewMode3D === 'shaded'}
+                disabled={!show3DView}
+                tooltip={show3DView ? 'Shaded/solid display mode' : 'Shaded (enable 3D View first)'}
+              />
+              <RibbonButton
+                icon={<EyeOff size={24} />}
+                label="Hidden Line"
+                onClick={() => setViewMode3D('hidden-line')}
+                active={viewMode3D === 'hidden-line'}
+                disabled={!show3DView}
+                tooltip={show3DView ? 'Hidden line removal mode' : 'Hidden Line (enable 3D View first)'}
+              />
+            </RibbonGroup>
+
+            {/* Export Group */}
+            <RibbonGroup label="Export">
+              <RibbonButton
+                icon={<Download size={24} />}
+                label="Export IFC"
+                onClick={handleExportIFC}
+                tooltip="Export current model as IFC file"
+              />
+              <RibbonButton
+                icon={<FileText size={24} />}
+                label="Export 3D PDF"
+                onClick={() => {}}
+                disabled={true}
+                tooltip="Export 3D PDF (coming soon)"
+              />
+            </RibbonGroup>
+            {renderExtensionButtonsForTab('3d')}
+          </div>
+        </div>
+
+        {/* IFC Tab */}
+        <div className={`ribbon-content ${activeTab === 'ifc' ? 'active' : ''}`}>
+          <div className="ribbon-groups" style={{ alignItems: 'stretch' }}>
+            {/* Spatial Structure Tree */}
+            <RibbonGroup label="Spatial Structure">
+              <div className="ifc-tree-ribbon-wrapper">
+                <IfcSpatialTree shapes={shapes} projectStructure={projectStructure} />
+              </div>
+            </RibbonGroup>
+
+            {/* Actions */}
+            <RibbonGroup label="Actions">
+              <RibbonButton
+                icon={<Download size={24} />}
+                label="Export IFC"
+                onClick={handleExportIFC}
+                tooltip="Export current model as IFC4 STEP file"
+              />
+              <RibbonButton
+                icon={<span className="text-[11px] font-mono font-bold leading-none">IFC</span>}
+                label="IFC Model"
+                onClick={() => setIfcPanelOpen(!ifcPanelOpen)}
+                active={ifcPanelOpen}
+                tooltip="Toggle IFC STEP file viewer panel"
+              />
+              <RibbonButtonStack>
+                <RibbonSmallButton
+                  icon={<RotateCw size={14} />}
+                  label="Regenerate"
+                  onClick={() => regenerateIFC()}
+                />
+                <RibbonSmallButton
+                  icon={<FolderTree size={14} />}
+                  label="Project"
+                  onClick={openProjectStructureDialog}
+                />
+              </RibbonButtonStack>
+            </RibbonGroup>
+
+            {/* Stats */}
+            <RibbonGroup label="Statistics">
+              <div className="ifc-stats-group">
+                <div className="ifc-stat-row">
+                  <span className="ifc-stat-label">Entities:</span>
+                  <span className="ifc-stat-value">{ifcEntityCount}</span>
+                </div>
+                <div className="ifc-stat-row">
+                  <span className="ifc-stat-label">Size:</span>
+                  <span className="ifc-stat-value">{ifcFileSize < 1024 ? `${ifcFileSize} B` : ifcFileSize < 1048576 ? `${(ifcFileSize / 1024).toFixed(1)} KB` : `${(ifcFileSize / 1048576).toFixed(2)} MB`}</span>
+                </div>
+                <div className="ifc-stat-row">
+                  <span className="ifc-stat-label">Schema:</span>
+                  <span className="ifc-stat-value">IFC4</span>
+                </div>
+              </div>
+            </RibbonGroup>
+            {/* Bonsai Sync */}
+            <RibbonGroup label="Bonsai Sync">
+              <RibbonButton
+                icon={bonsaiSyncEnabled ? <Link2 size={24} /> : <Unlink size={24} />}
+                label={bonsaiSyncEnabled ? 'Syncing' : 'Sync Off'}
+                onClick={handleBonsaiSyncToggle}
+                active={bonsaiSyncEnabled}
+                tooltip={bonsaiSyncEnabled
+                  ? 'Bonsai Sync is active -- click to disable'
+                  : 'Enable Bonsai Sync to auto-export IFC for Blender/Bonsai'}
+              />
+              <RibbonButtonStack>
+                <RibbonSmallButton
+                  icon={<FolderOpen size={14} />}
+                  label="Set Path"
+                  onClick={handleBonsaiSetPath}
+                />
+                <RibbonSmallButton
+                  icon={<RefreshCw size={14} />}
+                  label="Sync Now"
+                  onClick={handleBonsaiSyncNow}
+                  disabled={!bonsaiSyncPath}
+                />
+                <RibbonSmallButton
+                  icon={<ClipboardCopy size={14} />}
+                  label={scriptCopied ? 'Copied!' : 'Copy Script'}
+                  onClick={handleCopyBlenderScript}
+                />
+              </RibbonButtonStack>
+              <div className="bonsai-sync-status">
+                <div className="bonsai-sync-indicator-row">
+                  <span className={`bonsai-sync-dot ${bonsaiSyncEnabled ? (bonsaiSyncStatus === 'error' ? 'error' : bonsaiSyncStatus === 'syncing' ? 'syncing' : 'active') : 'inactive'}`} />
+                  <span className="bonsai-sync-status-text">
+                    {!bonsaiSyncEnabled ? 'Disabled' : bonsaiSyncStatus === 'syncing' ? 'Writing...' : bonsaiSyncStatus === 'error' ? 'Error' : 'Ready'}
+                  </span>
+                </div>
+                <div className="bonsai-sync-info-row" title={bonsaiSyncPath || 'No path set'}>
+                  <span className="bonsai-sync-info-label">File:</span>
+                  <span className="bonsai-sync-info-value">{bonsaiSyncPathShort}</span>
+                </div>
+                <div className="bonsai-sync-info-row">
+                  <span className="bonsai-sync-info-label">Last:</span>
+                  <span className="bonsai-sync-info-value">{bonsaiLastSyncLabel}</span>
+                </div>
+                {bonsaiSyncError && (
+                  <div className="bonsai-sync-info-row bonsai-sync-error-row" title={bonsaiSyncError}>
+                    <span className="bonsai-sync-info-value bonsai-sync-error-text">{bonsaiSyncError}</span>
+                  </div>
+                )}
+              </div>
+              {/* Info popover toggle */}
+              <div className="bonsai-sync-info-toggle" ref={bonsaiInfoRef}>
+                <button
+                  className="bonsai-sync-info-btn"
+                  onClick={() => setShowBonsaiInfo(!showBonsaiInfo)}
+                  title="How to set up Bonsai Live Sync"
+                >
+                  <Info size={14} />
+                </button>
+                {showBonsaiInfo && (
+                  <div className="bonsai-sync-info-popover">
+                    <div className="bonsai-sync-info-popover-title">Bonsai Live Sync Setup</div>
+                    <ol className="bonsai-sync-info-steps">
+                      <li>Click <strong>Set Path</strong> to choose where the IFC file will be written.</li>
+                      <li>Click <strong>Copy Script</strong> to copy the Blender watcher script.</li>
+                      <li>In Blender, open the <strong>Scripting</strong> workspace.</li>
+                      <li>Click <strong>New</strong>, paste the script, and press <strong>Alt+P</strong> to run it.</li>
+                      <li>Toggle <strong>Syncing</strong> on. Every model change will auto-export the IFC file.</li>
+                      <li>The Blender script detects the file change and reloads the model in Bonsai.</li>
+                    </ol>
+                    <div className="bonsai-sync-info-note">
+                      The watcher script polls the file every second. It uses Bonsai's <code>bpy.ops.bim.load_project()</code> to reload.
+                    </div>
+                  </div>
+                )}
+              </div>
+            </RibbonGroup>
+
+            {renderExtensionButtonsForTab('ifc')}
           </div>
         </div>
 
@@ -1118,6 +2023,12 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
           );
         })}
 
+      </div>
+
+      {/* Combined Quick Access + Selection Filter Bar - always visible, fixed height */}
+      <div className="quick-access-bar">
+        <QuickAccessBar />
+        <SelectionFilterBar />
       </div>
     </div>
   );

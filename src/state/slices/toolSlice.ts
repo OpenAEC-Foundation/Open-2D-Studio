@@ -6,6 +6,7 @@ import type { ToolType, ShapeStyle, Point, DrawingPreview, DefaultTextStyle } fr
 import type { DimensionType } from '../../types/dimension';
 import type { LeaderConfig } from '../../types/geometry';
 import { defaultStyle } from './types';
+import { DIMENSION_STYLE_PRESETS } from '../../constants/cadDefaults';
 
 // ============================================================================
 // State Interface
@@ -44,6 +45,8 @@ export interface ToolState {
   dimensionPrecision: number;
   dimensionArrowStyle: 'filled' | 'open' | 'dot' | 'tick' | 'none';
   linearDimensionDirection: 'auto' | 'horizontal' | 'vertical';
+  /** Active dimension style preset name (e.g., 'Default', 'DimAssociate') */
+  dimensionStylePreset: string;
 
   // Phase 6: Pick lines
   pickLinesMode: boolean;
@@ -53,15 +56,12 @@ export interface ToolState {
   textEditingId: string | null;     // ID of text shape being edited
   defaultTextStyle: DefaultTextStyle;
 
-  // Title block inline editing state
-  titleBlockEditingFieldId: string | null;   // ID of title block field being edited
-  hoveredTitleBlockFieldId: string | null;    // ID of title block field being hovered
-
   // Modify tool options
   modifyCopy: boolean;           // Move/Rotate/Mirror: copy instead of move
   modifyConstrain: boolean;      // Move/Copy: constrain to axis
+  modifyConstrainAxis: 'x' | 'y' | null;  // Move/Copy: specific axis constraint
+  modifyOrtho: boolean;          // Move/Copy: sticky 45° ortho mode (toggled by Shift)
   modifyMultiple: boolean;       // Copy: keep placing copies
-  moveAxisLock: 'none' | 'x' | 'y';  // Move/Copy: axis constraint (X/Y key toggle)
   scaleMode: 'graphical' | 'numerical';
   scaleFactor: number;
   filletRadius: number;
@@ -75,6 +75,7 @@ export interface ToolState {
   arrayCount: number;              // Number of copies (including original)
   arraySpacing: number;            // Linear: distance between copies
   arrayAngle: number;              // Radial: total angle span in degrees (default 360)
+  arrayMaintainRelation: boolean;  // Maintain associative relationship between array copies
 
   // Modify tool internal state
   modifyRefShapeId: string | null;  // For trim/extend: cutting/boundary edge ID
@@ -100,8 +101,22 @@ export interface ToolState {
   // Display Lineweight toggle
   showLineweight: boolean;
 
-  // Rotation Gizmo toggle
-  showRotationGizmo: boolean;
+  // Gridline label editing
+  editingGridlineLabel: {
+    shapeId: string;
+    bubbleEnd: 'start' | 'end';
+  } | null;
+
+  // Plate system edit mode (TAB to enter, TAB/ESC to exit)
+  plateSystemEditMode: boolean;
+  editingPlateSystemId: string | null;
+
+  // Plate system sub-tool state machine (active when in edit mode)
+  plateSystemSubTool: 'select' | 'add-point' | 'arc-edge' | 'add-opening' | 'delete';
+
+  // Plate system opening placement sub-mode
+  plateSystemOpeningMode: boolean;
+  selectedOpeningId: string | null;
 }
 
 // ============================================================================
@@ -136,6 +151,7 @@ export interface ToolActions {
   setDimensionPrecision: (precision: number) => void;
   setDimensionArrowStyle: (style: 'filled' | 'open' | 'dot' | 'tick' | 'none') => void;
   setLinearDimensionDirection: (dir: 'auto' | 'horizontal' | 'vertical') => void;
+  setDimensionStylePreset: (presetName: string) => void;
   setPickLinesMode: (enabled: boolean) => void;
   setPickLinesOffset: (offset: number) => void;
   setPolylineArcMode: (enabled: boolean) => void;
@@ -146,17 +162,12 @@ export interface ToolActions {
   endTextEditing: () => void;
   updateDefaultTextStyle: (style: Partial<DefaultTextStyle>) => void;
 
-  // Title block inline editing actions
-  startTitleBlockFieldEditing: (fieldId: string) => void;
-  endTitleBlockFieldEditing: () => void;
-  setHoveredTitleBlockFieldId: (fieldId: string | null) => void;
-
   // Modify tool actions
   setModifyCopy: (enabled: boolean) => void;
   setModifyConstrain: (enabled: boolean) => void;
+  setModifyConstrainAxis: (axis: 'x' | 'y' | null) => void;
+  toggleModifyOrtho: () => void;
   setModifyMultiple: (enabled: boolean) => void;
-  setMoveAxisLock: (axis: 'none' | 'x' | 'y') => void;
-  toggleMoveAxisLock: (axis: 'x' | 'y') => void;
   setScaleMode: (mode: 'graphical' | 'numerical') => void;
   setScaleFactor: (factor: number) => void;
   setFilletRadius: (radius: number) => void;
@@ -169,6 +180,7 @@ export interface ToolActions {
   setArrayCount: (count: number) => void;
   setArraySpacing: (spacing: number) => void;
   setArrayAngle: (angle: number) => void;
+  setArrayMaintainRelation: (enabled: boolean) => void;
 
   // Hatch tool actions
   setHatchPatternType: (type: 'solid' | 'diagonal' | 'crosshatch' | 'horizontal' | 'vertical' | 'dots' | 'custom') => void;
@@ -193,8 +205,15 @@ export interface ToolActions {
   // Display Lineweight toggle
   toggleShowLineweight: () => void;
 
-  // Rotation Gizmo toggle
-  toggleShowRotationGizmo: () => void;
+  // Gridline label editing actions
+  startGridlineLabelEdit: (shapeId: string, bubbleEnd: 'start' | 'end') => void;
+  endGridlineLabelEdit: () => void;
+
+  // Plate system edit mode actions
+  setPlateSystemEditMode: (editing: boolean, systemId?: string) => void;
+  setPlateSystemSubTool: (tool: 'select' | 'add-point' | 'arc-edge' | 'add-opening' | 'delete') => void;
+  setPlateSystemOpeningMode: (enabled: boolean) => void;
+  setSelectedOpeningId: (id: string | null) => void;
 }
 
 export type ToolSlice = ToolState & ToolActions;
@@ -230,16 +249,15 @@ export const initialToolState: ToolState = {
   dimensionPrecision: 2,
   dimensionArrowStyle: 'tick',
   linearDimensionDirection: 'auto',
+  dimensionStylePreset: 'Default',
   pickLinesMode: false,
   pickLinesOffset: 10,
 
   // Text tool state
   textEditingId: null,
-  titleBlockEditingFieldId: null,
-  hoveredTitleBlockFieldId: null,
   defaultTextStyle: {
     fontFamily: 'Osifont',
-    fontSize: 2.5,
+    fontSize: 1.8,
     bold: false,
     italic: false,
     underline: false,
@@ -250,8 +268,9 @@ export const initialToolState: ToolState = {
   // Modify tool options
   modifyCopy: false,
   modifyConstrain: false,
+  modifyConstrainAxis: null,
+  modifyOrtho: false,
   modifyMultiple: true,
-  moveAxisLock: 'none',
   scaleMode: 'graphical' as const,
   scaleFactor: 2,
   filletRadius: 5,
@@ -266,6 +285,7 @@ export const initialToolState: ToolState = {
   arrayCount: 5,
   arraySpacing: 20,
   arrayAngle: 360,
+  arrayMaintainRelation: false,
 
   // Hatch tool options
   hatchPatternType: 'diagonal' as const,
@@ -295,8 +315,17 @@ export const initialToolState: ToolState = {
   // Display Lineweight (default: off — lines render at 1 screen pixel)
   showLineweight: false,
 
-  // Rotation Gizmo (default: on so users discover it)
-  showRotationGizmo: true,
+  // Gridline label editing
+  editingGridlineLabel: null,
+
+  // Plate system edit mode
+  plateSystemEditMode: false,
+  editingPlateSystemId: null,
+  plateSystemSubTool: 'select' as const,
+
+  // Plate system opening placement
+  plateSystemOpeningMode: false,
+  selectedOpeningId: null,
 };
 
 // ============================================================================
@@ -312,9 +341,9 @@ export const createToolSlice = (
       // Track last tool for "Repeat" feature (only drawing/modify tools)
       const repeatableTools: ToolType[] = [
         'line', 'rectangle', 'circle', 'arc', 'polyline', 'ellipse', 'spline',
-        'text', 'leader', 'dimension', 'beam', 'hatch', 'filled-region',
-        'move', 'copy', 'rotate', 'scale', 'mirror', 'trim', 'extend',
-        'fillet', 'chamfer', 'offset', 'array'
+        'text', 'leader', 'label', 'dimension', 'beam', 'hatch', 'filled-region', 'slab',
+        'move', 'copy', 'copy2', 'rotate', 'scale', 'mirror', 'trim', 'extend',
+        'fillet', 'chamfer', 'offset', 'array', 'elastic', 'align', 'trim-walls'
       ];
       if (repeatableTools.includes(state.activeTool) && state.activeTool !== tool) {
         state.lastTool = state.activeTool;
@@ -329,7 +358,16 @@ export const createToolSlice = (
       state.polylineArcThroughPoint = null;
       state.modifyRefShapeId = null;
       state.sourceSnapAngle = null;
-      state.moveAxisLock = 'none';
+      state.modifyConstrainAxis = null;
+      state.modifyOrtho = false;
+      // Exit plate system edit mode when switching tools
+      if (tool !== 'select') {
+        state.plateSystemEditMode = false;
+        state.editingPlateSystemId = null;
+        state.plateSystemSubTool = 'select';
+        state.plateSystemOpeningMode = false;
+        state.selectedOpeningId = null;
+      }
       // Reset copy flag for mirror (default on)
       if (tool === 'mirror') {
         state.modifyCopy = true;
@@ -350,7 +388,6 @@ export const createToolSlice = (
         state.polylineArcThroughPoint = null;
         state.modifyRefShapeId = null;
         state.sourceSnapAngle = null;
-        state.moveAxisLock = 'none';
         // Reset copy flag for mirror (default on)
         if (state.lastTool === 'mirror') {
           state.modifyCopy = true;
@@ -463,7 +500,6 @@ export const createToolSlice = (
       state.polylineArcMode = false;
       state.polylineArcThroughPoint = null;
       state.sourceSnapAngle = null;
-      state.moveAxisLock = 'none';
     }),
 
   closeDrawing: () =>
@@ -523,6 +559,17 @@ export const createToolSlice = (
       state.linearDimensionDirection = dir;
     }),
 
+  setDimensionStylePreset: (presetName) =>
+    set((state) => {
+      state.dimensionStylePreset = presetName;
+      // When switching to a preset, update the arrow style and precision to match
+      const preset = DIMENSION_STYLE_PRESETS[presetName];
+      if (preset) {
+        state.dimensionArrowStyle = preset.arrowType;
+        state.dimensionPrecision = preset.precision;
+      }
+    }),
+
   setPickLinesMode: (enabled) =>
     set((state) => {
       state.pickLinesMode = enabled;
@@ -562,33 +609,17 @@ export const createToolSlice = (
       state.defaultTextStyle = { ...state.defaultTextStyle, ...style };
     }),
 
-  // Title block inline editing actions
-  startTitleBlockFieldEditing: (fieldId) =>
-    set((state) => {
-      state.titleBlockEditingFieldId = fieldId;
-    }),
-
-  endTitleBlockFieldEditing: () =>
-    set((state) => {
-      state.titleBlockEditingFieldId = null;
-    }),
-
-  setHoveredTitleBlockFieldId: (fieldId) =>
-    set((state) => {
-      state.hoveredTitleBlockFieldId = fieldId;
-    }),
-
   // Modify tool actions
   setModifyCopy: (enabled) =>
     set((state) => { state.modifyCopy = enabled; }),
   setModifyConstrain: (enabled) =>
     set((state) => { state.modifyConstrain = enabled; }),
+  setModifyConstrainAxis: (axis) =>
+    set((state) => { state.modifyConstrainAxis = axis; }),
+  toggleModifyOrtho: () =>
+    set((state) => { state.modifyOrtho = !state.modifyOrtho; }),
   setModifyMultiple: (enabled) =>
     set((state) => { state.modifyMultiple = enabled; }),
-  setMoveAxisLock: (axis) =>
-    set((state) => { state.moveAxisLock = axis; }),
-  toggleMoveAxisLock: (axis) =>
-    set((state) => { state.moveAxisLock = state.moveAxisLock === axis ? 'none' : axis; }),
   setScaleMode: (mode) =>
     set((state) => { state.scaleMode = mode; }),
   setScaleFactor: (factor) =>
@@ -613,6 +644,8 @@ export const createToolSlice = (
     set((state) => { state.arraySpacing = spacing; }),
   setArrayAngle: (angle) =>
     set((state) => { state.arrayAngle = angle; }),
+  setArrayMaintainRelation: (enabled) =>
+    set((state) => { state.arrayMaintainRelation = enabled; }),
 
   // Hatch tool actions
   setHatchPatternType: (type) =>
@@ -709,9 +742,56 @@ export const createToolSlice = (
       state.showLineweight = !state.showLineweight;
     }),
 
-  // Rotation Gizmo toggle
-  toggleShowRotationGizmo: () =>
+  // Gridline label editing actions
+  startGridlineLabelEdit: (shapeId, bubbleEnd) =>
     set((state) => {
-      state.showRotationGizmo = !state.showRotationGizmo;
+      state.editingGridlineLabel = { shapeId, bubbleEnd };
+    }),
+
+  endGridlineLabelEdit: () =>
+    set((state) => {
+      state.editingGridlineLabel = null;
+    }),
+
+  // Plate system edit mode actions
+  setPlateSystemEditMode: (editing, systemId) =>
+    set((state) => {
+      state.plateSystemEditMode = editing;
+      state.editingPlateSystemId = editing ? (systemId ?? null) : null;
+      // Reset sub-tool and opening sub-mode when entering/exiting edit mode
+      state.plateSystemSubTool = 'select';
+      if (!editing) {
+        state.plateSystemOpeningMode = false;
+        state.selectedOpeningId = null;
+      }
+    }),
+
+  setPlateSystemSubTool: (tool) =>
+    set((state) => {
+      state.plateSystemSubTool = tool;
+      // Synchronise openingMode with sub-tool
+      state.plateSystemOpeningMode = tool === 'add-opening';
+      if (tool !== 'select') {
+        state.selectedOpeningId = null;
+      }
+    }),
+
+  setPlateSystemOpeningMode: (enabled) =>
+    set((state) => {
+      state.plateSystemOpeningMode = enabled;
+      // Keep sub-tool in sync
+      if (enabled) {
+        state.plateSystemSubTool = 'add-opening';
+      } else if (state.plateSystemSubTool === 'add-opening') {
+        state.plateSystemSubTool = 'select';
+      }
+      if (!enabled) {
+        state.selectedOpeningId = null;
+      }
+    }),
+
+  setSelectedOpeningId: (id) =>
+    set((state) => {
+      state.selectedOpeningId = id;
     }),
 });

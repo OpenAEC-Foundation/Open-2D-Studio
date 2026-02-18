@@ -248,7 +248,7 @@ export const viewportCommands: CommandDefinition[] = [
     description: 'Set specific zoom level',
     modifiesState: false,
     params: [
-      { name: 'level', type: 'number', required: true, min: 0.01, max: 100, description: 'Zoom level (1 = 100%)' },
+      { name: 'level', type: 'number', required: true, min: 0.001, max: 100, description: 'Zoom level (1 = 100%)' },
       { name: 'center', type: 'point', description: 'Zoom center in world coordinates' },
     ],
     handler: (params, context): CommandResponse => {

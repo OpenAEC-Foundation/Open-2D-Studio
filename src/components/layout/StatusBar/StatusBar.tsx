@@ -225,7 +225,6 @@ function StatusMessage() {
   const selectedCount = useAppStore(s => s.selectedShapeIds.length);
   const scaleMode = useAppStore(s => s.scaleMode);
   const arrayMode = useAppStore(s => s.arrayMode);
-  const moveAxisLock = useAppStore(s => s.moveAxisLock);
 
   const pts = drawingPoints.length;
 
@@ -297,20 +296,16 @@ function StatusMessage() {
           case 'arc-length': msg = pts === 0 ? 'Click an arc' : 'Position dimension'; break;
         }
         break;
-      case 'move': {
-        const axisTag = moveAxisLock === 'x' ? ' [X axis]' : moveAxisLock === 'y' ? ' [Y axis]' : '';
+      case 'move':
         if (selectedCount === 0) msg = 'Select elements to move';
         else if (pts === 0) msg = 'Click base point';
-        else msg = 'Click destination point' + axisTag;
+        else msg = 'Click destination point';
         break;
-      }
-      case 'copy': {
-        const axisTag = moveAxisLock === 'x' ? ' [X axis]' : moveAxisLock === 'y' ? ' [Y axis]' : '';
+      case 'copy':
         if (selectedCount === 0) msg = 'Select elements to copy';
         else if (pts === 0) msg = 'Click base point';
-        else msg = 'Click destination (right-click to finish)' + axisTag;
+        else msg = 'Click destination (right-click to finish)';
         break;
-      }
       case 'rotate':
         if (selectedCount === 0) msg = 'Select elements to rotate';
         else if (pts === 0) msg = 'Click center of rotation';
@@ -348,6 +343,11 @@ function StatusMessage() {
       case 'offset':
         msg = 'Hover element and click to offset';
         break;
+      case 'align':
+        if (selectedCount === 0) msg = 'Select elements to align';
+        else if (pts === 0) msg = 'Click source point (point to align from)';
+        else msg = 'Click destination point (point to align to)';
+        break;
     }
   }
 
@@ -382,22 +382,13 @@ export const StatusBar = memo(function StatusBar() {
   const viewport = useAppStore(s => s.viewport);
   const activeTool = useAppStore(s => s.activeTool);
   const gridSize = useAppStore(s => s.gridSize);
-  const snapEnabled = useAppStore(s => s.snapEnabled);
   const selectedCount = useAppStore(s => s.selectedShapeIds.length);
   const shapeCount = useAppStore(s => s.shapes.length);
-  const trackingEnabled = useAppStore(s => s.trackingEnabled);
-  const polarTrackingEnabled = useAppStore(s => s.polarTrackingEnabled);
-  const orthoMode = useAppStore(s => s.orthoMode);
-  const objectTrackingEnabled = useAppStore(s => s.objectTrackingEnabled);
-  const polarAngleIncrement = useAppStore(s => s.polarAngleIncrement);
-  const togglePolarTracking = useAppStore(s => s.togglePolarTracking);
-  const toggleOrthoMode = useAppStore(s => s.toggleOrthoMode);
-  const toggleObjectTracking = useAppStore(s => s.toggleObjectTracking);
-  const toggleSnap = useAppStore(s => s.toggleSnap);
-  const openSettings = useAppStore(s => s.openSettings);
   const terminalOpen = useAppStore(s => s.terminalOpen);
   const toggleTerminal = useAppStore(s => s.toggleTerminal);
   const setTerminalOpen = useAppStore(s => s.setTerminalOpen);
+  const ifcPanelOpen = useAppStore(s => s.ifcPanelOpen);
+  const setIfcPanelOpen = useAppStore(s => s.setIfcPanelOpen);
   const logErrorCount = useAppStore(s => s.logEntries.filter(e => e.severity === 'error').length);
   const logWarningCount = useAppStore(s => s.logEntries.filter(e => e.severity === 'warning').length);
   const cursor2D = useAppStore(s => s.cursor2D);
@@ -410,6 +401,7 @@ export const StatusBar = memo(function StatusBar() {
   const sheets = useAppStore(s => s.sheets);
   const activeSheetId = useAppStore(s => s.activeSheetId);
   const selectedViewportId = useAppStore(s => s.viewportEditState.selectedViewportId);
+  const projectStructure = useAppStore(s => s.projectStructure);
 
   // Get active drawing's scale (either from active drawing in drawing mode, or from selected viewport in sheet mode)
   let targetDrawingId: string | null = null;
@@ -428,6 +420,23 @@ export const StatusBar = memo(function StatusBar() {
       targetDrawingId = selectedViewport.drawingId;
       const viewportDrawing = drawings.find(d => d.id === selectedViewport.drawingId);
       drawingScale = viewportDrawing?.scale;
+    }
+  }
+
+  // Resolve linked storey info for plan drawings
+  const activeDrawingForStorey = targetDrawingId ? drawings.find(d => d.id === targetDrawingId) : undefined;
+  let linkedStoreyLabel: string | null = null;
+  if (activeDrawingForStorey?.drawingType === 'plan' && activeDrawingForStorey.storeyId) {
+    for (const building of projectStructure?.buildings ?? []) {
+      const storey = building.storeys.find(s => s.id === activeDrawingForStorey.storeyId);
+      if (storey) {
+        linkedStoreyLabel = `${building.name} - ${storey.name} (${storey.elevation >= 0 ? '+' : ''}${storey.elevation}mm)`;
+        break;
+      }
+    }
+    // If storey was not found (deleted from structure), show warning
+    if (!linkedStoreyLabel) {
+      linkedStoreyLabel = 'Unlinked (storey removed)';
     }
   }
 
@@ -565,71 +574,24 @@ export const StatusBar = memo(function StatusBar() {
         </div>
       )}
 
+      {/* Linked storey indicator for plan drawings */}
+      {activeDrawingForStorey?.drawingType === 'plan' && (
+        <div className="flex items-center gap-1.5">
+          <span className={`text-[9px] font-medium px-1 rounded bg-blue-500/30 text-blue-300`}>PL</span>
+          <span className={`text-xs truncate max-w-[200px] ${
+            linkedStoreyLabel === 'Unlinked (storey removed)'
+              ? 'text-orange-400 italic'
+              : linkedStoreyLabel
+              ? 'text-cad-text'
+              : 'text-cad-text-dim italic'
+          }`}>
+            {linkedStoreyLabel || 'No storey linked'}
+          </span>
+        </div>
+      )}
+
       {/* Layer selector */}
       <LayerSelector />
-
-      {/* Snap and Tracking toggles */}
-      <div className="flex items-center gap-1">
-        <button
-          onClick={toggleSnap}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            openSettings('drawing-aids');
-          }}
-          className={`px-2 py-0.5 text-xs font-medium rounded transition-colors cursor-default ${
-            snapEnabled
-              ? 'bg-cyan-600 text-white hover:bg-cyan-500'
-              : 'bg-cad-bg text-cad-text-dim hover:bg-cad-hover'
-          }`}
-          title="Object Snap [F3] - Right-click for settings"
-        >
-          OSNAP
-        </button>
-        <button
-          onClick={togglePolarTracking}
-          className={`px-2 py-0.5 text-xs font-medium rounded transition-colors cursor-default ${
-            polarTrackingEnabled && trackingEnabled
-              ? 'bg-blue-600 text-white hover:bg-blue-500'
-              : 'bg-cad-bg text-cad-text-dim hover:bg-cad-hover'
-          }`}
-          title={`Polar Tracking - ${polarAngleIncrement}° increments [F10]`}
-        >
-          POLAR
-        </button>
-        <button
-          onClick={toggleOrthoMode}
-          className={`px-2 py-0.5 text-xs font-medium rounded transition-colors cursor-default ${
-            orthoMode && trackingEnabled
-              ? 'bg-green-600 text-white hover:bg-green-500'
-              : 'bg-cad-bg text-cad-text-dim hover:bg-cad-hover'
-          }`}
-          title="Ortho Mode - 90° only [F8]"
-        >
-          ORTHO
-        </button>
-        <button
-          onClick={toggleObjectTracking}
-          className={`px-2 py-0.5 text-xs font-medium rounded transition-colors cursor-default ${
-            objectTrackingEnabled && trackingEnabled
-              ? 'bg-orange-600 text-white hover:bg-orange-500'
-              : 'bg-cad-bg text-cad-text-dim hover:bg-cad-hover'
-          }`}
-          title="Object Snap Tracking - align to geometry [F11]"
-        >
-          OTRACK
-        </button>
-        <button
-          onClick={() => openSettings()}
-          className="flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded transition-colors cursor-default bg-cad-bg text-cad-text-dim hover:bg-cad-hover hover:text-cad-text"
-          title="Settings"
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3"/>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-          </svg>
-          Settings
-        </button>
-      </div>
 
       {/* Active tool + status message */}
       <div className="flex items-center gap-2">
@@ -652,6 +614,19 @@ export const StatusBar = memo(function StatusBar() {
         title="Toggle Terminal [Ctrl+`]"
       >
         <Terminal size={14} />
+      </button>
+
+      {/* IFC panel toggle */}
+      <button
+        onClick={() => setIfcPanelOpen(!ifcPanelOpen)}
+        className={`px-1.5 py-0.5 rounded text-xs font-mono transition-colors cursor-default ${
+          ifcPanelOpen
+            ? 'bg-cad-accent text-white'
+            : 'text-cad-text-dim hover:bg-cad-hover hover:text-cad-text'
+        }`}
+        title="Toggle IFC Model Panel"
+      >
+        IFC
       </button>
 
       {/* Error log badge */}

@@ -28,3 +28,31 @@ export const DEFAULT_DIMENSION_STYLE: DimensionStyle = {
   textColor: '#00ffff',
   precision: 0,
 };
+
+/**
+ * DimAssociate dimension style - associative dimensions linked to gridlines.
+ * Black lines, filled round dot terminators, 2.5mm line weight, integer formatting.
+ */
+export const DIM_ASSOCIATE_STYLE: DimensionStyle = {
+  arrowType: 'dot',
+  arrowSize: 2.5,
+  extensionLineGap: 1.5,
+  extensionLineOvershoot: 2.5,
+  textHeight: 2.5,
+  textPlacement: 'centered',
+  lineColor: '#000000',
+  textColor: '#000000',
+  precision: 0,
+  strokeWidth: 2.5,
+  dotFilled: false,
+  noThousandsSeparator: true,
+};
+
+/**
+ * Named dimension style presets.
+ * Maps preset name to its DimensionStyle.
+ */
+export const DIMENSION_STYLE_PRESETS: Record<string, DimensionStyle> = {
+  Default: DEFAULT_DIMENSION_STYLE,
+  DimAssociate: DIM_ASSOCIATE_STYLE,
+};

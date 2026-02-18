@@ -52,6 +52,7 @@ export function createDrawing(
       ...boundary,
     },
     scale: scale ?? DEFAULT_SCALE,
+    drawingType: 'standalone',
     createdAt: new Date().toISOString(),
     modifiedAt: new Date().toISOString(),
   };

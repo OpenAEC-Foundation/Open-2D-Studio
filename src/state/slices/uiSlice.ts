@@ -75,6 +75,10 @@ export interface UIState {
   terminalOpen: boolean;
   terminalHeight: number;
 
+  // Sidebar collapse
+  leftSidebarCollapsed: boolean;
+  rightSidebarCollapsed: boolean;
+
   // File state
   currentFilePath: string | null;
   projectName: string;
@@ -101,6 +105,10 @@ export interface UIActions {
   setTerminalOpen: (open: boolean) => void;
   toggleTerminal: () => void;
   setTerminalHeight: (height: number) => void;
+  toggleLeftSidebar: () => void;
+  toggleRightSidebar: () => void;
+  setLeftSidebarCollapsed: (collapsed: boolean) => void;
+  setRightSidebarCollapsed: (collapsed: boolean) => void;
   setFilePath: (path: string | null) => void;
   setProjectName: (name: string) => void;
   setModified: (modified: boolean) => void;
@@ -144,6 +152,8 @@ export const initialUIState: UIState = {
   settingsDialogTab: 'drawing-aids' as SettingsDialogTab,
   terminalOpen: false,
   terminalHeight: 200,
+  leftSidebarCollapsed: false,
+  rightSidebarCollapsed: false,
   currentFilePath: null,
   projectName: 'Untitled',
   isModified: false,
@@ -167,6 +177,8 @@ interface FullStore {
   settingsDialogTab: SettingsDialogTab;
   terminalOpen: boolean;
   terminalHeight: number;
+  leftSidebarCollapsed: boolean;
+  rightSidebarCollapsed: boolean;
   currentFilePath: string | null;
   projectName: string;
   isModified: boolean;
@@ -264,6 +276,26 @@ export const createUISlice = (
       state.terminalHeight = height;
     }),
 
+  toggleLeftSidebar: () =>
+    set((state) => {
+      state.leftSidebarCollapsed = !state.leftSidebarCollapsed;
+    }),
+
+  toggleRightSidebar: () =>
+    set((state) => {
+      state.rightSidebarCollapsed = !state.rightSidebarCollapsed;
+    }),
+
+  setLeftSidebarCollapsed: (collapsed) =>
+    set((state) => {
+      state.leftSidebarCollapsed = collapsed;
+    }),
+
+  setRightSidebarCollapsed: (collapsed) =>
+    set((state) => {
+      state.rightSidebarCollapsed = collapsed;
+    }),
+
   setFilePath: (path) =>
     set((state) => {
       state.currentFilePath = path;
@@ -313,6 +345,7 @@ export const createUISlice = (
         name: 'Drawing 1',
         boundary: { ...DEFAULT_DRAWING_BOUNDARY },
         scale: DEFAULT_DRAWING_SCALE,
+        drawingType: 'standalone',
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
       }];
@@ -397,6 +430,7 @@ export const createUISlice = (
           name: 'Drawing 1',
           boundary: { ...DEFAULT_DRAWING_BOUNDARY },
           scale: DEFAULT_DRAWING_SCALE,
+          drawingType: 'standalone',
           createdAt: new Date().toISOString(),
           modifiedAt: new Date().toISOString(),
         }];

@@ -125,9 +125,9 @@ export function exportToIFC(shapes: Shape[], layers: Layer[], customPatterns?: C
 
   // --- Owner history ---
   const person = b.add(`IFCPERSON($,$,'',$,$,$,$,$)`);
-  const org = b.add(`IFCORGANIZATION($,'Open 2D Studio',$,$,$)`);
+  const org = b.add(`IFCORGANIZATION($,'Open nD Studio',$,$,$)`);
   const personOrg = b.add(`IFCPERSONANDORGANIZATION(${person},${org},$)`);
-  const app = b.add(`IFCAPPLICATION(${org},'1.0','Open 2D Studio','O2DS')`);
+  const app = b.add(`IFCAPPLICATION(${org},'1.0','Open nD Studio','ONDS')`);
   const unixTime = Math.floor(Date.now() / 1000);
   const ownerHistory = b.add(`IFCOWNERHISTORY(${personOrg},${app},$,.NOCHANGE.,$,${personOrg},${app},${unixTime})`);
 
@@ -537,7 +537,7 @@ export function exportToIFC(shapes: Shape[], layers: Layer[], customPatterns?: C
   return `ISO-10303-21;
 HEADER;
 FILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');
-FILE_NAME('drawing.ifc','${timestamp}',(''),('Open 2D Studio'),'Open 2D Studio','Open 2D Studio','');
+FILE_NAME('drawing.ifc','${timestamp}',(''),('Open nD Studio'),'Open nD Studio','Open nD Studio','');
 FILE_SCHEMA(('IFC4'));
 ENDSEC;
 

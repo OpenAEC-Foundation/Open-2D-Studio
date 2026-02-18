@@ -79,6 +79,37 @@ export class GridLayer extends BaseRenderer {
     this.drawAxesInternal(viewport, left, top, right, bottom);
   }
 
+  /**
+   * Draw a small cross at the absolute origin (0,0) — always visible
+   */
+  drawOriginMarker(viewport: Viewport): void {
+    const ctx = this.ctx;
+    const size = 8 / viewport.zoom; // constant screen size
+
+    ctx.save();
+    ctx.strokeStyle = '#4488ff';
+    ctx.lineWidth = 1.5 / viewport.zoom;
+
+    // Horizontal tick
+    ctx.beginPath();
+    ctx.moveTo(-size, 0);
+    ctx.lineTo(size, 0);
+    ctx.stroke();
+
+    // Vertical tick
+    ctx.beginPath();
+    ctx.moveTo(0, -size);
+    ctx.lineTo(0, size);
+    ctx.stroke();
+
+    // Small circle
+    ctx.beginPath();
+    ctx.arc(0, 0, size * 0.4, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
   private drawAxesInternal(viewport: Viewport, left: number, top: number, right: number, bottom: number): void {
     const ctx = this.ctx;
     ctx.lineWidth = 2 / viewport.zoom;

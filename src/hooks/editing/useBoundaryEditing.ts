@@ -12,6 +12,7 @@ export function useBoundaryEditing() {
     drawings,
     activeDrawingId,
     boundaryEditState,
+    boundaryVisible,
     selectBoundary,
     deselectBoundary,
     startBoundaryDrag,
@@ -100,6 +101,8 @@ export function useBoundaryEditing() {
    */
   const handleBoundaryMouseDown = useCallback(
     (worldPos: Point): boolean => {
+      // Don't allow interaction when boundary is not visible
+      if (!boundaryVisible) return false;
       if (!boundaryEditState.isSelected) return false;
 
       const boundary = getActiveBoundary();
@@ -112,7 +115,7 @@ export function useBoundaryEditing() {
       }
       return false;
     },
-    [boundaryEditState.isSelected, getActiveBoundary, findBoundaryHandle, startBoundaryDrag]
+    [boundaryVisible, boundaryEditState.isSelected, getActiveBoundary, findBoundaryHandle, startBoundaryDrag]
   );
 
   /**
@@ -120,6 +123,9 @@ export function useBoundaryEditing() {
    */
   const handleBoundaryClick = useCallback(
     (worldPos: Point): boolean => {
+      // Don't allow selection when boundary is not visible
+      if (!boundaryVisible) return false;
+
       const boundary = getActiveBoundary();
       if (!boundary) return false;
 
@@ -139,7 +145,7 @@ export function useBoundaryEditing() {
 
       return false;
     },
-    [getActiveBoundary, boundaryEditState.isSelected, findBoundaryHandle, isPointOnBoundaryEdge, selectBoundary]
+    [boundaryVisible, getActiveBoundary, boundaryEditState.isSelected, findBoundaryHandle, isPointOnBoundaryEdge, selectBoundary]
   );
 
   /**

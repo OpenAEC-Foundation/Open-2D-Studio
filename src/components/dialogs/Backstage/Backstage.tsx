@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { useFileOperations } from '../../../hooks/file/useFileOperations';
+import { getRecentFiles, clearRecentFiles, removeRecentFile, type RecentFileEntry } from '../../../services/file/recentFiles';
 import { getSetting, setSetting } from '../../../utils/settings';
 import { open as shellOpen } from '@tauri-apps/plugin-shell';
 import { getVersion } from '@tauri-apps/api/app';
@@ -10,7 +11,7 @@ import { checkForUpdates, downloadAndInstall, type UpdateStatus } from '../../..
 import type { ExtensionBackstagePanel } from '../../../extensions/types';
 import type { LengthUnit, NumberFormat } from '../../../units/types';
 
-export type BackstageView = 'none' | 'import' | 'export' | 'shortcuts' | 'feedback' | 'about' | 'projectInfo' | 'units' | 'extensions' | `ext:${string}`;
+export type BackstageView = 'none' | 'recent' | 'import' | 'export' | 'shortcuts' | 'feedback' | 'about' | 'projectInfo' | 'units' | 'extensions' | `ext:${string}`;
 
 interface BackstageProps {
   isOpen: boolean;
@@ -46,7 +47,7 @@ function BackstageItem({ icon, label, onClick, onMouseEnter, active, shortcut }:
 type FeedbackCategory = 'bug' | 'feature' | 'general';
 type FeedbackStatus = 'idle' | 'submitting' | 'success' | 'error' | 'no-token';
 
-const GITHUB_REPO = 'OpenAEC-Foundation/Open-2D-Studio';
+const GITHUB_REPO = 'OpenAEC-Foundation/Open-nD-Studio';
 const CATEGORY_LABELS: Record<FeedbackCategory, string> = {
   bug: 'bug',
   feature: 'enhancement',
@@ -269,7 +270,7 @@ function FeedbackPanel() {
         ? `[Feature Request] ${message.slice(0, 80)}${message.length > 80 ? '...' : ''}`
         : `[Feedback] ${message.slice(0, 80)}${message.length > 80 ? '...' : ''}`;
 
-    const body = `${message}${ratingText}\n\n---\n*Submitted from Open 2D Studio*`;
+    const body = `${message}${ratingText}\n\n---\n*Submitted from Open nD Studio*`;
 
     try {
       const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/issues`, {
@@ -392,7 +393,7 @@ function FeedbackPanel() {
             <p className="text-[10px] text-cad-text-muted">
               <button
                 className="text-cad-accent hover:underline cursor-pointer"
-                onClick={() => shellOpen('https://github.com/settings/tokens/new?scopes=public_repo&description=Open+2D+Studio+Feedback')}
+                onClick={() => shellOpen('https://github.com/settings/tokens/new?scopes=public_repo&description=Open+nD+Studio+Feedback')}
               >
                 Create a token
               </button>
@@ -502,6 +503,89 @@ function ExtensionPanelHost({ panel }: { panel: ExtensionBackstagePanel }) {
   return <div ref={containerRef} className="p-8 flex-1 overflow-y-auto" />;
 }
 
+function RecentFilesPanel({ onOpenFile, onClose }: { onOpenFile: (path: string) => Promise<void>; onClose: () => void }) {
+  const [files, setFiles] = useState<RecentFileEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    getRecentFiles().then((list) => {
+      setFiles(list);
+      setLoaded(true);
+    });
+  }, []);
+
+  const handleOpen = async (filePath: string) => {
+    onClose();
+    await onOpenFile(filePath);
+  };
+
+  const handleRemove = async (filePath: string) => {
+    await removeRecentFile(filePath);
+    setFiles((prev) => prev.filter((e) => e.filePath.toLowerCase() !== filePath.toLowerCase()));
+  };
+
+  const handleClear = async () => {
+    await clearRecentFiles();
+    setFiles([]);
+  };
+
+  if (!loaded) return null;
+
+  return (
+    <div className="p-8 overflow-y-auto flex-1">
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-lg font-semibold text-cad-text">Recent Files</h2>
+        {files.length > 0 && (
+          <button
+            className="px-3 py-1 text-xs text-cad-text-dim border border-cad-border rounded hover:bg-cad-hover cursor-default"
+            onClick={handleClear}
+          >
+            Clear All
+          </button>
+        )}
+      </div>
+
+      {files.length === 0 ? (
+        <p className="text-sm text-cad-text-muted">No recent files</p>
+      ) : (
+        <div className="flex flex-col gap-1 max-w-2xl">
+          {files.map((entry) => (
+            <div
+              key={entry.filePath}
+              className="group flex items-center gap-3 px-4 py-3 rounded hover:bg-cad-hover transition-colors cursor-default"
+              onClick={() => handleOpen(entry.filePath)}
+            >
+              {/* File icon */}
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="stroke-cad-text-dim flex-shrink-0" strokeWidth="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+              </svg>
+
+              {/* Name + path */}
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-cad-text truncate">{entry.name}</div>
+                <div className="text-xs text-cad-text-muted truncate">{entry.filePath}</div>
+              </div>
+
+              {/* Remove button (visible on hover) */}
+              <button
+                className="opacity-0 group-hover:opacity-100 p-1 text-cad-text-muted hover:text-cad-text transition-opacity cursor-default"
+                onClick={(e) => { e.stopPropagation(); handleRemove(entry.filePath); }}
+                title="Remove from recent files"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18"/>
+                  <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AboutPanel() {
   const [appVersion, setAppVersion] = useState('');
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
@@ -528,7 +612,7 @@ function AboutPanel() {
     <div className="p-8">
       <h2 className="text-lg font-semibold text-cad-text mb-6">About</h2>
       <div className="max-w-md">
-        <h1 className="text-xl font-bold text-cad-text mb-1">Open 2D Studio</h1>
+        <h1 className="text-xl font-bold text-cad-text mb-1">Open nD Studio</h1>
         <p className="text-sm text-cad-text-dim mb-4">Version {appVersion}</p>
         <p className="text-sm text-cad-text-dim mb-4">
           A cross-platform 2D CAD application
@@ -613,7 +697,7 @@ function AboutPanel() {
 }
 
 export function Backstage({ isOpen, onClose, initialView, onOpenSheetTemplateImport }: BackstageProps) {
-  const { handleNew, handleOpen, handleSave, handleSaveAs, handleExportSVG, handleExportDXF, handleExportIFC, handleExportJSON, handleImportDXF, handlePrint, handleExit } = useFileOperations();
+  const { handleNew, handleOpen, handleOpenPath, handleSave, handleSaveAs, handleExportSVG, handleExportDXF, handleExportIFC, handleExportJSON, handleImportDXF, handleImportDXFAsUnderlay, handlePrint, handleExit } = useFileOperations();
   const [activeView, setActiveView] = useState<BackstageView>('none');
   const extensionBackstagePanels = useAppStore((s) => s.extensionBackstagePanels);
 
@@ -671,6 +755,13 @@ export function Backstage({ isOpen, onClose, initialView, onOpenSheetTemplateImp
             shortcut="Ctrl+O"
             onClick={action(handleOpen)}
             onMouseEnter={clearView}
+          />
+          <BackstageItem
+            icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>}
+            label="Recent"
+            onClick={() => setActiveView('recent')}
+            onMouseEnter={() => setActiveView('recent')}
+            active={activeView === 'recent'}
           />
 
           <div className="h-px bg-cad-border my-1 mx-4" />
@@ -796,6 +887,9 @@ export function Backstage({ isOpen, onClose, initialView, onOpenSheetTemplateImp
 
       {/* Right content area */}
       <div className="flex-1 flex flex-col overflow-hidden">
+        {activeView === 'recent' && (
+          <RecentFilesPanel onOpenFile={handleOpenPath} onClose={onClose} />
+        )}
         {activeView === 'import' && (
           <div className="p-8">
             <h2 className="text-lg font-semibold text-cad-text mb-6">Import</h2>
@@ -811,6 +905,20 @@ export function Backstage({ isOpen, onClose, initialView, onOpenSheetTemplateImp
                 <div>
                   <div className="text-sm font-medium text-cad-text">DXF File</div>
                   <div className="text-xs text-cad-text-muted mt-0.5">Import geometry from DXF format (.dxf)</div>
+                </div>
+              </button>
+              <button
+                className="flex items-center gap-4 px-5 py-4 rounded bg-cad-surface border border-cad-border hover:border-cad-border-light hover:bg-cad-hover transition-colors cursor-default text-left"
+                onClick={action(handleImportDXFAsUnderlay)}
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="stroke-cad-text-dim" strokeWidth="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <rect x="8" y="12" width="8" height="6" rx="1" strokeDasharray="2 2"/>
+                </svg>
+                <div>
+                  <div className="text-sm font-medium text-cad-text">DXF als Underlay</div>
+                  <div className="text-xs text-cad-text-muted mt-0.5">Import DXF als snelle achtergrondafbeelding (voor grote bestanden)</div>
                 </div>
               </button>
               <button

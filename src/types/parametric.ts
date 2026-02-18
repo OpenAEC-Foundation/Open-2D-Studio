@@ -84,7 +84,14 @@ export type ProfileType =
   | 'hss-round'   // Hollow Structural Section - round (pipe)
   | 'plate'       // Flat plate
   | 'round-bar'   // Solid round bar
-  | 'custom';     // User-defined profile
+  | 'concrete-rect'    // Concrete rectangular beam/column
+  | 'concrete-round'   // Concrete circular column
+  | 'concrete-tee'     // Concrete T-beam
+  | 'timber-rect'      // Timber rectangular beam/post
+  | 'timber-round'     // Timber round log
+  | 'generic-rect'     // Generic rectangular section
+  | 'generic-circ'     // Generic circular section
+  | 'custom';          // User-defined profile
 
 /**
  * Profile template - defines a parametric profile type
@@ -97,7 +104,7 @@ export interface ProfileTemplate {
   /** Description */
   description: string;
   /** Category for organization */
-  category: 'structural' | 'architectural' | 'mechanical' | 'custom';
+  category: 'structural' | 'concrete' | 'timber' | 'generic' | 'architectural' | 'mechanical' | 'custom';
   /** Parameter definitions */
   parameters: ParameterDefinition[];
   /**
@@ -113,6 +120,15 @@ export interface ProfileTemplate {
    */
   insertionMode?: 'center' | 'bottom-center' | 'top-left';
 }
+
+// ============================================================================
+// Material Types
+// ============================================================================
+
+/**
+ * Material type for profile presets
+ */
+export type ProfileMaterial = 'steel' | 'cold-formed-steel' | 'concrete' | 'timber' | 'aluminum' | 'other';
 
 // ============================================================================
 // Standard Profile Library
@@ -132,6 +148,8 @@ export interface ProfilePreset {
   standard: string;
   /** Category within standard (e.g., "W-Shapes", "S-Shapes") */
   category: string;
+  /** Material type (e.g., 'steel', 'concrete', 'timber') */
+  material?: ProfileMaterial;
   /** Parameter values for this preset */
   parameters: ParameterValues;
   /** Calculated section properties (optional) */

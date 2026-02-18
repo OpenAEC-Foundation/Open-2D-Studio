@@ -6,7 +6,7 @@
  * instead of entering dimensions manually.
  */
 
-import type { ProfilePreset, ProfileType } from '../../types/parametric';
+import type { ProfilePreset, ProfileType, ProfileMaterial } from '../../types/parametric';
 
 // ============================================================================
 // AISC W-Shapes (Wide Flange)
@@ -1280,7 +1280,16 @@ const GOST_CHANNEL_SHAPES: ProfilePreset[] = [
 // ============================================================================
 
 /**
- * All profile presets
+ * Infer material from profile type
+ */
+function inferMaterial(profileType: string): ProfileMaterial {
+  if (profileType.startsWith('concrete-')) return 'concrete';
+  if (profileType.startsWith('timber-')) return 'timber';
+  return 'steel';
+}
+
+/**
+ * All profile presets (with material assigned)
  */
 export const PROFILE_PRESETS: ProfilePreset[] = [
   ...AISC_W_SHAPES,
@@ -1312,7 +1321,7 @@ export const PROFILE_PRESETS: ProfilePreset[] = [
   ...AS_UC_SHAPES,
   ...GOST_I_SHAPES,
   ...GOST_CHANNEL_SHAPES,
-];
+].map(p => ({ ...p, material: p.material ?? inferMaterial(p.profileType) }));
 
 /**
  * Get presets for a specific profile type
@@ -1364,4 +1373,19 @@ export function searchPresets(query: string): ProfilePreset[] {
     p.name.toLowerCase().includes(lowerQuery) ||
     p.id.toLowerCase().includes(lowerQuery)
   );
+}
+
+/**
+ * Get presets filtered by material
+ */
+export function getPresetsForMaterial(material: ProfileMaterial): ProfilePreset[] {
+  return PROFILE_PRESETS.filter(p => p.material === material);
+}
+
+/**
+ * Get all material categories that have presets
+ */
+export function getMaterialCategories(): ProfileMaterial[] {
+  const materials = new Set(PROFILE_PRESETS.map(p => p.material).filter((m): m is ProfileMaterial => !!m));
+  return Array.from(materials);
 }

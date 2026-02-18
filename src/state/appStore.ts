@@ -55,6 +55,8 @@ import {
   type UnitActions,
   type LogState,
   type LogActions,
+  type IfcState,
+  type IfcActions,
 
   // Initial states
   initialModelState,
@@ -75,6 +77,7 @@ import {
   initialExtensionState,
   initialUnitState,
   initialLogState,
+  initialIfcState,
 
   // Slice creators
   createModelSlice,
@@ -95,6 +98,7 @@ import {
   createExtensionSlice,
   createUnitSlice,
   createLogSlice,
+  createIfcSlice,
 } from './slices';
 
 // Re-export types for backward compatibility
@@ -154,6 +158,7 @@ function extractPerDocState(s: any) {
     selectedShapeIds: s.selectedShapeIds,
     selectionBox: s.selectionBox,
     hoveredShapeId: s.hoveredShapeId,
+    selectionFilter: s.selectionFilter,
     // History
     historyStack: s.historyStack,
     historyIndex: s.historyIndex,
@@ -243,6 +248,7 @@ function restoreDocState(docId: string, set: any) {
     state.selectedShapeIds = saved.selectedShapeIds;
     state.selectionBox = saved.selectionBox;
     state.hoveredShapeId = saved.hoveredShapeId;
+    state.selectionFilter = saved.selectionFilter ?? null;
     state.historyStack = saved.historyStack;
     state.historyIndex = saved.historyIndex;
     state.maxHistorySize = saved.maxHistorySize;
@@ -338,6 +344,7 @@ export type AppState =
   & ExtensionState
   & UnitState
   & LogState
+  & IfcState
   & ModelActions
   & ViewActions
   & ToolActions
@@ -356,6 +363,7 @@ export type AppState =
   & ExtensionActions
   & UnitActions
   & LogActions
+  & IfcActions
   & CoordinatingActions
   & DocumentManagementState
   & DocumentManagementActions;
@@ -383,6 +391,7 @@ const initialState = {
   ...initialExtensionState,
   ...initialUnitState,
   ...initialLogState,
+  ...initialIfcState,
 };
 
 // ============================================================================
@@ -427,6 +436,7 @@ export const useAppStore = create<AppState>()(
       ...createExtensionSlice(set as any, get as any),
       ...createUnitSlice(set as any, get as any),
       ...createLogSlice(set as any, get as any),
+      ...createIfcSlice(set as any, get as any),
 
       // ========================================================================
       // Coordinating Actions (cross-slice operations)
@@ -641,6 +651,15 @@ export const useDraftLayers = useDrawingLayers;
 export const useSelectedShapes = () => useAppStore((state) => {
   const idSet = new Set(state.selectedShapeIds);
   return state.shapes.filter((s) => idSet.has(s.id));
+});
+
+// Filtered selection: when a selectionFilter is active, only return IDs matching that shape type
+export const useFilteredSelectedShapeIds = () => useAppStore((state) => {
+  if (!state.selectionFilter) return state.selectedShapeIds;
+  const idSet = new Set(state.selectedShapeIds);
+  return state.shapes
+    .filter((s) => idSet.has(s.id) && s.type === state.selectionFilter)
+    .map((s) => s.id);
 });
 
 // View selectors

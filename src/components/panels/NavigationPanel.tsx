@@ -1,10 +1,14 @@
 import { useState, useCallback, useRef, useEffect, memo } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, PanelLeftClose } from 'lucide-react';
 import { DrawingsTab } from './DrawingsTab';
 import { SheetsTab } from './SheetsTab';
 import { getSetting, setSetting } from '../../utils/settings';
 
-export const NavigationPanel = memo(function NavigationPanel() {
+interface NavigationPanelProps {
+  onCollapse?: () => void;
+}
+
+export const NavigationPanel = memo(function NavigationPanel({ onCollapse }: NavigationPanelProps) {
   const [drawingsCollapsed, setDrawingsCollapsed] = useState(false);
   const [sheetsCollapsed, setSheetsCollapsed] = useState(false);
   const [drawingsHeight, setDrawingsHeight] = useState(50); // percentage
@@ -101,7 +105,17 @@ export const NavigationPanel = memo(function NavigationPanel() {
             <ChevronDown size={14} className="text-cad-text-dim" />
           )}
           <span className="text-xs font-medium text-cad-text">Drawings</span>
-          <span className="text-[10px] text-cad-text-dim ml-auto">Drawing</span>
+          <span className="text-[10px] text-cad-text-dim ml-auto mr-1">Drawing</span>
+          {onCollapse && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onCollapse(); }}
+              className="flex items-center justify-center w-5 h-5 rounded hover:bg-cad-hover text-cad-text-dim hover:text-cad-text transition-colors flex-shrink-0"
+              title="Collapse left panel"
+            >
+              <PanelLeftClose size={14} />
+            </button>
+          )}
         </div>
 
         {/* Drawings Content */}

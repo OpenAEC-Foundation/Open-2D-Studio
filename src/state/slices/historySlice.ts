@@ -1,17 +1,25 @@
 /**
  * History Slice - Manages undo/redo functionality using Immer patches
+ *
+ * Each history entry specifies a `target` indicating which array the patches
+ * apply to: 'shapes' (regular geometry) or 'parametricShapes'.
  */
 
 import { type Patch, applyPatches, current } from 'immer';
 import type { Shape } from './types';
+import type { ParametricShape } from '../../types/parametric';
 
 // ============================================================================
 // Types
 // ============================================================================
 
+export type HistoryTarget = 'shapes' | 'parametricShapes';
+
 export interface HistoryEntry {
   patches: Patch[];
   inversePatches: Patch[];
+  /** Which array the patches apply to. Defaults to 'shapes' for backward compat. */
+  target?: HistoryTarget;
 }
 
 // ============================================================================
@@ -54,6 +62,7 @@ export const initialHistoryState: HistoryState = {
 
 interface StoreWithShapes {
   shapes: Shape[];
+  parametricShapes: ParametricShape[];
   selectedShapeIds: string[];
 }
 
@@ -72,7 +81,18 @@ export const createHistorySlice = (
       const entry = state.historyStack[state.historyIndex];
       if (!entry) return;
 
-      state.shapes = applyPatches(current(state.shapes), entry.inversePatches) as any;
+      const target = entry.target || 'shapes';
+      if (target === 'parametricShapes') {
+        state.parametricShapes = applyPatches(
+          current(state.parametricShapes),
+          entry.inversePatches
+        ) as any;
+      } else {
+        state.shapes = applyPatches(
+          current(state.shapes),
+          entry.inversePatches
+        ) as any;
+      }
       state.historyIndex--;
       state.selectedShapeIds = [];
       success = true;
@@ -91,7 +111,18 @@ export const createHistorySlice = (
       const entry = state.historyStack[nextIndex];
       if (!entry) return;
 
-      state.shapes = applyPatches(current(state.shapes), entry.patches) as any;
+      const target = entry.target || 'shapes';
+      if (target === 'parametricShapes') {
+        state.parametricShapes = applyPatches(
+          current(state.parametricShapes),
+          entry.patches
+        ) as any;
+      } else {
+        state.shapes = applyPatches(
+          current(state.shapes),
+          entry.patches
+        ) as any;
+      }
       state.historyIndex = nextIndex;
       state.selectedShapeIds = [];
       success = true;
@@ -115,6 +146,14 @@ export const createHistorySlice = (
       if (fromIndex > state.historyIndex || fromIndex < 0) return;
       if (fromIndex === state.historyIndex) return; // Only one entry, nothing to collapse
 
+      // Only collapse entries that share the same target
+      const baseTarget = state.historyStack[fromIndex].target || 'shapes';
+      const allSameTarget = state.historyStack
+        .slice(fromIndex, state.historyIndex + 1)
+        .every(e => (e.target || 'shapes') === baseTarget);
+
+      if (!allSameTarget) return; // Cannot collapse mixed-target entries
+
       // Merge entries [fromIndex..historyIndex] into one
       const mergedPatches: Patch[] = [];
       const mergedInversePatches: Patch[] = [];
@@ -128,6 +167,7 @@ export const createHistorySlice = (
       const collapsed: HistoryEntry = {
         patches: mergedPatches,
         inversePatches: mergedInversePatches,
+        target: baseTarget,
       };
 
       // Replace the range with the single collapsed entry

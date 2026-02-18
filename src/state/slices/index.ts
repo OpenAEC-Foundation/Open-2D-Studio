@@ -53,6 +53,7 @@ export {
 // History Slice
 export {
   type HistoryEntry,
+  type HistoryTarget,
   type HistoryState,
   type HistoryActions,
   type HistorySlice,
@@ -178,3 +179,12 @@ export {
   initialLogState,
   createLogSlice,
 } from './logSlice';
+
+// IFC Slice
+export {
+  type IfcState,
+  type IfcActions,
+  type IfcSlice,
+  initialIfcState,
+  createIfcSlice,
+} from './ifcSlice';

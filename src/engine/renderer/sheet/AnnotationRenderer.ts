@@ -359,8 +359,8 @@ export class AnnotationRenderer extends BaseRenderer {
         break;
       case 'dot':
         ctx.beginPath();
-        ctx.arc(0, 0, size / 3, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.arc(0, 0, size / 6, 0, Math.PI * 2);
+        ctx.stroke();
         break;
       case 'tick':
         ctx.beginPath();

@@ -7,6 +7,7 @@ import type {
   Shape,
   Layer,
   Drawing,
+  DrawingType,
   DrawingBoundary,
   Sheet,
   SheetViewport,
@@ -61,6 +62,17 @@ import {
 } from '../../services/export/svgTitleBlockService';
 
 import type { TitleBlock, TitleBlockField } from './types';
+import { regenerateGridDimensions } from '../../utils/gridDimensionUtils';
+import {
+  computeSectionReferences,
+  computeSectionBoundary,
+  isSectionReferenceShape,
+  getSourceIdFromSectionRef,
+  buildSectionCoordinateSystem,
+  syncGridlineFromSection,
+  syncLevelFromSection,
+} from '../../services/section/sectionReferenceService';
+import type { SectionCalloutShape, GridlineShape, LevelShape } from '../../types/geometry';
 
 // mm to pixels conversion (same as renderer)
 const MM_TO_PIXELS = 3.78;
@@ -242,7 +254,10 @@ export interface ModelActions {
   ungroupSelectedShapes: () => void;
 
   // Drawing actions
-  addDrawing: (name?: string) => void;
+  addDrawing: (name?: string, drawingType?: DrawingType) => void;
+  addDrawingSilent: (name?: string, drawingType?: DrawingType) => string;
+  updateDrawingType: (id: string, drawingType: DrawingType) => void;
+  updateDrawingStorey: (id: string, storeyId: string | undefined) => void;
   deleteDrawing: (id: string) => void;
   renameDrawing: (id: string, name: string) => void;
   updateDrawingBoundary: (id: string, boundary: Partial<DrawingBoundary>) => void;
@@ -294,6 +309,14 @@ export interface ModelActions {
   deleteLayer: (id: string) => void;
   setActiveLayer: (id: string) => void;
 
+  // Section reference sync
+  syncSectionReferences: (sectionDrawingId: string) => void;
+  syncAllSectionReferences: () => void;
+  /** Reverse sync: propagate section reference shape changes back to plan/storeys */
+  syncSectionReferenceToSource: (sectionRefShapeId: string) => void;
+  /** Update a section drawing's boundary based on its linked section callout line length and storey range */
+  updateSectionDrawingBoundary: (sectionDrawingId: string) => void;
+
   // Text Style actions
   setActiveTextStyle: (id: string | null) => void;
   addTextStyle: (style: TextStyle) => void;
@@ -317,6 +340,7 @@ const defaultDrawing: Drawing = {
   name: 'Drawing 1',
   boundary: { ...DEFAULT_DRAWING_BOUNDARY },
   scale: DEFAULT_DRAWING_SCALE,
+  drawingType: 'standalone',
   createdAt: new Date().toISOString(),
   modifiedAt: new Date().toISOString(),
 };
@@ -399,10 +423,13 @@ interface StoreWithHistory {
   canvasSize: { width: number; height: number };
 }
 
-// Extended FullStore to include parametric shapes for cross-slice operations
+// Extended FullStore to include parametric shapes and project structure for cross-slice operations
 type FullStore = ModelState & StoreWithHistory & {
   parametricShapes: import('../../types/parametric').ParametricShape[];
   deleteParametricShapes: (ids: string[]) => void;
+  autoGridDimension: boolean;
+  projectStructure: import('./parametricSlice').ProjectStructure;
+  sectionGridlineDimensioning: boolean;
 };
 
 function withHistory(state: FullStore, mutate: (draft: Shape[]) => void): void {
@@ -412,8 +439,10 @@ function withHistory(state: FullStore, mutate: (draft: Shape[]) => void): void {
   );
   if (patches.length === 0) return; // No changes
 
-  // Truncate future entries if we're not at the end
-  if (state.historyIndex >= 0 && state.historyIndex < state.historyStack.length - 1) {
+  // Truncate future entries if we're not at the end.
+  // When historyIndex is -1 (all undone), clear the entire stack.
+  // When historyIndex < stack.length - 1, we're in the middle — discard entries after current.
+  if (state.historyIndex < state.historyStack.length - 1) {
     state.historyStack = state.historyStack.slice(0, state.historyIndex + 1);
   }
   state.historyStack.push({ patches, inversePatches });
@@ -483,17 +512,94 @@ export const createModelSlice = (
 
   deleteShape: (id) =>
     set((state) => {
+      // Also delete any linked labels (text shapes whose linkedShapeId matches)
+      const linkedLabelIds = new Set<string>();
+      for (const s of state.shapes) {
+        if (s.type === 'text' && (s as any).linkedShapeId === id) {
+          linkedLabelIds.add(s.id);
+        }
+      }
+
+      // If deleting a plate system, also delete all its child beams
+      const plateSystemChildIds = new Set<string>();
+      const deletedShape = state.shapes.find(s => s.id === id);
+      if (deletedShape && deletedShape.type === 'plate-system') {
+        const ps = deletedShape as import('../../types/geometry').PlateSystemShape;
+        if (ps.childShapeIds) {
+          for (const childId of ps.childShapeIds) {
+            plateSystemChildIds.add(childId);
+          }
+        }
+      }
+
+      // If deleting a child beam of a plate system, update parent's childShapeIds
+      if (deletedShape && deletedShape.type === 'beam') {
+        const beam = deletedShape as import('../../types/geometry').BeamShape;
+        if (beam.plateSystemId) {
+          const parentIdx = state.shapes.findIndex(s => s.id === beam.plateSystemId);
+          if (parentIdx !== -1) {
+            const parent = state.shapes[parentIdx] as import('../../types/geometry').PlateSystemShape;
+            if (parent.childShapeIds) {
+              (state.shapes[parentIdx] as import('../../types/geometry').PlateSystemShape).childShapeIds =
+                parent.childShapeIds.filter(cid => cid !== id);
+            }
+          }
+        }
+      }
+
       withHistory(state, (draft) => {
-        const idx = draft.findIndex((s) => s.id === id);
-        if (idx !== -1) draft.splice(idx, 1);
+        for (let i = draft.length - 1; i >= 0; i--) {
+          if (draft[i].id === id || linkedLabelIds.has(draft[i].id) || plateSystemChildIds.has(draft[i].id)) {
+            draft.splice(i, 1);
+          }
+        }
       });
-      state.selectedShapeIds = state.selectedShapeIds.filter((sid) => sid !== id);
+      const allRemoved = new Set([id, ...linkedLabelIds, ...plateSystemChildIds]);
+      state.selectedShapeIds = state.selectedShapeIds.filter(
+        (sid) => !allRemoved.has(sid)
+      );
     }),
 
   deleteShapes: (ids) =>
     set((state) => {
       if (ids.length === 0) return;
       const idSet = new Set(ids);
+      // Also delete any linked labels whose linkedShapeId is in the deletion set
+      for (const s of state.shapes) {
+        if (s.type === 'text' && (s as any).linkedShapeId && idSet.has((s as any).linkedShapeId)) {
+          idSet.add(s.id);
+        }
+      }
+
+      // If deleting plate systems, also delete their child beams
+      for (const s of state.shapes) {
+        if (s.type === 'plate-system' && idSet.has(s.id)) {
+          const ps = s as import('../../types/geometry').PlateSystemShape;
+          if (ps.childShapeIds) {
+            for (const childId of ps.childShapeIds) {
+              idSet.add(childId);
+            }
+          }
+        }
+      }
+
+      // If deleting child beams, update their parent plate system's childShapeIds
+      for (const s of state.shapes) {
+        if (s.type === 'beam' && idSet.has(s.id)) {
+          const beam = s as import('../../types/geometry').BeamShape;
+          if (beam.plateSystemId && !idSet.has(beam.plateSystemId)) {
+            const parentIdx = state.shapes.findIndex(ps => ps.id === beam.plateSystemId);
+            if (parentIdx !== -1) {
+              const parent = state.shapes[parentIdx] as import('../../types/geometry').PlateSystemShape;
+              if (parent.childShapeIds) {
+                (state.shapes[parentIdx] as import('../../types/geometry').PlateSystemShape).childShapeIds =
+                  parent.childShapeIds.filter(cid => !idSet.has(cid));
+              }
+            }
+          }
+        }
+      }
+
       withHistory(state, (draft) => {
         for (let i = draft.length - 1; i >= 0; i--) {
           if (idSet.has(draft[i].id)) draft.splice(i, 1);
@@ -508,9 +614,39 @@ export const createModelSlice = (
 
     const selectedIds = [...store.selectedShapeIds];
 
-    // Delete regular shapes
+    // Delete regular shapes (with plate system cascade)
     set((state) => {
       const selected = new Set(selectedIds);
+
+      // If deleting plate systems, also delete their child beams
+      for (const s of state.shapes) {
+        if (s.type === 'plate-system' && selected.has(s.id)) {
+          const ps = s as import('../../types/geometry').PlateSystemShape;
+          if (ps.childShapeIds) {
+            for (const childId of ps.childShapeIds) {
+              selected.add(childId);
+            }
+          }
+        }
+      }
+
+      // If deleting child beams, update their parent plate system's childShapeIds
+      for (const s of state.shapes) {
+        if (s.type === 'beam' && selected.has(s.id)) {
+          const beam = s as import('../../types/geometry').BeamShape;
+          if (beam.plateSystemId && !selected.has(beam.plateSystemId)) {
+            const parentIdx = state.shapes.findIndex(ps => ps.id === beam.plateSystemId);
+            if (parentIdx !== -1) {
+              const parent = state.shapes[parentIdx] as import('../../types/geometry').PlateSystemShape;
+              if (parent.childShapeIds) {
+                (state.shapes[parentIdx] as import('../../types/geometry').PlateSystemShape).childShapeIds =
+                  parent.childShapeIds.filter(cid => !selected.has(cid));
+              }
+            }
+          }
+        }
+      }
+
       withHistory(state, (draft) => {
         for (let i = draft.length - 1; i >= 0; i--) {
           if (selected.has(draft[i].id)) draft.splice(i, 1);
@@ -525,6 +661,14 @@ export const createModelSlice = (
       .map(s => s.id);
     if (parametricIds.length > 0) {
       store.deleteParametricShapes(parametricIds);
+    }
+
+    // Auto-regenerate grid dimensions if any gridline was deleted
+    const hadGridline = store.shapes.some(
+      s => selectedIds.includes(s.id) && s.type === 'gridline'
+    );
+    if (hadGridline && store.autoGridDimension) {
+      setTimeout(() => regenerateGridDimensions(), 50);
     }
   },
 
@@ -787,14 +931,26 @@ export const createModelSlice = (
   // Drawing Actions
   // ============================================================================
 
-  addDrawing: (name) =>
+  addDrawing: (name, drawingType = 'standalone') =>
     set((state) => {
       const id = generateId();
+      // For plan drawings, auto-assign the first available storey
+      let autoStoreyId: string | undefined;
+      if (drawingType === 'plan' && state.projectStructure?.buildings) {
+        for (const building of state.projectStructure.buildings) {
+          if (building.storeys.length > 0) {
+            autoStoreyId = building.storeys[0].id;
+            break;
+          }
+        }
+      }
       const newDrawing: Drawing = {
         id,
         name: name || `Drawing ${state.drawings.length + 1}`,
         boundary: { ...DEFAULT_DRAWING_BOUNDARY },
         scale: DEFAULT_DRAWING_SCALE,
+        drawingType,
+        storeyId: autoStoreyId,
         createdAt: new Date().toISOString(),
         modifiedAt: new Date().toISOString(),
       };
@@ -830,6 +986,56 @@ export const createModelSlice = (
       state.isModified = true;
     }),
 
+  addDrawingSilent: (name, drawingType = 'standalone') => {
+    const id = generateId();
+    set((state) => {
+      // For plan drawings, auto-assign the first available storey
+      let autoStoreyId: string | undefined;
+      if (drawingType === 'plan' && state.projectStructure?.buildings) {
+        for (const building of state.projectStructure.buildings) {
+          if (building.storeys.length > 0) {
+            autoStoreyId = building.storeys[0].id;
+            break;
+          }
+        }
+      }
+      const newDrawing: Drawing = {
+        id,
+        name: name || `Drawing ${state.drawings.length + 1}`,
+        boundary: { ...DEFAULT_DRAWING_BOUNDARY },
+        scale: DEFAULT_DRAWING_SCALE,
+        drawingType,
+        storeyId: autoStoreyId,
+        createdAt: new Date().toISOString(),
+        modifiedAt: new Date().toISOString(),
+      };
+      state.drawings.push(newDrawing);
+
+      // Create a default layer for the new drawing
+      const newLayer: Layer = {
+        id: generateId(),
+        name: 'Layer 0',
+        drawingId: id,
+        visible: true,
+        locked: false,
+        color: '#ffffff',
+        lineStyle: 'solid',
+        lineWidth: 1,
+      };
+      state.layers.push(newLayer);
+
+      // Initialize viewport zoomed to fit the boundary
+      state.drawingViewports[id] = calculateDrawingFitViewport(
+        newDrawing.boundary,
+        state.canvasSize.width || ASSUMED_CANVAS_WIDTH,
+        state.canvasSize.height || ASSUMED_CANVAS_HEIGHT
+      );
+
+      state.isModified = true;
+    });
+    return id;
+  },
+
   deleteDrawing: (id) =>
     set((state) => {
       // Can't delete the last drawing
@@ -838,8 +1044,17 @@ export const createModelSlice = (
       // Remove the drawing
       state.drawings = state.drawings.filter((d) => d.id !== id);
 
-      // Remove all shapes belonging to this drawing
-      state.shapes = state.shapes.filter((s) => s.drawingId !== id);
+      // Remove all shapes belonging to this drawing (with history)
+      const hasShapesInDrawing = state.shapes.some((s) => s.drawingId === id);
+      if (hasShapesInDrawing) {
+        withHistory(state, (draft) => {
+          for (let i = draft.length - 1; i >= 0; i--) {
+            if (draft[i].drawingId === id) {
+              draft.splice(i, 1);
+            }
+          }
+        });
+      }
 
       // Remove all layers belonging to this drawing
       state.layers = state.layers.filter((l) => l.drawingId !== id);
@@ -1015,6 +1230,298 @@ export const createModelSlice = (
       }
 
       state.selectedShapeIds = [];
+
+      // Auto-sync section references when switching to a section drawing
+      if (drawing.drawingType === 'section') {
+        // Update section drawing boundary from its source callout
+        const callout = (state.shapes as Shape[]).find(
+          (s): s is SectionCalloutShape =>
+            s.type === 'section-callout' &&
+            (s as SectionCalloutShape).targetDrawingId === id
+        ) as SectionCalloutShape | undefined;
+
+        if (callout) {
+          const newBoundary = computeSectionBoundary(callout, state.projectStructure);
+          drawing.boundary = newBoundary;
+          drawing.modifiedAt = new Date().toISOString();
+
+          // Update the viewport to fit the new boundary
+          state.drawingViewports[id] = calculateDrawingFitViewport(
+            newBoundary,
+            state.canvasSize.width || ASSUMED_CANVAS_WIDTH,
+            state.canvasSize.height || ASSUMED_CANVAS_HEIGHT,
+          );
+          state.viewport = state.drawingViewports[id];
+        }
+
+        // Find the layer ID for section reference shapes
+        const sectionLayerId = layerInDrawing?.id || `section-layer-${id}`;
+
+        // Compute section references
+        const result = computeSectionReferences(
+          drawing,
+          state.shapes as Shape[],
+          state.drawings as Drawing[],
+          state.projectStructure,
+          state.sectionGridlineDimensioning,
+        );
+
+        if (result) {
+          // Remove old section reference shapes for this drawing
+          const oldRefIds = new Set(
+            (state.shapes as Shape[])
+              .filter(s => s.drawingId === id && isSectionReferenceShape(s))
+              .map(s => s.id)
+          );
+
+          if (oldRefIds.size > 0) {
+            state.shapes = (state.shapes as Shape[]).filter(s => !oldRefIds.has(s.id)) as typeof state.shapes;
+          }
+
+          // Fix layer IDs to use the actual layer from the section drawing
+          const fixedGridlines = result.gridlines.map(gl => ({ ...gl, layerId: sectionLayerId }));
+          const fixedLevels = result.levels.map(lv => ({ ...lv, layerId: sectionLayerId }));
+          const fixedDimensions = result.dimensions.map(dim => ({ ...dim, layerId: sectionLayerId }));
+
+          // Add new section reference shapes
+          for (const gl of fixedGridlines) {
+            (state.shapes as Shape[]).push(gl as unknown as Shape);
+          }
+          for (const lv of fixedLevels) {
+            (state.shapes as Shape[]).push(lv as unknown as Shape);
+          }
+          for (const dim of fixedDimensions) {
+            (state.shapes as Shape[]).push(dim as unknown as Shape);
+          }
+
+          // Update the drawing's sectionReferences
+          drawing.sectionReferences = result.references;
+        }
+      }
+    }),
+
+  syncSectionReferences: (sectionDrawingId) =>
+    set((state) => {
+      const drawing = state.drawings.find((d) => d.id === sectionDrawingId);
+      if (!drawing || drawing.drawingType !== 'section') return;
+
+      // Find the layer for section reference shapes
+      const layerInDrawing = state.layers.find((l) => l.drawingId === sectionDrawingId);
+      const sectionLayerId = layerInDrawing?.id || `section-layer-${sectionDrawingId}`;
+
+      // Compute section references
+      const result = computeSectionReferences(
+        drawing,
+        state.shapes as Shape[],
+        state.drawings as Drawing[],
+        state.projectStructure,
+        state.sectionGridlineDimensioning,
+      );
+
+      if (result) {
+        // Remove old section reference shapes for this drawing
+        const oldRefIds = new Set(
+          (state.shapes as Shape[])
+            .filter(s => s.drawingId === sectionDrawingId && isSectionReferenceShape(s))
+            .map(s => s.id)
+        );
+
+        if (oldRefIds.size > 0) {
+          state.shapes = (state.shapes as Shape[]).filter(s => !oldRefIds.has(s.id)) as typeof state.shapes;
+        }
+
+        // Fix layer IDs to use the actual layer from the section drawing
+        const fixedGridlines = result.gridlines.map(gl => ({ ...gl, layerId: sectionLayerId }));
+        const fixedLevels = result.levels.map(lv => ({ ...lv, layerId: sectionLayerId }));
+        const fixedDimensions = result.dimensions.map(dim => ({ ...dim, layerId: sectionLayerId }));
+
+        // Add new section reference shapes
+        for (const gl of fixedGridlines) {
+          (state.shapes as Shape[]).push(gl as unknown as Shape);
+        }
+        for (const lv of fixedLevels) {
+          (state.shapes as Shape[]).push(lv as unknown as Shape);
+        }
+        for (const dim of fixedDimensions) {
+          (state.shapes as Shape[]).push(dim as unknown as Shape);
+        }
+
+        // Update the drawing's sectionReferences
+        drawing.sectionReferences = result.references;
+        drawing.modifiedAt = new Date().toISOString();
+        state.isModified = true;
+      }
+    }),
+
+  syncAllSectionReferences: () =>
+    set((state) => {
+      // Find all section drawings and re-sync their references
+      const sectionDrawings = state.drawings.filter(d => d.drawingType === 'section');
+      for (const sectionDrawing of sectionDrawings) {
+        const layerInDrawing = state.layers.find((l) => l.drawingId === sectionDrawing.id);
+        const sectionLayerId = layerInDrawing?.id || `section-layer-${sectionDrawing.id}`;
+
+        const result = computeSectionReferences(
+          sectionDrawing,
+          state.shapes as Shape[],
+          state.drawings as Drawing[],
+          state.projectStructure,
+          state.sectionGridlineDimensioning,
+        );
+
+        if (result) {
+          // Remove old section reference shapes for this drawing
+          state.shapes = (state.shapes as Shape[]).filter(
+            s => !(s.drawingId === sectionDrawing.id && isSectionReferenceShape(s))
+          ) as typeof state.shapes;
+
+          // Add new section reference shapes with correct layer ID
+          for (const gl of result.gridlines) {
+            (state.shapes as Shape[]).push({ ...gl, layerId: sectionLayerId } as unknown as Shape);
+          }
+          for (const lv of result.levels) {
+            (state.shapes as Shape[]).push({ ...lv, layerId: sectionLayerId } as unknown as Shape);
+          }
+          for (const dim of result.dimensions) {
+            (state.shapes as Shape[]).push({ ...dim, layerId: sectionLayerId } as unknown as Shape);
+          }
+
+          // Update the drawing's sectionReferences
+          sectionDrawing.sectionReferences = result.references;
+        }
+      }
+    }),
+
+  syncSectionReferenceToSource: (sectionRefShapeId) => {
+    const store = get();
+    const refShape = store.shapes.find(s => s.id === sectionRefShapeId);
+    if (!refShape || !isSectionReferenceShape(refShape)) return;
+
+    const sourceId = getSourceIdFromSectionRef(refShape);
+    if (!sourceId) return;
+
+    // Find the section drawing this reference belongs to
+    const sectionDrawing = store.drawings.find(d => d.id === refShape.drawingId);
+    if (!sectionDrawing || sectionDrawing.drawingType !== 'section') return;
+
+    // Find the section callout that created this section drawing
+    const callout = store.shapes.find(
+      (s): s is SectionCalloutShape =>
+        s.type === 'section-callout' &&
+        (s as SectionCalloutShape).targetDrawingId === sectionDrawing.id
+    ) as SectionCalloutShape | undefined;
+    if (!callout) return;
+
+    const coordSystem = buildSectionCoordinateSystem(callout);
+
+    if (refShape.type === 'gridline') {
+      // Reverse sync: gridline reference -> plan gridline
+      const sourceGridline = store.shapes.find(
+        s => s.id === sourceId && s.type === 'gridline'
+      ) as GridlineShape | undefined;
+      if (!sourceGridline) return;
+
+      const newPos = syncGridlineFromSection(
+        refShape as GridlineShape,
+        coordSystem,
+        sourceGridline,
+      );
+      if (newPos) {
+        set((state) => {
+          withHistory(state, (draft) => {
+            const idx = draft.findIndex(s => s.id === sourceId);
+            if (idx !== -1) {
+              (draft[idx] as GridlineShape).start = newPos.start;
+              (draft[idx] as GridlineShape).end = newPos.end;
+            }
+          });
+        });
+      }
+    } else if (refShape.type === 'level') {
+      // Reverse sync: level reference -> storey elevation
+      const newElevation = syncLevelFromSection(refShape as LevelShape);
+      if (newElevation !== null) {
+        // Find and update the storey
+        const storeyIdMatch = sourceId.match(/^storey-(.+)$/);
+        if (storeyIdMatch) {
+          const storeyId = storeyIdMatch[1];
+          set((state) => {
+            for (const building of state.projectStructure.buildings) {
+              const storey = building.storeys.find(s => s.id === storeyId);
+              if (storey) {
+                storey.elevation = newElevation;
+                break;
+              }
+            }
+          });
+        }
+      }
+    }
+  },
+
+  updateSectionDrawingBoundary: (sectionDrawingId) =>
+    set((state) => {
+      const drawing = state.drawings.find((d) => d.id === sectionDrawingId);
+      if (!drawing || drawing.drawingType !== 'section') return;
+
+      // Find the section callout that created this section drawing
+      const callout = (state.shapes as Shape[]).find(
+        (s): s is SectionCalloutShape =>
+          s.type === 'section-callout' &&
+          (s as SectionCalloutShape).targetDrawingId === sectionDrawingId
+      ) as SectionCalloutShape | undefined;
+      if (!callout) return;
+
+      // Compute boundary from callout geometry and storey elevations
+      const newBoundary = computeSectionBoundary(callout, state.projectStructure);
+
+      drawing.boundary = newBoundary;
+      drawing.modifiedAt = new Date().toISOString();
+      state.isModified = true;
+
+      // Also update any sheet viewports that reference this drawing
+      for (const sheet of state.sheets) {
+        for (const viewport of sheet.viewports) {
+          if (viewport.drawingId === sectionDrawingId) {
+            viewport.width = newBoundary.width * viewport.scale;
+            viewport.height = newBoundary.height * viewport.scale;
+            viewport.centerX = newBoundary.x + newBoundary.width / 2;
+            viewport.centerY = newBoundary.y + newBoundary.height / 2;
+          }
+        }
+      }
+    }),
+
+  updateDrawingType: (id, drawingType) =>
+    set((state) => {
+      const drawing = state.drawings.find((d) => d.id === id);
+      if (drawing) {
+        drawing.drawingType = drawingType;
+        if (drawingType !== 'plan') {
+          // Clear storeyId if switching away from plan type
+          delete drawing.storeyId;
+        } else if (!drawing.storeyId) {
+          // Auto-assign the first available storey when switching to plan type
+          for (const building of state.projectStructure?.buildings ?? []) {
+            if (building.storeys.length > 0) {
+              drawing.storeyId = building.storeys[0].id;
+              break;
+            }
+          }
+        }
+        drawing.modifiedAt = new Date().toISOString();
+        state.isModified = true;
+      }
+    }),
+
+  updateDrawingStorey: (id, storeyId) =>
+    set((state) => {
+      const drawing = state.drawings.find((d) => d.id === id);
+      if (drawing) {
+        drawing.storeyId = storeyId;
+        drawing.modifiedAt = new Date().toISOString();
+        state.isModified = true;
+      }
     }),
 
   // ============================================================================
@@ -1661,12 +2168,18 @@ export const createModelSlice = (
         const remainingLayersInDrawing = state.layers.filter((l) => l.drawingId === state.activeDrawingId);
         state.activeLayerId = remainingLayersInDrawing[0]?.id || state.layers[0].id;
       }
-      // Move shapes from deleted layer to active layer
-      state.shapes.forEach((s) => {
-        if (s.layerId === id) {
-          s.layerId = state.activeLayerId;
-        }
-      });
+      // Move shapes from deleted layer to active layer (with history)
+      const hasShapesOnLayer = state.shapes.some((s) => s.layerId === id);
+      if (hasShapesOnLayer) {
+        const newLayerId = state.activeLayerId;
+        withHistory(state, (draft) => {
+          for (const s of draft) {
+            if (s.layerId === id) {
+              s.layerId = newLayerId;
+            }
+          }
+        });
+      }
     }),
 
   setActiveLayer: (id) =>
@@ -1712,34 +2225,39 @@ export const createModelSlice = (
 
   applyTextStyleToShape: (shapeId, styleId) =>
     set((state) => {
-      const shape = state.shapes.find((s) => s.id === shapeId);
       const style = state.textStyles.find((s) => s.id === styleId);
-      if (!shape || shape.type !== 'text' || !style) return;
+      if (!style) return;
+      // Check if shape exists and is text before recording history
+      const exists = state.shapes.some((s) => s.id === shapeId && s.type === 'text');
+      if (!exists) return;
 
-      // Apply style properties to the shape
-      const textShape = shape as import('../../types/geometry').TextShape;
-      textShape.fontFamily = style.fontFamily;
-      textShape.fontSize = style.fontSize;
-      textShape.bold = style.bold;
-      textShape.italic = style.italic;
-      textShape.underline = style.underline;
-      textShape.color = style.color;
-      textShape.alignment = style.alignment;
-      textShape.verticalAlignment = style.verticalAlignment;
-      textShape.lineHeight = style.lineHeight;
-      textShape.isModelText = style.isModelText;
-      textShape.backgroundMask = style.backgroundMask;
-      textShape.backgroundColor = style.backgroundColor;
-      textShape.backgroundPadding = style.backgroundPadding;
-      textShape.strikethrough = style.strikethrough ?? false;
-      textShape.textCase = style.textCase;
-      textShape.letterSpacing = style.letterSpacing;
-      textShape.widthFactor = style.widthFactor;
-      textShape.obliqueAngle = style.obliqueAngle;
-      textShape.paragraphSpacing = style.paragraphSpacing;
-      textShape.textStyleId = styleId;
+      withHistory(state, (draft) => {
+        const shape = draft.find((s) => s.id === shapeId);
+        if (!shape || shape.type !== 'text') return;
 
-      state.isModified = true;
+        // Apply style properties to the shape
+        const textShape = shape as import('../../types/geometry').TextShape;
+        textShape.fontFamily = style.fontFamily;
+        textShape.fontSize = style.fontSize;
+        textShape.bold = style.bold;
+        textShape.italic = style.italic;
+        textShape.underline = style.underline;
+        textShape.color = style.color;
+        textShape.alignment = style.alignment;
+        textShape.verticalAlignment = style.verticalAlignment;
+        textShape.lineHeight = style.lineHeight;
+        textShape.isModelText = style.isModelText;
+        textShape.backgroundMask = style.backgroundMask;
+        textShape.backgroundColor = style.backgroundColor;
+        textShape.backgroundPadding = style.backgroundPadding;
+        textShape.strikethrough = style.strikethrough ?? false;
+        textShape.textCase = style.textCase;
+        textShape.letterSpacing = style.letterSpacing;
+        textShape.widthFactor = style.widthFactor;
+        textShape.obliqueAngle = style.obliqueAngle;
+        textShape.paragraphSpacing = style.paragraphSpacing;
+        textShape.textStyleId = styleId;
+      });
     }),
 
   duplicateTextStyle: (id) => {

@@ -1,5 +1,13 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useAppStore } from '../../state/appStore';
+import type { DrawingType } from '../../types/geometry';
+
+// Drawing type display configuration
+const DRAWING_TYPE_CONFIG: Record<DrawingType, { label: string; color: string }> = {
+  standalone: { label: 'Stand Alone', color: 'bg-gray-500/30 text-gray-300' },
+  plan: { label: 'Plan', color: 'bg-blue-500/30 text-blue-300' },
+  section: { label: 'Section', color: 'bg-amber-500/30 text-amber-300' },
+};
 
 export function DrawingPropertiesPanel({ showHeader = true }: { showHeader?: boolean }) {
   const {
@@ -7,15 +15,39 @@ export function DrawingPropertiesPanel({ showHeader = true }: { showHeader?: boo
     activeDrawingId,
     updateDrawingBoundary,
     renameDrawing,
+    updateDrawingType,
+    updateDrawingStorey,
+    projectStructure,
     boundaryEditState,
     selectBoundary,
     deselectBoundary,
     fitBoundaryToContent,
     boundaryVisible,
     toggleBoundaryVisible,
+    axesVisible,
+    toggleAxesVisible,
+    openDrawingStandardsDialog,
   } = useAppStore();
 
   const activeDrawing = drawings.find(d => d.id === activeDrawingId);
+
+  // Collect all storeys from project structure for storey assignment dropdown
+  const allStoreys = useMemo(() =>
+    projectStructure?.buildings?.flatMap(b =>
+      b.storeys.map(s => ({ ...s, buildingName: b.name }))
+    ) ?? [],
+    [projectStructure],
+  );
+
+  const handleTypeChange = useCallback((newType: DrawingType) => {
+    if (!activeDrawingId) return;
+    updateDrawingType(activeDrawingId, newType);
+  }, [activeDrawingId, updateDrawingType]);
+
+  const handleStoreyChange = useCallback((storeyId: string) => {
+    if (!activeDrawingId) return;
+    updateDrawingStorey(activeDrawingId, storeyId || undefined);
+  }, [activeDrawingId, updateDrawingStorey]);
 
   const handleBoundaryChange = useCallback((
     field: 'x' | 'y' | 'width' | 'height',
@@ -64,7 +96,62 @@ export function DrawingPropertiesPanel({ showHeader = true }: { showHeader?: boo
               className="w-full px-2 py-1 text-xs bg-cad-input border border-cad-border text-cad-text"
             />
           </div>
+
+          {/* Drawing Type */}
+          <div>
+            <label className="block text-xs text-cad-text-dim mb-1">Type:</label>
+            <select
+              value={activeDrawing.drawingType || 'standalone'}
+              onChange={(e) => handleTypeChange(e.target.value as DrawingType)}
+              className="w-full px-2 py-1 text-xs bg-cad-input border border-cad-border text-cad-text"
+            >
+              {(['standalone', 'plan', 'section'] as DrawingType[]).map((type) => (
+                <option key={type} value={type}>{DRAWING_TYPE_CONFIG[type].label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Storey assignment (for plan drawings) */}
+          {(activeDrawing.drawingType || 'standalone') === 'plan' && (
+            <div>
+              <label className="block text-xs text-cad-text-dim mb-1">Storey:</label>
+              {allStoreys.length > 0 ? (
+                <select
+                  value={activeDrawing.storeyId || ''}
+                  onChange={(e) => handleStoreyChange(e.target.value)}
+                  className="w-full px-2 py-1 text-xs bg-cad-input border border-cad-border text-cad-text"
+                  title="Linked building storey"
+                >
+                  <option value="">-- None --</option>
+                  {allStoreys.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.buildingName} - {s.name} ({s.elevation}mm)
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="text-xs text-cad-text-dim italic">
+                  No storeys defined. Add storeys in Project Structure.
+                </span>
+              )}
+            </div>
+          )}
         </div>
+      </div>
+
+      {/* Display Section */}
+      <div className="p-3 border-b border-cad-border">
+        <h4 className="font-medium text-cad-text mb-2">Display</h4>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={axesVisible}
+            onChange={toggleAxesVisible}
+            className="accent-cad-accent"
+            title="Show/Hide Axes"
+          />
+          <span className="text-xs text-cad-text">Show Axes</span>
+        </label>
       </div>
 
       {/* Boundary Section */}
@@ -158,6 +245,17 @@ export function DrawingPropertiesPanel({ showHeader = true }: { showHeader?: boo
             <strong>Tip:</strong> Drag the corner or edge handles to resize. Drag the center handle to move the boundary.
           </div>
         )}
+      </div>
+
+      {/* Drawing Standards */}
+      <div className="p-3 border-b border-cad-border">
+        <h4 className="font-medium text-cad-text mb-2">Standards</h4>
+        <button
+          onClick={openDrawingStandardsDialog}
+          className="w-full px-2 py-1.5 text-xs bg-cad-input border border-cad-border text-cad-text hover:bg-cad-hover"
+        >
+          Drawing Standards...
+        </button>
       </div>
 
       {/* Info Section */}

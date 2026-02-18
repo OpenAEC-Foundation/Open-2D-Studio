@@ -2,14 +2,113 @@
  * File Service - Handles file operations (New, Open, Save, Export)
  */
 
-import { open, save, message, ask } from '@tauri-apps/plugin-dialog';
-import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../log/logService';
-import type { Shape, ShapeStyle, LineStyle, Layer, Drawing, Sheet, Viewport, DrawingBoundary, PolylineShape, ImageShape, BlockDefinition, BlockInstanceShape } from '../../types/geometry';
+import type { Shape, ShapeStyle, LineStyle, Layer, Drawing, Sheet, Viewport, DrawingBoundary, PolylineShape, ImageShape } from '../../types/geometry';
 import { splineToSvgPath } from '../../engine/geometry/SplineUtils';
 import { bulgeToArc, bulgeArcBounds } from '../../engine/geometry/GeometryUtils';
 export { exportToIFC } from '../export/ifcExport';
 import { CAD_DEFAULT_FONT } from '../../constants/cadDefaults';
+import { rasterizeDxfShapes } from './dxfUnderlayService';
+
+// ============================================================================
+// Environment detection
+// ============================================================================
+
+/** True when running inside the Tauri desktop shell. */
+const isTauri: boolean =
+  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+// ============================================================================
+// Browser fallback helpers
+// ============================================================================
+
+/**
+ * Module-level cache for file content picked in the browser.
+ * showOpenDialog stores the content here, keyed by the pseudo-path it returns.
+ * readProjectFile / readTextFileBrowser then consumes it.
+ */
+const _browserFileCache = new Map<string, string>();
+
+// ============================================================================
+// File System Access API (Browser Save As)
+// ============================================================================
+
+/** Augment window with the File System Access API (Chromium only). */
+declare global {
+  interface Window {
+    showSaveFilePicker?: (options?: {
+      suggestedName?: string;
+      types?: Array<{
+        description?: string;
+        accept: Record<string, string[]>;
+      }>;
+    }) => Promise<FileSystemFileHandle>;
+  }
+}
+
+/** Whether the browser supports the File System Access API. */
+function hasFileSystemAccess(): boolean {
+  return typeof window.showSaveFilePicker === 'function';
+}
+
+/** Cached file handle for re-saving (Ctrl+S) without a new dialog. */
+let _browserFileHandle: FileSystemFileHandle | null = null;
+
+/** One-shot handle for exports. */
+let _browserExportHandle: FileSystemFileHandle | null = null;
+
+/** Clear the cached handle (e.g. when creating a new document). */
+export function clearBrowserFileHandle(): void {
+  _browserFileHandle = null;
+}
+
+/**
+ * Open a browser file-picker and return the selected file's name + content.
+ * Returns null if the user cancels.
+ */
+function browserPickFile(accept: string): Promise<{ name: string; content: string } | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) { resolve(null); return; }
+      const content = await file.text();
+      resolve({ name: file.name, content });
+    };
+    // Handle cancel – the input won't fire 'change' if the user cancels,
+    // but we can listen for focus returning to the window.
+    const onFocus = () => {
+      // Small delay so `change` fires first if a file was selected.
+      setTimeout(() => {
+        window.removeEventListener('focus', onFocus);
+        resolve(null);
+      }, 500);
+    };
+    window.addEventListener('focus', onFocus);
+    input.click();
+  });
+}
+
+/**
+ * Trigger a file download in the browser using Blob + invisible <a>.
+ */
+function browserDownload(
+  content: string,
+  filename: string,
+  mimeType = 'application/octet-stream',
+): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 // File format version for future compatibility
 const FILE_FORMAT_VERSION = 3;
@@ -28,7 +127,7 @@ const DEFAULT_DRAWING_SCALE = 0.02;
 // File extension for project files
 export const PROJECT_EXTENSION = 'o2d';
 export const PROJECT_FILTER = {
-  name: 'Open 2D Studio Project',
+  name: 'Open nD Studio Project',
   extensions: [PROJECT_EXTENSION],
 };
 
@@ -101,8 +200,18 @@ export interface ProjectFileV2 {
   projectInfo?: import('../../types/projectInfo').ProjectInfo;
   // Unit settings (optional, backward compatible)
   unitSettings?: import('../../units/types').UnitSettings;
-  // Block definitions (optional, backward compatible)
-  blockDefinitions?: BlockDefinition[];
+  // Parametric shapes (optional, backward compatible)
+  parametricShapes?: import('../../types/parametric').ParametricShape[];
+  // Text styles (optional, backward compatible)
+  textStyles?: import('../../types/geometry').TextStyle[];
+  // Custom title block templates (optional, backward compatible)
+  customTitleBlockTemplates?: import('../../types/sheet').TitleBlockTemplate[];
+  // Custom sheet templates (optional, backward compatible)
+  customSheetTemplates?: import('../../types/sheet').SheetTemplate[];
+  // Project-level custom hatch patterns (optional, backward compatible)
+  projectPatterns?: import('../../types/hatch').CustomHatchPattern[];
+  // Wall types (optional, backward compatible)
+  wallTypes?: import('../../types/geometry').WallType[];
 }
 
 /**
@@ -155,6 +264,7 @@ function migrateV1ToV2(v1: ProjectFileV1): ProjectFileV2 {
       name: 'Drawing 1',
       boundary: { ...DEFAULT_DRAWING_BOUNDARY },
       scale: DEFAULT_DRAWING_SCALE,
+      drawingType: 'standalone' as const,
       createdAt: v1.createdAt,
       modifiedAt: now,
     }],
@@ -259,6 +369,7 @@ export function createNewProject(): ProjectFile {
       name: 'Drawing 1',
       boundary: { ...DEFAULT_DRAWING_BOUNDARY },
       scale: DEFAULT_DRAWING_SCALE,
+      drawingType: 'standalone' as const,
       createdAt: now,
       modifiedAt: now,
     }],
@@ -292,72 +403,167 @@ export function createNewProject(): ProjectFile {
 }
 
 /**
- * Show open file dialog and return selected path
+ * Show open file dialog and return selected path.
+ * In the browser the returned "path" is the filename; the content is cached
+ * internally so that readProjectFile / readTextFileBrowser can retrieve it.
  */
 export async function showOpenDialog(): Promise<string | null> {
-  const result = await open({
-    multiple: false,
-    filters: [
-      { name: 'Supported Files', extensions: [PROJECT_EXTENSION, 'dxf'] },
-      PROJECT_FILTER,
-      { name: 'DXF', extensions: ['dxf'] },
-    ],
-    title: 'Open',
-  });
+  if (isTauri) {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const result = await open({
+      multiple: false,
+      filters: [
+        { name: 'Supported Files', extensions: [PROJECT_EXTENSION, 'dxf'] },
+        PROJECT_FILTER,
+        { name: 'DXF', extensions: ['dxf'] },
+      ],
+      title: 'Open',
+    });
+    return result as string | null;
+  }
 
-  return result as string | null;
+  // Browser fallback
+  const picked = await browserPickFile('.o2d,.dxf');
+  if (!picked) return null;
+  _browserFileCache.set(picked.name, picked.content);
+  return picked.name;
 }
 
 /**
- * Show save file dialog and return selected path
+ * Show save file dialog and return selected path.
+ * In the browser returns a synthetic filename (download will happen in writeProjectFile).
  */
 export async function showSaveDialog(defaultName?: string): Promise<string | null> {
-  const result = await save({
-    filters: [PROJECT_FILTER],
-    title: 'Save Project',
-    defaultPath: defaultName ? `${defaultName}.${PROJECT_EXTENSION}` : undefined,
-  });
+  if (isTauri) {
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    const result = await save({
+      filters: [PROJECT_FILTER],
+      title: 'Save Project',
+      defaultPath: defaultName ? `${defaultName}.${PROJECT_EXTENSION}` : undefined,
+    });
+    return result;
+  }
 
-  return result;
+  // Browser: try File System Access API for a real Save As dialog
+  if (hasFileSystemAccess()) {
+    try {
+      const handle = await window.showSaveFilePicker!({
+        suggestedName: (defaultName || 'Untitled') + '.' + PROJECT_EXTENSION,
+        types: [{
+          description: 'Open 2D Studio Project',
+          accept: { 'application/json': [`.${PROJECT_EXTENSION}`] },
+        }],
+      });
+      _browserFileHandle = handle;
+      return handle.name;
+    } catch (e: unknown) {
+      // User cancelled (AbortError)
+      if (e instanceof DOMException && e.name === 'AbortError') return null;
+      // Fall through to prompt fallback
+    }
+  }
+
+  // Fallback: prompt for filename
+  const input = window.prompt('Save as:', (defaultName || 'Untitled') + '.' + PROJECT_EXTENSION);
+  if (!input) return null;
+  return input;
 }
 
 /**
- * Show export file dialog
+ * Show export file dialog.
+ * In the browser returns a synthetic filename.
  */
 export async function showExportDialog(
   format: keyof typeof EXPORT_FILTERS,
   defaultName?: string
 ): Promise<string | null> {
   const filter = EXPORT_FILTERS[format];
-  const result = await save({
-    filters: [filter],
-    title: `Export as ${filter.name}`,
-    defaultPath: defaultName ? `${defaultName}.${filter.extensions[0]}` : undefined,
-  });
 
-  return result;
+  if (isTauri) {
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    const result = await save({
+      filters: [filter],
+      title: `Export as ${filter.name}`,
+      defaultPath: defaultName ? `${defaultName}.${filter.extensions[0]}` : undefined,
+    });
+    return result;
+  }
+
+  // Browser: try File System Access API
+  if (hasFileSystemAccess()) {
+    try {
+      const ext = filter.extensions[0];
+      const mimeMap: Record<string, string> = {
+        svg: 'image/svg+xml', dxf: 'application/dxf',
+        ifc: 'application/x-step', json: 'application/json',
+      };
+      const handle = await window.showSaveFilePicker!({
+        suggestedName: (defaultName || 'export') + '.' + ext,
+        types: [{
+          description: filter.name,
+          accept: { [mimeMap[ext] || 'application/octet-stream']: [`.${ext}`] },
+        }],
+      });
+      _browserExportHandle = handle;
+      return handle.name;
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === 'AbortError') return null;
+    }
+  }
+
+  // Fallback
+  const filename = (defaultName || 'export') + '.' + filter.extensions[0];
+  return filename;
 }
 
 /**
- * Show export dialog with all supported formats
+ * Show export dialog with all supported formats.
+ * In the browser we prompt the user for the desired format via window.prompt
+ * and return a synthetic filename.
  */
 export async function showExportAllFormatsDialog(
   defaultName?: string
 ): Promise<string | null> {
-  const allFilters = Object.values(EXPORT_FILTERS);
-  const result = await save({
-    filters: allFilters,
-    title: 'Export Drawing',
-    defaultPath: defaultName ? `${defaultName}.svg` : undefined,
-  });
-  return result;
+  if (isTauri) {
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    const allFilters = Object.values(EXPORT_FILTERS);
+    const result = await save({
+      filters: allFilters,
+      title: 'Export Drawing',
+      defaultPath: defaultName ? `${defaultName}.svg` : undefined,
+    });
+    return result;
+  }
+
+  // Browser fallback: ask for format, default to SVG
+  const ext = window.prompt(
+    'Export format (svg, dxf, ifc, json):',
+    'svg',
+  )?.trim().toLowerCase();
+  if (!ext) return null;
+  const validExts = ['svg', 'dxf', 'ifc', 'json'];
+  const chosen = validExts.includes(ext) ? ext : 'svg';
+  return (defaultName || 'export') + '.' + chosen;
 }
 
 /**
- * Read project file from disk
+ * Read project file from disk (Tauri) or from the browser file cache.
  */
 export async function readProjectFile(path: string): Promise<ProjectFile> {
-  const content = await readTextFile(path);
+  let content: string;
+  if (isTauri) {
+    const { readTextFile } = await import('@tauri-apps/plugin-fs');
+    content = await readTextFile(path);
+  } else {
+    // Browser: retrieve from cache populated by showOpenDialog
+    const cached = _browserFileCache.get(path);
+    if (cached !== undefined) {
+      content = cached;
+      _browserFileCache.delete(path);
+    } else {
+      throw new Error('File content not available (browser mode).');
+    }
+  }
   const data = JSON.parse(content) as ProjectFileV1 | ProjectFileV2 | ProjectFileV3;
 
   // Validate file format version
@@ -381,22 +587,29 @@ export async function readProjectFile(path: string): Promise<ProjectFile> {
 }
 
 /**
- * Write project file to disk
+ * Write project file to disk (Tauri) or trigger a browser download.
  */
 export async function writeProjectFile(path: string, project: ProjectFile): Promise<void> {
   project.modifiedAt = new Date().toISOString();
   const content = JSON.stringify(project, null, 2);
-  await writeTextFile(path, content);
+
+  if (isTauri) {
+    const { writeTextFile } = await import('@tauri-apps/plugin-fs');
+    await writeTextFile(path, content);
+  } else if (_browserFileHandle) {
+    // Re-save to the same file via File System Access API (silent Ctrl+S)
+    const writable = await _browserFileHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+  } else {
+    browserDownload(content, path, 'application/json');
+  }
 }
 
 /**
  * Export shapes to SVG format
  */
-export function exportToSVG(shapes: Shape[], width: number = 800, height: number = 600, blockDefinitions?: BlockDefinition[]): string {
-  const blockDefsMap = new Map<string, BlockDefinition>();
-  if (blockDefinitions) {
-    for (const def of blockDefinitions) blockDefsMap.set(def.id, def);
-  }
+export function exportToSVG(shapes: Shape[], width: number = 800, height: number = 600): string {
   // Calculate bounds
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
@@ -427,7 +640,7 @@ export function exportToSVG(shapes: Shape[], width: number = 800, height: number
 `;
 
   for (const shape of shapes) {
-    svg += shapeToSVG(shape, blockDefsMap);
+    svg += shapeToSVG(shape);
   }
 
   svg += '</svg>';
@@ -437,7 +650,7 @@ export function exportToSVG(shapes: Shape[], width: number = 800, height: number
 /**
  * Convert a shape to SVG element
  */
-function shapeToSVG(shape: Shape, blockDefsMap?: Map<string, BlockDefinition>): string {
+function shapeToSVG(shape: Shape): string {
   const { style } = shape;
   const stroke = style.strokeColor;
   const strokeWidth = style.strokeWidth;
@@ -527,21 +740,6 @@ function shapeToSVG(shape: Shape, blockDefsMap?: Map<string, BlockDefinition>): 
       return `  <image href="${imgShape.imageData}" x="${imgShape.position.x}" y="${imgShape.position.y}" width="${imgShape.width}" height="${imgShape.height}"${transform}${opacity} />\n`;
     }
 
-    case 'block-instance': {
-      const def = blockDefsMap?.get(shape.blockDefinitionId);
-      if (!def) return '';
-      const rotDeg = shape.rotation * 180 / Math.PI;
-      const tx = shape.position.x;
-      const ty = shape.position.y;
-      const bx = def.basePoint.x;
-      const by = def.basePoint.y;
-      let groupContent = '';
-      for (const entity of def.entities) {
-        groupContent += shapeToSVG(entity, blockDefsMap);
-      }
-      return `  <g transform="translate(${tx},${ty}) rotate(${rotDeg}) scale(${shape.scaleX},${shape.scaleY}) translate(${-bx},${-by})">\n${groupContent}  </g>\n`;
-    }
-
     default:
       return '';
   }
@@ -550,20 +748,12 @@ function shapeToSVG(shape: Shape, blockDefsMap?: Map<string, BlockDefinition>): 
 /**
  * Export shapes to DXF format (basic implementation)
  */
-export function exportToDXF(shapes: Shape[], unitSettings?: import('../../units/types').UnitSettings, blockDefinitions?: BlockDefinition[]): string {
+export function exportToDXF(shapes: Shape[], unitSettings?: import('../../units/types').UnitSettings): string {
   // Map length unit to DXF $INSUNITS value
   const insUnitsMap: Record<string, number> = {
     'mm': 4, 'cm': 5, 'm': 6, 'in': 1, 'ft': 2, 'ft-in': 2,
   };
   const insUnits = unitSettings ? (insUnitsMap[unitSettings.lengthUnit] ?? 4) : 4;
-
-  // Build a map of definition ID → block name for INSERT export
-  const blockNameMap = new Map<string, { name: string; def: BlockDefinition }>();
-  if (blockDefinitions) {
-    for (const def of blockDefinitions) {
-      blockNameMap.set(def.id, { name: def.name, def });
-    }
-  }
 
   let dxf = `0
 SECTION
@@ -575,48 +765,14 @@ $INSUNITS
 ${insUnits}
 0
 ENDSEC
-`;
-
-  // ---- BLOCKS section ----
-  if (blockDefinitions && blockDefinitions.length > 0) {
-    dxf += `0
-SECTION
-2
-BLOCKS
-`;
-    for (const def of blockDefinitions) {
-      dxf += `0
-BLOCK
-2
-${def.name}
-10
-${def.basePoint.x}
-20
-${-def.basePoint.y}
-30
-0.0
-`;
-      for (const entity of def.entities) {
-        dxf += shapeToDXF(entity);
-      }
-      dxf += `0
-ENDBLK
-`;
-    }
-    dxf += `0
-ENDSEC
-`;
-  }
-
-  // ---- ENTITIES section ----
-  dxf += `0
+0
 SECTION
 2
 ENTITIES
 `;
 
   for (const shape of shapes) {
-    dxf += shapeToDXF(shape, blockNameMap);
+    dxf += shapeToDXF(shape);
   }
 
   dxf += `0
@@ -630,7 +786,7 @@ EOF
 /**
  * Convert a shape to DXF entity
  */
-function shapeToDXF(shape: Shape, blockNameMap?: Map<string, { name: string; def: BlockDefinition }>): string {
+function shapeToDXF(shape: Shape): string {
   switch (shape.type) {
     case 'line':
       return `0
@@ -841,29 +997,6 @@ ${-pt.y}
       return result;
     }
 
-    case 'block-instance': {
-      const blockInfo = blockNameMap?.get(shape.blockDefinitionId);
-      if (!blockInfo) return '';
-      const rotDeg = -(shape.rotation * 180 / Math.PI);
-      return `0
-INSERT
-2
-${blockInfo.name}
-10
-${shape.position.x}
-20
-${-shape.position.y}
-30
-0.0
-41
-${shape.scaleX}
-42
-${shape.scaleY}
-50
-${rotDeg}
-`;
-    }
-
     default:
       return '';
   }
@@ -942,40 +1075,53 @@ function getShapeBounds(shape: Shape): { minX: number; minY: number; maxX: numbe
         maxX: shape.position.x + shape.width,
         maxY: shape.position.y + shape.height,
       };
-    case 'block-instance':
-      return {
-        minX: shape.position.x,
-        minY: shape.position.y,
-        maxX: shape.position.x,
-        maxY: shape.position.y,
-      };
     default:
       return null;
   }
 }
 
 /**
- * Show import DXF file dialog
+ * Show import DXF file dialog.
+ * In browser mode the content is cached and the filename is returned.
  */
 export async function showImportDxfDialog(): Promise<string | null> {
-  const result = await open({
-    multiple: false,
-    filters: [{ name: 'DXF Files', extensions: ['dxf'] }],
-    title: 'Import DXF',
-  });
-  return result as string | null;
+  if (isTauri) {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const result = await open({
+      multiple: false,
+      filters: [{ name: 'DXF Files', extensions: ['dxf'] }],
+      title: 'Import DXF',
+    });
+    return result as string | null;
+  }
+
+  // Browser fallback
+  const picked = await browserPickFile('.dxf');
+  if (!picked) return null;
+  _browserFileCache.set(picked.name, picked.content);
+  return picked.name;
 }
 
 /**
- * Show import image file dialog
+ * Show import image file dialog.
+ * In browser mode the content is cached and the filename is returned.
  */
 export async function showImportImageDialog(): Promise<string | null> {
-  const result = await open({
-    multiple: false,
-    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp', 'gif', 'webp', 'svg'] }],
-    title: 'Import Image',
-  });
-  return result as string | null;
+  if (isTauri) {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const result = await open({
+      multiple: false,
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp', 'gif', 'webp', 'svg'] }],
+      title: 'Import Image',
+    });
+    return result as string | null;
+  }
+
+  // Browser fallback
+  const picked = await browserPickFile('image/png,image/jpeg,image/bmp,image/gif,image/webp,image/svg+xml');
+  if (!picked) return null;
+  _browserFileCache.set(picked.name, picked.content);
+  return picked.name;
 }
 
 /**
@@ -1089,21 +1235,24 @@ export function parseDXFInsUnits(content: string): import('../../units/types').L
 }
 
 /**
- * Parse DXF entities from a lines array starting at a given index.
- * Reusable for both BLOCKS section (entities inside a block) and ENTITIES section.
- * Stops when a group-code-0 value matches any stopToken, or on EOF.
+ * Parse a DXF string into shapes.
+ * Supports LINE, CIRCLE, ARC, POLYLINE/LWPOLYLINE, ELLIPSE, SPLINE, TEXT, MTEXT, POINT entities.
+ * Also extracts layer names and colors from entities.
  */
-function parseEntitiesFromLines(
-  lines: string[],
-  startIndex: number,
-  stopTokens: string[],
+export function parseDXF(
+  content: string,
   layerId: string,
   drawingId: string,
-  defaultStyle: ShapeStyle,
-  blocksMap?: Map<string, { entities: Shape[], baseX: number, baseY: number, definitionId?: string }>,
-): { shapes: Shape[], endIndex: number } {
+): Shape[] {
+  const defaultStyle: ShapeStyle = {
+    strokeColor: '#ffffff',
+    strokeWidth: 1,
+    lineStyle: 'solid' as LineStyle,
+  };
+
   const shapes: Shape[] = [];
-  let i = startIndex;
+  const lines = content.split(/\r?\n/);
+  let i = 0;
 
   const next = (): [number, string] => {
     const code = parseInt(lines[i]?.trim() ?? '0', 10);
@@ -1112,12 +1261,17 @@ function parseEntitiesFromLines(
     return [code, value];
   };
 
+  // Advance to ENTITIES section
+  while (i < lines.length) {
+    const line = lines[i]?.trim();
+    if (line === 'ENTITIES') { i++; break; }
+    i++;
+  }
+
   while (i < lines.length - 1) {
     const [code, value] = next();
-    if (code === 0 && (stopTokens.includes(value) || value === 'EOF')) {
-      i -= 2;
-      break;
-    }
+    if (code === 0 && value === 'EOF') break;
+    if (code === 0 && value === 'ENDSEC') break;
 
     // Parse LINE entity
     if (code === 0 && value === 'LINE') {
@@ -1565,167 +1719,29 @@ function parseEntitiesFromLines(
         closed: true,
       } as Shape);
     }
-
-    // Parse INSERT entity (block reference) — create BlockInstanceShape
-    if (code === 0 && value === 'INSERT' && blocksMap) {
-      let blockName = '';
-      let insertX = 0, insertY = 0;
-      let insScaleX = 1, insScaleY = 1;
-      let rotation = 0;
-
-      while (i < lines.length - 1) {
-        const [c, v] = next();
-        if (c === 0) { i -= 2; break; }
-        if (c === 2) blockName = v;
-        if (c === 10) insertX = parseFloat(v);
-        if (c === 20) insertY = parseFloat(v);
-        if (c === 41) insScaleX = parseFloat(v);
-        if (c === 42) insScaleY = parseFloat(v);
-        if (c === 50) rotation = parseFloat(v);
-      }
-
-      const block = blocksMap.get(blockName);
-      if (block && block.definitionId) {
-        const instanceShape: BlockInstanceShape = {
-          id: crypto.randomUUID(),
-          type: 'block-instance',
-          blockDefinitionId: block.definitionId,
-          position: { x: insertX, y: -insertY },
-          rotation: -(rotation * Math.PI / 180),
-          scaleX: insScaleX,
-          scaleY: insScaleY,
-          style: defaultStyle,
-          layerId,
-          drawingId,
-          visible: true,
-          locked: false,
-        };
-        shapes.push(instanceShape);
-      }
-    }
   }
-
-  return { shapes, endIndex: i };
-}
-
-/**
- * Parse a DXF string into shapes and block definitions.
- * Supports LINE, CIRCLE, ARC, POLYLINE/LWPOLYLINE, ELLIPSE, SPLINE, TEXT, MTEXT, POINT, INSERT entities.
- * Also extracts layer names and colors from entities. INSERT entities become BlockInstanceShape references.
- */
-export function parseDXF(
-  content: string,
-  layerId: string,
-  drawingId: string,
-): { shapes: Shape[], blockDefinitions: BlockDefinition[] } {
-  const defaultStyle: ShapeStyle = {
-    strokeColor: '#ffffff',
-    strokeWidth: 1,
-    lineStyle: 'solid' as LineStyle,
-  };
-
-  const lines = content.split(/\r?\n/);
-
-  // ---- Parse BLOCKS section ----
-  type BlockDef = { entities: Shape[], baseX: number, baseY: number, definitionId: string };
-  const blocks = new Map<string, BlockDef>();
-  const blockDefinitions: BlockDefinition[] = [];
-
-  {
-    let bi = 0;
-    while (bi < lines.length) {
-      if (lines[bi]?.trim() === 'BLOCKS') { bi++; break; }
-      bi++;
-    }
-
-    if (bi < lines.length) {
-      while (bi < lines.length - 1) {
-        const code = parseInt(lines[bi]?.trim() ?? '0', 10);
-        const val = lines[bi + 1]?.trim() ?? '';
-        if (code === 0 && (val === 'ENDSEC' || val === 'EOF')) break;
-
-        if (code === 0 && val === 'BLOCK') {
-          bi += 2;
-          let blockName = '';
-          let baseX = 0, baseY = 0;
-
-          // Read block header group codes
-          while (bi < lines.length - 1) {
-            const c = parseInt(lines[bi]?.trim() ?? '0', 10);
-            const v = lines[bi + 1]?.trim() ?? '';
-            if (c === 0) break;
-            bi += 2;
-            if (c === 2) blockName = v;
-            if (c === 10) baseX = parseFloat(v);
-            if (c === 20) baseY = parseFloat(v);
-          }
-
-          const blockResult = parseEntitiesFromLines(
-            lines, bi, ['ENDBLK'],
-            layerId, drawingId, defaultStyle,
-          );
-          bi = blockResult.endIndex;
-
-          // Advance past ENDBLK and its trailing group codes
-          if (bi < lines.length - 1) {
-            const c = parseInt(lines[bi]?.trim() ?? '0', 10);
-            const v = lines[bi + 1]?.trim() ?? '';
-            if (c === 0 && v === 'ENDBLK') {
-              bi += 2;
-              while (bi < lines.length - 1) {
-                const c2 = parseInt(lines[bi]?.trim() ?? '0', 10);
-                if (c2 === 0) break;
-                bi += 2;
-              }
-            }
-          }
-
-          // Store block (skip anonymous blocks starting with *)
-          if (blockName && !blockName.startsWith('*') && blockResult.shapes.length > 0) {
-            const defId = crypto.randomUUID();
-            blocks.set(blockName, { entities: blockResult.shapes, baseX, baseY, definitionId: defId });
-            blockDefinitions.push({
-              id: defId,
-              name: blockName,
-              basePoint: { x: baseX, y: -baseY },
-              entities: blockResult.shapes,
-              drawingId,
-            });
-          }
-        } else {
-          bi += 2;
-        }
-      }
-    }
-  }
-
-  // ---- Parse ENTITIES section ----
-  let i = 0;
-  while (i < lines.length) {
-    if (lines[i]?.trim() === 'ENTITIES') { i++; break; }
-    i++;
-  }
-
-  const { shapes } = parseEntitiesFromLines(
-    lines, i, ['ENDSEC'],
-    layerId, drawingId, defaultStyle, blocks,
-  );
 
   if (shapes.length > 0) {
-    logger.info(`DXF parsed: ${shapes.length} entities imported (${blockDefinitions.length} block definitions)`, 'DXF');
+    logger.info(`DXF parsed: ${shapes.length} entities imported`, 'DXF');
   }
 
-  return { shapes, blockDefinitions };
+  return shapes;
 }
 
 /**
  * Show confirmation dialog for unsaved changes
  */
 export async function confirmUnsavedChanges(): Promise<boolean> {
-  return await ask('You have unsaved changes. Do you want to continue without saving?', {
-    title: 'Unsaved Changes',
-    kind: 'warning',
-  });
+  if (isTauri) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return await ask('You have unsaved changes. Do you want to continue without saving?', {
+      title: 'Unsaved Changes',
+      kind: 'warning',
+    });
+  }
+
+  // Browser fallback
+  return window.confirm('You have unsaved changes. Do you want to continue without saving?');
 }
 
 /**
@@ -1735,18 +1751,27 @@ export async function confirmUnsavedChanges(): Promise<boolean> {
 export type SavePromptResult = 'save' | 'discard' | 'cancel';
 
 export async function promptSaveBeforeClose(docName?: string): Promise<SavePromptResult> {
-  const result = await message(
-    `Do you want to save changes to "${docName || 'Untitled'}"?`,
-    {
-      title: 'Unsaved Changes',
-      kind: 'warning',
-      buttons: { yes: 'Save', no: "Don't Save", cancel: 'Cancel' },
-    }
+  if (isTauri) {
+    const { message } = await import('@tauri-apps/plugin-dialog');
+    const result = await message(
+      `Do you want to save changes to "${docName || 'Untitled'}"?`,
+      {
+        title: 'Unsaved Changes',
+        kind: 'warning',
+        buttons: { yes: 'Save', no: "Don't Save", cancel: 'Cancel' },
+      }
+    );
+    // Custom button labels: Tauri returns the label text, not semantic ids
+    if (result === 'Yes' || result === 'Save') return 'save';
+    if (result === 'No' || result === "Don't Save") return 'discard';
+    return 'cancel';
+  }
+
+  // Browser fallback: use confirm (no three-button dialog available natively)
+  const wantSave = window.confirm(
+    `Do you want to save changes to "${docName || 'Untitled'}"?\n\nOK = Save, Cancel = Don't Save`,
   );
-  // Custom button labels: Tauri returns the label text, not semantic ids
-  if (result === 'Yes' || result === 'Save') return 'save';
-  if (result === 'No' || result === "Don't Save") return 'discard';
-  return 'cancel';
+  return wantSave ? 'save' : 'discard';
 }
 
 /**
@@ -1754,7 +1779,12 @@ export async function promptSaveBeforeClose(docName?: string): Promise<SavePromp
  */
 export async function showError(msg: string): Promise<void> {
   logger.error(msg, 'File');
-  await message(msg, { title: 'Error', kind: 'error' });
+  if (isTauri) {
+    const { message } = await import('@tauri-apps/plugin-dialog');
+    await message(msg, { title: 'Error', kind: 'error' });
+  } else {
+    window.alert(msg);
+  }
 }
 
 /**
@@ -1762,5 +1792,127 @@ export async function showError(msg: string): Promise<void> {
  */
 export async function showInfo(msg: string): Promise<void> {
   logger.info(msg, 'File');
-  await message(msg, { title: 'Info', kind: 'info' });
+  if (isTauri) {
+    const { message } = await import('@tauri-apps/plugin-dialog');
+    await message(msg, { title: 'Info', kind: 'info' });
+  } else {
+    window.alert(msg);
+  }
+}
+
+// ============================================================================
+// Browser file-cache accessor (for use by other modules)
+// ============================================================================
+
+/**
+ * Retrieve and consume a file's content that was cached by a browser
+ * file-picker dialog (showOpenDialog / showImportDxfDialog / etc.).
+ * Returns undefined when there is no cached entry (e.g. in Tauri mode).
+ */
+export function consumeBrowserFileCache(key: string): string | undefined {
+  const content = _browserFileCache.get(key);
+  if (content !== undefined) _browserFileCache.delete(key);
+  return content;
+}
+
+/**
+ * Write a text file. Uses Tauri FS in desktop mode, browser download otherwise.
+ */
+export async function writeTextFileUniversal(
+  path: string,
+  content: string,
+  mimeType = 'application/octet-stream',
+): Promise<void> {
+  if (isTauri) {
+    const { writeTextFile } = await import('@tauri-apps/plugin-fs');
+    await writeTextFile(path, content);
+  } else if (_browserExportHandle) {
+    // Write via File System Access API handle (from showExportDialog)
+    const writable = await _browserExportHandle.createWritable();
+    await writable.write(content);
+    await writable.close();
+    _browserExportHandle = null; // one-shot
+  } else {
+    browserDownload(content, path, mimeType);
+  }
+}
+
+/**
+ * Read a text file. Uses Tauri FS in desktop mode, browser file cache otherwise.
+ */
+export async function readTextFileUniversal(path: string): Promise<string> {
+  if (isTauri) {
+    const { readTextFile } = await import('@tauri-apps/plugin-fs');
+    return await readTextFile(path);
+  }
+  // Browser: retrieve from cache
+  const cached = _browserFileCache.get(path);
+  if (cached !== undefined) {
+    _browserFileCache.delete(path);
+    return cached;
+  }
+  throw new Error('File content not available (browser mode).');
+}
+
+/**
+ * Whether the app is running inside Tauri (re-exported for other modules).
+ */
+export function isTauriEnvironment(): boolean {
+  return isTauri;
+}
+
+/**
+ * Show a confirmation dialog. Returns true if the user clicked OK/Yes.
+ */
+export async function showConfirm(msg: string): Promise<boolean> {
+  if (isTauri) {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    return await ask(msg, { title: 'Confirm', kind: 'info' });
+  }
+  return window.confirm(msg);
+}
+
+/**
+ * Parse a DXF file and rasterize all shapes into a single ImageShape underlay.
+ * Returns an array with one ImageShape (underlay), or null if rasterization fails.
+ */
+export function parseDXFAsUnderlay(
+  content: string,
+  layerId: string,
+  drawingId: string,
+  fileName: string,
+): ImageShape | null {
+  const shapes = parseDXF(content, layerId, drawingId);
+  if (shapes.length === 0) return null;
+
+  const result = rasterizeDxfShapes(shapes);
+  if (!result) return null;
+
+  const underlay: ImageShape = {
+    id: generateId(),
+    type: 'image',
+    position: { x: result.bounds.minX, y: result.bounds.minY },
+    width: result.bounds.maxX - result.bounds.minX,
+    height: result.bounds.maxY - result.bounds.minY,
+    rotation: 0,
+    imageData: result.dataUrl,
+    originalWidth: result.pixelWidth,
+    originalHeight: result.pixelHeight,
+    opacity: 0.5,
+    maintainAspectRatio: true,
+    locked: true,
+    isUnderlay: true,
+    sourceFileName: fileName,
+    visible: true,
+    layerId,
+    drawingId,
+    style: {
+      strokeColor: '#000000',
+      strokeWidth: 1,
+      fillColor: 'transparent',
+      lineStyle: 'solid' as LineStyle,
+    },
+  };
+
+  return underlay;
 }

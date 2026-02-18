@@ -4,6 +4,8 @@
 
 import type { Shape, Point } from './types';
 import { cloneShapes, generateId } from './types';
+import { produceWithPatches, current } from 'immer';
+import type { HistoryEntry } from './historySlice';
 
 // ============================================================================
 // State Interface
@@ -61,12 +63,33 @@ interface StoreWithModel {
 }
 
 interface StoreWithHistory {
-  historyStack: any[];
+  historyStack: HistoryEntry[];
   historyIndex: number;
   maxHistorySize: number;
 }
 
 type FullStore = ClipboardState & StoreWithModel & StoreWithHistory;
+
+/** Record shape changes in the shared undo/redo history stack */
+function withHistory(state: FullStore, mutate: (draft: Shape[]) => void): void {
+  const [nextShapes, patches, inversePatches] = produceWithPatches(
+    current(state.shapes as Shape[]),
+    mutate
+  );
+  if (patches.length === 0) return;
+
+  // Truncate future entries
+  if (state.historyIndex < state.historyStack.length - 1) {
+    state.historyStack = state.historyStack.slice(0, state.historyIndex + 1);
+  }
+  state.historyStack.push({ patches, inversePatches });
+  if (state.historyStack.length > state.maxHistorySize) {
+    state.historyStack.shift();
+  }
+  state.historyIndex = state.historyStack.length - 1;
+  state.shapes = nextShapes as any;
+  state.isModified = true;
+}
 
 export const createClipboardSlice = (
   set: (fn: (state: FullStore) => void) => void,
@@ -116,15 +139,16 @@ export const createClipboardSlice = (
       s.clipboardCutMode = true;
       s.clipboardOrigin = origin;
 
-      // Remove cut shapes from the model
+      // Remove cut shapes from the model (with history so it can be undone)
       const cutIds = new Set(state.selectedShapeIds);
-      for (let i = s.shapes.length - 1; i >= 0; i--) {
-        if (cutIds.has(s.shapes[i].id)) {
-          s.shapes.splice(i, 1);
+      withHistory(s, (draft) => {
+        for (let i = draft.length - 1; i >= 0; i--) {
+          if (cutIds.has(draft[i].id)) {
+            draft.splice(i, 1);
+          }
         }
-      }
+      });
       s.selectedShapeIds = [];
-      s.isModified = true;
     });
   },
 
@@ -160,10 +184,12 @@ export const createClipboardSlice = (
     });
 
     set((s) => {
-      // Add new shapes
-      for (const shape of newShapes) {
-        s.shapes.push(shape);
-      }
+      // Add new shapes (with history so it can be undone)
+      withHistory(s, (draft) => {
+        for (const shape of newShapes) {
+          draft.push(shape);
+        }
+      });
 
       // Select the pasted shapes
       s.selectedShapeIds = newShapes.map(shape => shape.id);
@@ -174,8 +200,6 @@ export const createClipboardSlice = (
         s.clipboardCutMode = false;
         s.clipboardOrigin = null;
       }
-
-      s.isModified = true;
     });
   },
 

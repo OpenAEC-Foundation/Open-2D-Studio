@@ -12,10 +12,11 @@ import { useCallback, useRef } from 'react';
 import { useAppStore, generateId } from '../../state/appStore';
 import type { Point, SnapPoint } from '../../types/geometry';
 import type { DimensionShape, DimensionReference, DimensionType } from '../../types/dimension';
-import { DEFAULT_DIMENSION_STYLE } from '../../types/dimension';
+import { DEFAULT_DIMENSION_STYLE, DIMENSION_STYLE_PRESETS } from '../../types/dimension';
 import {
   calculateDimensionValue,
   formatDimensionValue,
+  formatDimAssociateValue,
   distance,
   angleBetweenPoints,
 } from '../../engine/geometry/DimensionUtils';
@@ -116,6 +117,7 @@ export function useDimensionDrawing() {
     dimensionMode,
     dimensionPrecision,
     dimensionArrowStyle,
+    dimensionStylePreset,
     shapes,
     unitSettings,
   } = useAppStore();
@@ -139,19 +141,37 @@ export function useDimensionDrawing() {
       linearDirection?: 'horizontal' | 'vertical'
     ) => {
       const value = calculateDimensionValue(points, dimensionType, linearDirection);
-      const formattedValue = formatDimensionValue(value, dimensionType, dimensionPrecision, unitSettings);
+
+      // Resolve the dimension style from preset or manual settings
+      const presetStyle = DIMENSION_STYLE_PRESETS[dimensionStylePreset];
+      const isAssociate = dimensionStylePreset === 'DimAssociate';
+
+      // For DimAssociate, use plain integer formatting; otherwise use unit-aware formatting
+      const formattedValue = isAssociate
+        ? formatDimAssociateValue(value)
+        : formatDimensionValue(value, dimensionType, dimensionPrecision, unitSettings);
 
       // Determine prefix based on type
       let prefix: string | undefined;
       if (dimensionType === 'radius') prefix = 'R';
       if (dimensionType === 'diameter') prefix = '\u2300'; // diameter symbol
 
+      // Build the effective dimension style
+      const effectiveDimStyle = presetStyle
+        ? { ...presetStyle }
+        : { ...DEFAULT_DIMENSION_STYLE, arrowType: dimensionArrowStyle, precision: dimensionPrecision };
+
+      // For DimAssociate, override the shape-level stroke style too
+      const shapeStyle = isAssociate
+        ? { strokeColor: '#000000', strokeWidth: 2.5, lineStyle: 'solid' as const }
+        : { ...currentStyle };
+
       const dimensionShape: DimensionShape = {
         id: generateId(),
         type: 'dimension',
         layerId: activeLayerId,
         drawingId: activeDrawingId,
-        style: { ...currentStyle },
+        style: shapeStyle,
         visible: true,
         locked: false,
         dimensionType,
@@ -162,12 +182,13 @@ export function useDimensionDrawing() {
         value: formattedValue,
         valueOverridden: false,
         prefix,
-        dimensionStyle: { ...DEFAULT_DIMENSION_STYLE, arrowType: dimensionArrowStyle, precision: dimensionPrecision },
+        dimensionStyle: effectiveDimStyle,
+        dimensionStyleName: dimensionStylePreset !== 'Default' ? dimensionStylePreset : undefined,
       };
 
       addShape(dimensionShape);
     },
-    [activeLayerId, activeDrawingId, currentStyle, addShape, dimensionPrecision, dimensionArrowStyle]
+    [activeLayerId, activeDrawingId, currentStyle, addShape, dimensionPrecision, dimensionArrowStyle, dimensionStylePreset]
   );
 
   /**

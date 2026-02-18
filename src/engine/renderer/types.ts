@@ -163,13 +163,18 @@ export const SNAP_LABELS: Record<SnapType, string> = {
   origin: 'Origin',
 };
 
-// Line dash patterns
+// Line dash patterns (values in world/drawing units, e.g. mm)
+// Defined at reference scale 1:100 (0.01). At other scales the pattern
+// is adjusted so that dashes remain the same size on paper.
 export const LINE_DASH_PATTERNS: Record<string, number[]> = {
   solid: [],
-  dashed: [10, 5],
-  dotted: [2, 3],
-  dashdot: [10, 3, 2, 3],
+  dashed: [500, 250],
+  dotted: [100, 150],
+  dashdot: [500, 150, 100, 150],
 };
+
+// Reference drawing scale for LINE_DASH_PATTERNS values (1:100)
+export const LINE_DASH_REFERENCE_SCALE = 0.01;
 
 // Canvas colors
 export const COLORS = {
@@ -182,8 +187,9 @@ export const COLORS = {
   axisX: '#ff4444',
   axisY: '#44ff44',
   hover: '#00bfff',
-  selection: '#e94560',
-  selectionHandle: '#e94560',
+  selection: '#00B400',
+  selectionFill: 'rgba(0, 180, 0, 0.25)',
+  selectionHandle: '#00B400',
   selectionHandleStroke: '#ffffff',
   commandPreview: '#00ff00',
   boundaryNormal: '#00bcd4',

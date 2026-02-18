@@ -2,12 +2,19 @@ import { memo, useState, useRef, useEffect, useMemo } from 'react';
 import { useAppStore } from '../../state/appStore';
 import { formatLength, parseLength } from '../../units';
 import type { UnitSettings } from '../../units/types';
-import type { LineStyle, Shape, TextAlignment, TextVerticalAlignment, BeamShape, BeamMaterial, BeamJustification, LeaderArrowType, LeaderAttachment, LeaderConfig, TextCase } from '../../types/geometry';
-import type { ParametricShape, ProfileParametricShape } from '../../types/parametric';
+import type { LineStyle, Shape, TextAlignment, TextVerticalAlignment, BeamShape, BeamMaterial, BeamJustification, BeamViewMode, LeaderArrowType, LeaderAttachment, LeaderConfig, TextCase, GridlineShape, GridlineBubblePosition, LevelShape, WallShape, WallJustification, WallEndCap, SlabShape, SlabMaterial, SectionCalloutShape, SpaceShape, PlateSystemShape } from '../../types/geometry';
+import type { ParametricShape, ProfileParametricShape, ProfileType, ParameterValues } from '../../types/parametric';
 import type { DimensionShape, DimensionArrowType, DimensionTextPlacement } from '../../types/dimension';
 import { PROFILE_TEMPLATES } from '../../services/parametric/profileTemplates';
+import { getPresetById } from '../../services/parametric/profileLibrary';
+import { SectionDialog } from '../dialogs/SectionDialog/SectionDialog';
+import { formatPeilLabel, calculatePeilFromY } from '../../hooks/drawing/useLevelDrawing';
+import { regeneratePlateSystemBeams } from '../../hooks/drawing/usePlateSystemDrawing';
+import { getElementLabelText, resolveTemplate, getDefaultLabelTemplate } from '../../engine/geometry/LabelUtils';
 import { DrawingPropertiesPanel } from './DrawingPropertiesPanel';
 import { PatternPickerPanel } from '../editors/PatternManager/PatternPickerPanel';
+import { parseSpacingPattern, createGridlinesFromPattern } from '../../utils/gridlineUtils';
+import { regenerateGridDimensions } from '../../utils/gridDimensionUtils';
 
 const RAD2DEG = 180 / Math.PI;
 const DEG2RAD = Math.PI / 180;
@@ -176,28 +183,45 @@ function RegionTypeSelector({ currentTypeId, onApplyType, onManageTypes }: {
   );
 }
 
-function NumberField({ label, value, onChange, step = 1, min, max, readOnly, unitSettings }: {
+function NumberField({ label, value, onChange, min, max, readOnly, unitSettings }: {
   label: string; value: number; onChange: (v: number) => void;
   step?: number; min?: number; max?: number; readOnly?: boolean; unitSettings?: UnitSettings;
 }) {
-  const displayValue = unitSettings
-    ? formatLength(value, { ...unitSettings, showUnitSuffix: false })
-    : String(Math.round(value * 1000) / 1000);
+  const formatValue = (v: number) => unitSettings
+    ? formatLength(v, { ...unitSettings, showUnitSuffix: false })
+    : String(Math.round(v * 1000) / 1000);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const [localValue, setLocalValue] = useState(formatValue(value));
+
+  // Sync local state when the external value changes (e.g. selecting a different shape)
+  useEffect(() => {
+    setLocalValue(formatValue(value));
+  }, [value]);
+
+  const commitValue = () => {
+    let parsed: number;
     if (unitSettings) {
-      onChange(parseLength(e.target.value, unitSettings));
+      parsed = parseLength(localValue, unitSettings);
     } else {
-      onChange(parseFloat(e.target.value) || 0);
+      parsed = parseFloat(localValue);
     }
+    if (!isNaN(parsed) && parsed !== value) {
+      if (min !== undefined) parsed = Math.max(min, parsed);
+      if (max !== undefined) parsed = Math.min(max, parsed);
+      onChange(parsed);
+    }
+    // Always reset display to formatted value (reverts invalid input)
+    setLocalValue(formatValue(min !== undefined && !isNaN(parsed) ? Math.max(min, parsed) : (!isNaN(parsed) ? parsed : value)));
   };
 
   return (
     <div className="mb-2">
       <label className={labelClass}>{label}</label>
-      <input type="number" step={step} min={min} max={max} readOnly={readOnly}
-        value={displayValue}
-        onChange={handleChange}
+      <input type="text" readOnly={readOnly}
+        value={localValue}
+        onChange={(e) => setLocalValue(e.target.value)}
+        onBlur={commitValue}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
         className={inputClass} />
     </div>
   );
@@ -213,6 +237,38 @@ function TextField({ label, value, onChange, placeholder }: {
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         className={inputClass} />
+    </div>
+  );
+}
+
+function LineweightInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const [localValue, setLocalValue] = useState(String(value));
+
+  useEffect(() => {
+    setLocalValue(String(value));
+  }, [value]);
+
+  const commitValue = () => {
+    const parsed = parseFloat(localValue);
+    if (!isNaN(parsed) && parsed >= 0.5 && parsed <= 20) {
+      onChange(parsed);
+      setLocalValue(String(parsed));
+    } else {
+      setLocalValue(String(value));
+    }
+  };
+
+  return (
+    <div className="mb-3">
+      <label className="block text-xs text-cad-text-dim mb-1">Lineweight</label>
+      <input
+        type="text"
+        value={localValue}
+        onChange={(e) => setLocalValue(e.target.value)}
+        onBlur={commitValue}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        className="w-full bg-cad-bg border border-cad-border rounded px-2 py-1 text-xs text-cad-text"
+      />
     </div>
   );
 }
@@ -459,8 +515,38 @@ function MultiSelectShapeProperties({
       const commonBackgroundColor = getCommonValue(s => (s as typeof textShapes[0]).backgroundColor);
       const commonBackgroundPadding = getCommonValue(s => (s as typeof textShapes[0]).backgroundPadding);
 
+      // Check if this is a linked label (element tag)
+      const linkedShapeId = textShapes.length === 1 ? textShapes[0].linkedShapeId : undefined;
+      const allStoreShapes = useAppStore.getState().shapes;
+      const linkedShape = linkedShapeId ? allStoreShapes.find(s => s.id === linkedShapeId) : undefined;
+
       return (
         <>
+          {linkedShape && (
+            <PropertyGroup label="Linked Element">
+              <div className="text-xs text-cad-text mb-1">
+                <span className="text-cad-text-dim">Type: </span>
+                <span className="capitalize">{linkedShape.type}</span>
+              </div>
+              <div className="text-xs text-cad-text mb-1">
+                <span className="text-cad-text-dim">Label Text: </span>
+                <span>{
+                  textShapes[0].labelTemplate
+                    ? resolveTemplate(textShapes[0].labelTemplate, linkedShape, useAppStore.getState().wallTypes)
+                    : getElementLabelText(linkedShape, useAppStore.getState().wallTypes)
+                }</span>
+              </div>
+              <TextField
+                label="Label Template"
+                value={textShapes[0].labelTemplate || getDefaultLabelTemplate(linkedShape.type)}
+                onChange={(v) => updateAll({ labelTemplate: v || undefined })}
+                placeholder="{Name}\n{Area} m\u00B2"
+              />
+              <div className="text-xs text-cad-text-dim mb-1">
+                Use placeholders: {'{Name}'}, {'{Number}'}, {'{Area}'}, {'{Level}'}, {'{Type}'}, {'{Thickness}'}, {'{Section}'}
+              </div>
+            </PropertyGroup>
+          )}
           <PropertyGroup label="Properties">
             <TextField
               label="Font Family"
@@ -685,6 +771,7 @@ function MultiSelectShapeProperties({
       const commonFlangeWidth = getCommonValue(s => (s as BeamShape).flangeWidth);
       const commonShowCenterline = getCommonValue(s => (s as BeamShape).showCenterline);
       const commonShowLabel = getCommonValue(s => (s as BeamShape).showLabel);
+      const commonViewMode = getCommonValue(s => (s as BeamShape).viewMode || 'plan');
 
       return (
         <>
@@ -701,8 +788,11 @@ function MultiSelectShapeProperties({
               value={commonMaterial ?? 'steel'}
               options={[
                 { value: 'steel', label: 'Steel' },
+                { value: 'cold-formed-steel', label: 'Cold-Formed Steel' },
                 { value: 'concrete', label: 'Concrete' },
                 { value: 'timber', label: 'Timber' },
+                { value: 'aluminum', label: 'Aluminum' },
+                { value: 'other', label: 'Other' },
               ]}
               onChange={(v) => updateAll({ material: v })}
             />
@@ -717,6 +807,17 @@ function MultiSelectShapeProperties({
                 { value: 'right', label: 'Right' },
               ]}
               onChange={(v) => updateAll({ justification: v })}
+            />
+            <SelectField<BeamViewMode>
+              label="View"
+              value={(commonViewMode as BeamViewMode) ?? 'plan'}
+              options={[
+                { value: 'plan', label: 'Plan' },
+                { value: 'section', label: 'Section' },
+                { value: 'elevation', label: 'Elevation' },
+                { value: 'side', label: 'Side' },
+              ]}
+              onChange={(v) => updateAll({ viewMode: v })}
             />
           </PropertyGroup>
 
@@ -740,6 +841,50 @@ function MultiSelectShapeProperties({
     default:
       return null;
   }
+}
+
+/** Gridline spacing pattern input — creates parallel copies at typed offsets */
+function GridlineSpacingInput({ gridline }: { gridline: GridlineShape }) {
+  const [pattern, setPattern] = useState('');
+  const addShapes = useAppStore(s => s.addShapes);
+
+  const handleCreate = () => {
+    const newGridlines = createGridlinesFromPattern(gridline, pattern);
+    if (newGridlines.length > 0) {
+      addShapes(newGridlines);
+      setPattern('');
+
+      // Auto-dimension: regenerate grid dimensions if enabled
+      if (useAppStore.getState().autoGridDimension) {
+        setTimeout(() => regenerateGridDimensions(), 50);
+      }
+    }
+  };
+
+  return (
+    <PropertyGroup label="Spacing Pattern">
+      <div className="flex gap-1 mb-1">
+        <input
+          type="text"
+          value={pattern}
+          onChange={(e) => setPattern(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleCreate(); } }}
+          placeholder="4000 3000 5x5400"
+          className="flex-1 bg-cad-bg border border-cad-border rounded px-2 py-1 text-xs text-cad-text"
+        />
+        <button
+          onClick={handleCreate}
+          disabled={!pattern.trim() || !parseSpacingPattern(pattern)}
+          className="px-2 py-1 text-xs bg-cad-accent/20 border border-cad-accent/50 text-cad-accent hover:bg-cad-accent/30 rounded disabled:opacity-30"
+        >
+          Create
+        </button>
+      </div>
+      <div className="text-[10px] text-cad-text-dim">
+        Space-separated distances. Use NxD for repeats (e.g. 5x5400 = 5 copies at 5400mm).
+      </div>
+    </PropertyGroup>
+  );
 }
 
 function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (id: string, updates: Partial<Shape>) => void }) {
@@ -1268,8 +1413,11 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
               value={beam.material}
               options={[
                 { value: 'steel', label: 'Steel' },
+                { value: 'cold-formed-steel', label: 'Cold-Formed Steel' },
                 { value: 'concrete', label: 'Concrete' },
                 { value: 'timber', label: 'Timber' },
+                { value: 'aluminum', label: 'Aluminum' },
+                { value: 'other', label: 'Other' },
               ]}
               onChange={(v) => update({ material: v })}
             />
@@ -1285,6 +1433,18 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
                 { value: 'right', label: 'Right' },
               ]}
               onChange={(v) => update({ justification: v })}
+            />
+
+            <SelectField<BeamViewMode>
+              label="View"
+              value={beam.viewMode || 'plan'}
+              options={[
+                { value: 'plan', label: 'Plan' },
+                { value: 'section', label: 'Section' },
+                { value: 'elevation', label: 'Elevation' },
+                { value: 'side', label: 'Side' },
+              ]}
+              onChange={(v) => update({ viewMode: v })}
             />
 
             <NumberField
@@ -1365,6 +1525,485 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
       );
     }
 
+    case 'gridline': {
+      const gl = shape as GridlineShape;
+      const dx = gl.end.x - gl.start.x;
+      const dy = gl.end.y - gl.start.y;
+      const length = Math.sqrt(dx * dx + dy * dy);
+      const angle = Math.atan2(dy, dx) * RAD2DEG;
+
+      return (
+        <>
+          <PropertyGroup label="Identity">
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="text-xs font-semibold text-cad-accent mb-1">IfcGridAxis</div>
+              <div className="text-xs text-cad-text-dim">IFC Type: IfcGridAxis</div>
+            </div>
+            <TextField label="Label" value={gl.label} onChange={(v) => update({ label: v })} />
+          </PropertyGroup>
+
+          <GridlineSpacingInput gridline={gl} />
+
+          <PropertyGroup label="Geometry">
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <div className="text-cad-text-dim">Length:</div>
+                <div className="text-cad-text">{length.toFixed(2)} mm</div>
+                <div className="text-cad-text-dim">Angle:</div>
+                <div className="text-cad-text">{angle.toFixed(1)}&deg;</div>
+              </div>
+            </div>
+
+            <div className="mb-3">
+              <label className="block text-xs font-semibold text-cad-text mb-2">Start Point</label>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberField label="X" value={gl.start.x} onChange={(v) => update({ start: { ...gl.start, x: v } })} step={1} />
+                <NumberField label="Y" value={gl.start.y} onChange={(v) => update({ start: { ...gl.start, y: v } })} step={1} />
+              </div>
+            </div>
+
+            <div className="mb-3">
+              <label className="block text-xs font-semibold text-cad-text mb-2">End Point</label>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberField label="X" value={gl.end.x} onChange={(v) => update({ end: { ...gl.end, x: v } })} step={1} />
+                <NumberField label="Y" value={gl.end.y} onChange={(v) => update({ end: { ...gl.end, y: v } })} step={1} />
+              </div>
+            </div>
+          </PropertyGroup>
+
+          <PropertyGroup label="Display">
+            <SelectField<GridlineBubblePosition>
+              label="Bubble Position"
+              value={gl.bubblePosition}
+              options={[
+                { value: 'start', label: 'Start' },
+                { value: 'end', label: 'End' },
+                { value: 'both', label: 'Both' },
+              ]}
+              onChange={(v) => update({ bubblePosition: v })}
+            />
+            <NumberField label="Bubble Radius" value={gl.bubbleRadius} onChange={(v) => update({ bubbleRadius: v })} step={0.5} min={0.5} />
+            <NumberField label="Font Size" value={gl.fontSize} onChange={(v) => update({ fontSize: v })} step={0.5} min={0.5} />
+          </PropertyGroup>
+        </>
+      );
+    }
+
+    case 'level': {
+      const lv = shape as LevelShape;
+      const ldx = lv.end.x - lv.start.x;
+      const ldy = lv.end.y - lv.start.y;
+      const lLength = Math.sqrt(ldx * ldx + ldy * ldy);
+      const lAngle = Math.atan2(ldy, ldx) * RAD2DEG;
+
+      return (
+        <>
+          <PropertyGroup label="Identity">
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="text-xs font-semibold text-cad-accent mb-1">IfcBuildingStorey</div>
+              <div className="text-xs text-cad-text-dim">IFC Type: IfcBuildingStorey</div>
+            </div>
+            <TextField label="Description" value={lv.description ?? ''} onChange={(v) => update({ description: v || undefined })} placeholder="e.g. Vloerpeil, Bovenkant vloer" />
+          </PropertyGroup>
+
+          <PropertyGroup label="Level Properties">
+            <NumberField label="Peil (mm)" value={lv.peil ?? 0} onChange={(v) => {
+              // When peil is manually changed, update Y positions to match
+              // Canvas Y is inverted: positive peil = negative Y
+              const newY = -v;
+              const dy = newY - lv.start.y;
+              update({
+                peil: v,
+                elevation: v,
+                label: formatPeilLabel(v),
+                start: { x: lv.start.x, y: lv.start.y + dy },
+                end: { x: lv.end.x, y: lv.end.y + dy },
+              });
+            }} step={100} />
+            {(() => {
+              const seaDatum = useAppStore.getState().projectStructure.seaLevelDatum ?? 0;
+              const napElev = seaDatum + ((lv.elevation ?? 0) / 1000);
+              const napSign = napElev >= 0 ? '+' : '';
+              const napStr = napElev.toFixed(napElev === Math.round(napElev) ? 1 : 2);
+              return (
+                <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <div className="text-cad-text-dim">Display:</div>
+                    <div className="text-cad-text">{lv.label}</div>
+                    <div className="text-cad-text-dim">NAP Elevation:</div>
+                    <div className="text-cad-text">NAP {napSign}{napStr} m{seaDatum === 0 ? ' (no datum set)' : ''}</div>
+                  </div>
+                </div>
+              );
+            })()}
+          </PropertyGroup>
+
+          <PropertyGroup label="Geometry">
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <div className="text-cad-text-dim">Length:</div>
+                <div className="text-cad-text">{lLength.toFixed(2)} mm</div>
+                <div className="text-cad-text-dim">Angle:</div>
+                <div className="text-cad-text">{lAngle.toFixed(1)}&deg;</div>
+              </div>
+            </div>
+
+            <div className="mb-3">
+              <label className="block text-xs font-semibold text-cad-text mb-2">Start Point</label>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberField label="X" value={lv.start.x} onChange={(v) => update({ start: { ...lv.start, x: v } })} step={1} />
+                <NumberField label="Y" value={lv.start.y} onChange={(v) => {
+                  const newPeil = calculatePeilFromY(v);
+                  update({
+                    start: { ...lv.start, y: v },
+                    end: { ...lv.end, y: v },
+                    peil: newPeil,
+                    elevation: newPeil,
+                    label: formatPeilLabel(newPeil),
+                  });
+                }} step={1} />
+              </div>
+            </div>
+
+            <div className="mb-3">
+              <label className="block text-xs font-semibold text-cad-text mb-2">End Point</label>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberField label="X" value={lv.end.x} onChange={(v) => update({ end: { ...lv.end, x: v } })} step={1} />
+                <NumberField label="Y" value={lv.end.y} onChange={(v) => {
+                  const newPeil = calculatePeilFromY(v);
+                  update({
+                    start: { ...lv.start, y: v },
+                    end: { ...lv.end, y: v },
+                    peil: newPeil,
+                    elevation: newPeil,
+                    label: formatPeilLabel(newPeil),
+                  });
+                }} step={1} />
+              </div>
+            </div>
+          </PropertyGroup>
+
+          <PropertyGroup label="Display">
+            <NumberField label="Marker Size" value={lv.bubbleRadius} onChange={(v) => update({ bubbleRadius: v })} step={0.5} min={0.5} />
+            <NumberField label="Font Size" value={lv.fontSize} onChange={(v) => update({ fontSize: v })} step={0.5} min={0.5} />
+          </PropertyGroup>
+        </>
+      );
+    }
+
+    case 'wall': {
+      const w = shape as WallShape;
+      const dx = w.end.x - w.start.x;
+      const dy = w.end.y - w.start.y;
+      const length = Math.sqrt(dx * dx + dy * dy);
+      const angle = Math.atan2(dy, dx) * RAD2DEG;
+      const wallTypes = useAppStore.getState().wallTypes;
+      const wallProjectStructure = useAppStore.getState().projectStructure;
+
+      // Collect all storeys from all buildings for level selectors
+      const allStoreys: { id: string; name: string; elevation: number }[] = [];
+      for (const building of wallProjectStructure.buildings) {
+        for (const storey of building.storeys) {
+          allStoreys.push(storey);
+        }
+      }
+      // Sort by elevation ascending
+      allStoreys.sort((a, b) => a.elevation - b.elevation);
+
+      return (
+        <>
+          <PropertyGroup label="Identity">
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="text-xs font-semibold text-cad-accent mb-1">IfcWall</div>
+              <div className="text-xs text-cad-text-dim">IFC Type: IfcWall</div>
+            </div>
+            <div className="mb-3">
+              <label className={labelClass}>Wall Type</label>
+              <select
+                className={inputClass}
+                value={w.wallTypeId || ''}
+                onChange={(e) => {
+                  const newTypeId = e.target.value || undefined;
+                  if (newTypeId) {
+                    const selectedWt = wallTypes.find(wt => wt.id === newTypeId);
+                    if (selectedWt) {
+                      update({
+                        wallTypeId: newTypeId,
+                        thickness: selectedWt.thickness,
+                      });
+                    } else {
+                      update({ wallTypeId: newTypeId });
+                    }
+                  } else {
+                    update({ wallTypeId: undefined });
+                  }
+                }}
+              >
+                <option value="">(Custom)</option>
+                {wallTypes.map((wt) => (
+                  <option key={wt.id} value={wt.id}>{wt.name} ({wt.thickness}mm)</option>
+                ))}
+              </select>
+            </div>
+            <TextField label="Label" value={w.label || ''} onChange={(v) => update({ label: v || undefined })} />
+          </PropertyGroup>
+
+          <PropertyGroup label="Constraints">
+            <div className="mb-2">
+              <label className={labelClass}>Base Level</label>
+              <select
+                className={inputClass}
+                value={w.baseLevel || ''}
+                onChange={(e) => update({ baseLevel: e.target.value || undefined })}
+              >
+                <option value="">(Unconnected)</option>
+                {allStoreys.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.elevation >= 0 ? '+' : ''}{s.elevation} mm)
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="mb-2">
+              <label className={labelClass}>Top Level</label>
+              <select
+                className={inputClass}
+                value={w.topLevel || ''}
+                onChange={(e) => update({ topLevel: e.target.value || undefined })}
+              >
+                <option value="">(Unconnected)</option>
+                {allStoreys.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.elevation >= 0 ? '+' : ''}{s.elevation} mm)
+                  </option>
+                ))}
+              </select>
+            </div>
+          </PropertyGroup>
+
+          <PropertyGroup label="Geometry">
+            <NumberField label="Thickness (mm)" value={w.thickness} onChange={(v) => update({ thickness: v })} step={1} min={1} />
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <div className="text-cad-text-dim">Length:</div>
+                <div className="text-cad-text">{length.toFixed(2)} mm</div>
+                <div className="text-cad-text-dim">Angle:</div>
+                <div className="text-cad-text">{angle.toFixed(1)}&deg;</div>
+              </div>
+            </div>
+            <div className="mb-3">
+              <label className="block text-xs font-semibold text-cad-text mb-2">Start Point</label>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberField label="X" value={w.start.x} onChange={(v) => update({ start: { ...w.start, x: v } })} step={1} />
+                <NumberField label="Y" value={w.start.y} onChange={(v) => update({ start: { ...w.start, y: v } })} step={1} />
+              </div>
+            </div>
+            <div className="mb-3">
+              <label className="block text-xs font-semibold text-cad-text mb-2">End Point</label>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberField label="X" value={w.end.x} onChange={(v) => update({ end: { ...w.end, x: v } })} step={1} />
+                <NumberField label="Y" value={w.end.y} onChange={(v) => update({ end: { ...w.end, y: v } })} step={1} />
+              </div>
+            </div>
+          </PropertyGroup>
+
+          <PropertyGroup label="Display">
+            <SelectField<WallJustification>
+              label="Justification"
+              value={w.justification}
+              options={[
+                { value: 'center', label: 'Center' },
+                { value: 'left', label: 'Left' },
+                { value: 'right', label: 'Right' },
+              ]}
+              onChange={(v) => update({ justification: v })}
+            />
+            <CheckboxField label="Show Centerline" value={w.showCenterline} onChange={(v) => update({ showCenterline: v })} />
+            <CheckboxField label="Space Bounding" value={w.spaceBounding ?? true} onChange={(v) => update({ spaceBounding: v })} />
+            <SelectField<WallEndCap>
+              label="Start Cap"
+              value={w.startCap}
+              options={[
+                { value: 'butt', label: 'Butt' },
+                { value: 'miter', label: 'Miter' },
+              ]}
+              onChange={(v) => update({ startCap: v })}
+            />
+            <SelectField<WallEndCap>
+              label="End Cap"
+              value={w.endCap}
+              options={[
+                { value: 'butt', label: 'Butt' },
+                { value: 'miter', label: 'Miter' },
+              ]}
+              onChange={(v) => update({ endCap: v })}
+            />
+          </PropertyGroup>
+        </>
+      );
+    }
+
+    case 'slab': {
+      const sl = shape as SlabShape;
+      // Calculate area using shoelace formula
+      let area = 0;
+      for (let i = 0; i < sl.points.length; i++) {
+        const j = (i + 1) % sl.points.length;
+        area += sl.points[i].x * sl.points[j].y;
+        area -= sl.points[j].x * sl.points[i].y;
+      }
+      area = Math.abs(area) / 2;
+      // Calculate perimeter
+      let perimeter = 0;
+      for (let i = 0; i < sl.points.length; i++) {
+        const j = (i + 1) % sl.points.length;
+        const pdx = sl.points[j].x - sl.points[i].x;
+        const pdy = sl.points[j].y - sl.points[i].y;
+        perimeter += Math.sqrt(pdx * pdx + pdy * pdy);
+      }
+
+      return (
+        <>
+          <PropertyGroup label="Identity">
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="text-xs font-semibold text-cad-accent mb-1">IfcSlab</div>
+              <div className="text-xs text-cad-text-dim">IFC Type: IfcSlab</div>
+            </div>
+            <TextField label="Label" value={sl.label || ''} onChange={(v) => update({ label: v || undefined })} />
+            <SelectField<SlabMaterial>
+              label="Material"
+              value={sl.material}
+              options={[
+                { value: 'concrete', label: 'Concrete' },
+                { value: 'timber', label: 'Timber' },
+                { value: 'steel', label: 'Steel' },
+                { value: 'generic', label: 'Generic' },
+              ]}
+              onChange={(v) => update({ material: v })}
+            />
+          </PropertyGroup>
+
+          <PropertyGroup label="Geometry">
+            <NumberField label="Thickness (mm)" value={sl.thickness} onChange={(v) => update({ thickness: v })} step={1} min={1} />
+            <TextField label="Level" value={sl.level} onChange={(v) => update({ level: v })} />
+            <NumberField label="Elevation (mm)" value={sl.elevation} onChange={(v) => update({ elevation: v })} step={1} />
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <div className="text-cad-text-dim">Points:</div>
+                <div className="text-cad-text">{sl.points.length}</div>
+                <div className="text-cad-text-dim">Area:</div>
+                <div className="text-cad-text">{area.toFixed(2)} mm2</div>
+                <div className="text-cad-text-dim">Perimeter:</div>
+                <div className="text-cad-text">{perimeter.toFixed(2)} mm</div>
+              </div>
+            </div>
+          </PropertyGroup>
+
+          <PropertyGroup label="Display">
+            <p className="text-[10px] text-cad-text-dim px-1 py-2">
+              Hatch pattern is defined per material in Drawing Standards.
+            </p>
+          </PropertyGroup>
+        </>
+      );
+    }
+
+    case 'space': {
+      const sp = shape as SpaceShape;
+
+      return (
+        <>
+          <PropertyGroup label="Identity">
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="text-xs font-semibold text-cad-accent mb-1">IfcSpace</div>
+              <div className="text-xs text-cad-text-dim">IFC Type: IfcSpace</div>
+            </div>
+            <TextField label="Name" value={sp.name} onChange={(v) => update({ name: v })} />
+            <TextField label="Number" value={sp.number || ''} onChange={(v) => update({ number: v || undefined })} />
+            <TextField label="Level" value={sp.level || ''} onChange={(v) => update({ level: v || undefined })} />
+          </PropertyGroup>
+
+          <PropertyGroup label="Geometry">
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <div className="text-cad-text-dim">Points:</div>
+                <div className="text-cad-text">{sp.contourPoints.length}</div>
+                <div className="text-cad-text-dim">Area:</div>
+                <div className="text-cad-text">{(sp.area ?? 0).toFixed(2)} m{'\u00B2'}</div>
+              </div>
+            </div>
+          </PropertyGroup>
+
+          <PropertyGroup label="Display">
+            <TextField label="Fill Color" value={sp.fillColor || '#00ff00'} onChange={(v) => update({ fillColor: v })} />
+            <NumberField label="Fill Opacity" value={sp.fillOpacity ?? 0.1} onChange={(v) => update({ fillOpacity: v })} step={0.05} min={0} max={1} />
+          </PropertyGroup>
+        </>
+      );
+    }
+
+    case 'section-callout': {
+      const sc = shape as SectionCalloutShape;
+      const scdx = sc.end.x - sc.start.x;
+      const scdy = sc.end.y - sc.start.y;
+      const scLength = Math.sqrt(scdx * scdx + scdy * scdy);
+      const scAngle = Math.atan2(scdy, scdx) * RAD2DEG;
+
+      return (
+        <>
+          <PropertyGroup label="Identity">
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="text-xs font-semibold text-cad-accent mb-1">Section Callout</div>
+              <div className="text-xs text-cad-text-dim">Type: {sc.calloutType === 'section' ? 'Section' : 'Detail'}</div>
+            </div>
+            <TextField label="Label" value={sc.label} onChange={(v) => update({ label: v })} />
+          </PropertyGroup>
+
+          <PropertyGroup label="Geometry">
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <div className="text-cad-text-dim">Length:</div>
+                <div className="text-cad-text">{scLength.toFixed(2)} mm</div>
+                <div className="text-cad-text-dim">Angle:</div>
+                <div className="text-cad-text">{scAngle.toFixed(1)}&deg;</div>
+              </div>
+            </div>
+
+            <div className="mb-3">
+              <label className="block text-xs font-semibold text-cad-text mb-2">Start Point</label>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberField label="X" value={sc.start.x} onChange={(v) => update({ start: { ...sc.start, x: v } })} step={1} />
+                <NumberField label="Y" value={sc.start.y} onChange={(v) => update({ start: { ...sc.start, y: v } })} step={1} />
+              </div>
+            </div>
+
+            <div className="mb-3">
+              <label className="block text-xs font-semibold text-cad-text mb-2">End Point</label>
+              <div className="grid grid-cols-2 gap-2">
+                <NumberField label="X" value={sc.end.x} onChange={(v) => update({ end: { ...sc.end, x: v } })} step={1} />
+                <NumberField label="Y" value={sc.end.y} onChange={(v) => update({ end: { ...sc.end, y: v } })} step={1} />
+              </div>
+            </div>
+          </PropertyGroup>
+
+          <PropertyGroup label="View">
+            <NumberField label="View Depth (mm)" value={sc.viewDepth ?? 5000} onChange={(v) => update({ viewDepth: v })} step={500} min={0} />
+          </PropertyGroup>
+
+          <PropertyGroup label="Display">
+            <NumberField label="Bubble Radius (mm)" value={sc.bubbleRadius} onChange={(v) => update({ bubbleRadius: v })} step={50} min={100} />
+            <NumberField label="Font Size (mm)" value={sc.fontSize} onChange={(v) => update({ fontSize: v })} step={25} min={50} />
+            <CheckboxField label="Flip Direction" value={sc.flipDirection} onChange={(v) => update({ flipDirection: v })} />
+            <CheckboxField label="Show Start Head" value={!sc.hideStartHead} onChange={(v) => update({ hideStartHead: !v })} />
+            <CheckboxField label="Show End Head" value={!sc.hideEndHead} onChange={(v) => update({ hideEndHead: !v })} />
+          </PropertyGroup>
+        </>
+      );
+    }
+
+    case 'plate-system':
+      return <PlateSystemShapeProperties shape={shape as PlateSystemShape} updateShape={updateShape} />;
+
     default:
       return (
         <div className="text-xs text-cad-text-dim">
@@ -1372,6 +2011,1299 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
         </div>
       );
   }
+}
+
+// ============================================================================
+// Tool-Specific Property Panels (shown when a drawing tool is active, no selection)
+// ============================================================================
+
+/** Wall tool properties - edits pendingWall state */
+function WallToolProperties() {
+  const pendingWall = useAppStore(s => s.pendingWall);
+  const setPendingWall = useAppStore(s => s.setPendingWall);
+  const wallTypes = useAppStore(s => s.wallTypes);
+  const setLastUsedWallTypeId = useAppStore(s => s.setLastUsedWallTypeId);
+
+  if (!pendingWall) return null;
+
+  const selectedType = pendingWall.wallTypeId
+    ? wallTypes.find(w => w.id === pendingWall.wallTypeId)
+    : undefined;
+
+  return (
+    <div className="p-3 border-b border-cad-border">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold text-cad-accent uppercase tracking-wide">Wall Tool</span>
+      </div>
+
+      {/* Shape Mode toggle */}
+      <div className="mb-3">
+        <label className={labelClass}>Shape Mode</label>
+        <div className="flex gap-1">
+          <button
+            className={`flex-1 px-2 py-1 text-xs rounded ${pendingWall.shapeMode === 'line' || !pendingWall.shapeMode ? 'bg-cad-accent/20 text-cad-accent border border-cad-accent/50' : 'bg-cad-bg border border-cad-border text-cad-text hover:bg-cad-hover'}`}
+            onClick={() => setPendingWall({ ...pendingWall, shapeMode: 'line' })}
+          >
+            Line
+          </button>
+          <button
+            className={`flex-1 px-2 py-1 text-xs rounded ${pendingWall.shapeMode === 'arc' ? 'bg-cad-accent/20 text-cad-accent border border-cad-accent/50' : 'bg-cad-bg border border-cad-border text-cad-text hover:bg-cad-hover'}`}
+            onClick={() => setPendingWall({ ...pendingWall, shapeMode: 'arc' })}
+          >
+            Arc
+          </button>
+        </div>
+      </div>
+
+      {/* Wall Type selector at top */}
+      <div className="mb-3">
+        <label className={labelClass}>Wall Type</label>
+        <select
+          value={pendingWall.wallTypeId || ''}
+          onChange={(e) => {
+            const typeId = e.target.value || undefined;
+            const wt = wallTypes.find(w => w.id === typeId);
+            setPendingWall({
+              ...pendingWall,
+              wallTypeId: typeId,
+              thickness: wt ? wt.thickness : pendingWall.thickness,
+            });
+            if (typeId) {
+              setLastUsedWallTypeId(typeId);
+            }
+          }}
+          className={inputClass}
+        >
+          <option value="">(Custom)</option>
+          {wallTypes.map(wt => (
+            <option key={wt.id} value={wt.id}>{wt.name} ({wt.thickness}mm)</option>
+          ))}
+        </select>
+      </div>
+
+      <PropertyGroup label="Properties">
+        <NumberField
+          label="Thickness (mm)"
+          value={pendingWall.thickness}
+          onChange={(v) => setPendingWall({ ...pendingWall, thickness: v, wallTypeId: undefined })}
+          step={10}
+          min={10}
+        />
+        <SelectField<WallJustification>
+          label="Justification"
+          value={pendingWall.justification}
+          options={[
+            { value: 'center', label: 'Center' },
+            { value: 'left', label: 'Left' },
+            { value: 'right', label: 'Right' },
+          ]}
+          onChange={(v) => setPendingWall({ ...pendingWall, justification: v })}
+        />
+        <SelectField<WallEndCap>
+          label="Start Cap"
+          value={pendingWall.startCap}
+          options={[
+            { value: 'butt', label: 'Butt' },
+            { value: 'miter', label: 'Miter' },
+          ]}
+          onChange={(v) => setPendingWall({ ...pendingWall, startCap: v })}
+        />
+        <SelectField<WallEndCap>
+          label="End Cap"
+          value={pendingWall.endCap}
+          options={[
+            { value: 'butt', label: 'Butt' },
+            { value: 'miter', label: 'Miter' },
+          ]}
+          onChange={(v) => setPendingWall({ ...pendingWall, endCap: v })}
+        />
+      </PropertyGroup>
+
+      <PropertyGroup label="Display">
+        <CheckboxField
+          label="Show Centerline"
+          value={pendingWall.showCenterline}
+          onChange={(v) => setPendingWall({ ...pendingWall, showCenterline: v })}
+        />
+        <CheckboxField
+          label="Space Bounding"
+          value={pendingWall.spaceBounding}
+          onChange={(v) => setPendingWall({ ...pendingWall, spaceBounding: v })}
+        />
+        <CheckboxField
+          label="Continue Drawing"
+          value={pendingWall.continueDrawing}
+          onChange={(v) => setPendingWall({ ...pendingWall, continueDrawing: v })}
+        />
+      </PropertyGroup>
+
+      {selectedType && (
+        <div className="mt-1 px-2 py-1 bg-cad-bg rounded border border-cad-border">
+          <div className="text-[10px] text-cad-text-dim">
+            Material: <span className="text-cad-text capitalize">{selectedType.material}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Beam/Column tool properties - edits pendingBeam state */
+function BeamToolProperties() {
+  const pendingBeam = useAppStore(s => s.pendingBeam);
+  const setPendingBeam = useAppStore(s => s.setPendingBeam);
+
+  if (!pendingBeam) return null;
+
+  return (
+    <div className="p-3 border-b border-cad-border">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold text-cad-accent uppercase tracking-wide">Beam Tool</span>
+      </div>
+
+      {/* Shape Mode toggle */}
+      <div className="mb-3">
+        <label className={labelClass}>Shape Mode</label>
+        <div className="flex gap-1">
+          <button
+            className={`flex-1 px-2 py-1 text-xs rounded ${pendingBeam.shapeMode === 'line' || !pendingBeam.shapeMode ? 'bg-cad-accent/20 text-cad-accent border border-cad-accent/50' : 'bg-cad-bg border border-cad-border text-cad-text hover:bg-cad-hover'}`}
+            onClick={() => setPendingBeam({ ...pendingBeam, shapeMode: 'line' })}
+          >
+            Line
+          </button>
+          <button
+            className={`flex-1 px-2 py-1 text-xs rounded ${pendingBeam.shapeMode === 'arc' ? 'bg-cad-accent/20 text-cad-accent border border-cad-accent/50' : 'bg-cad-bg border border-cad-border text-cad-text hover:bg-cad-hover'}`}
+            onClick={() => setPendingBeam({ ...pendingBeam, shapeMode: 'arc' })}
+          >
+            Arc
+          </button>
+        </div>
+      </div>
+
+      {/* Profile / Preset info at top */}
+      <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+        <div className="text-xs font-semibold text-cad-accent mb-1">
+          {pendingBeam.presetName || pendingBeam.presetId || PROFILE_TEMPLATES[pendingBeam.profileType]?.name || pendingBeam.profileType}
+        </div>
+        {pendingBeam.presetId && (
+          <div className="text-[10px] text-cad-text-dim">
+            Preset: {pendingBeam.presetId}
+          </div>
+        )}
+      </div>
+
+      <PropertyGroup label="Properties">
+        <NumberField
+          label="Flange Width (mm)"
+          value={pendingBeam.flangeWidth}
+          onChange={(v) => setPendingBeam({ ...pendingBeam, flangeWidth: v })}
+          step={1}
+          min={1}
+        />
+        <SelectField<BeamMaterial>
+          label="Material"
+          value={pendingBeam.material}
+          options={[
+            { value: 'steel', label: 'Steel' },
+            { value: 'cold-formed-steel', label: 'Cold-Formed Steel' },
+            { value: 'concrete', label: 'Concrete' },
+            { value: 'timber', label: 'Timber' },
+            { value: 'aluminum', label: 'Aluminum' },
+            { value: 'other', label: 'Other' },
+          ]}
+          onChange={(v) => setPendingBeam({ ...pendingBeam, material: v })}
+        />
+        <SelectField<BeamJustification>
+          label="Justification"
+          value={pendingBeam.justification}
+          options={[
+            { value: 'center', label: 'Center' },
+            { value: 'top', label: 'Top' },
+            { value: 'bottom', label: 'Bottom' },
+            { value: 'left', label: 'Left' },
+            { value: 'right', label: 'Right' },
+          ]}
+          onChange={(v) => setPendingBeam({ ...pendingBeam, justification: v })}
+        />
+        <SelectField<BeamViewMode>
+          label="View"
+          value={pendingBeam.viewMode || 'plan'}
+          options={[
+            { value: 'plan', label: 'Plan' },
+            { value: 'section', label: 'Section' },
+            { value: 'elevation', label: 'Elevation' },
+            { value: 'side', label: 'Side' },
+          ]}
+          onChange={(v) => setPendingBeam({ ...pendingBeam, viewMode: v })}
+        />
+      </PropertyGroup>
+
+      <PropertyGroup label="Display">
+        <CheckboxField
+          label="Show Centerline"
+          value={pendingBeam.showCenterline}
+          onChange={(v) => setPendingBeam({ ...pendingBeam, showCenterline: v })}
+        />
+        <CheckboxField
+          label="Show Label"
+          value={pendingBeam.showLabel}
+          onChange={(v) => setPendingBeam({ ...pendingBeam, showLabel: v })}
+        />
+        <CheckboxField
+          label="Continue Drawing"
+          value={pendingBeam.continueDrawing}
+          onChange={(v) => setPendingBeam({ ...pendingBeam, continueDrawing: v })}
+        />
+      </PropertyGroup>
+    </div>
+  );
+}
+
+/** Slab tool properties - edits pendingSlab state */
+function SlabToolProperties() {
+  const pendingSlab = useAppStore(s => s.pendingSlab);
+  const setPendingSlab = useAppStore(s => s.setPendingSlab);
+  const slabTypes = useAppStore(s => s.slabTypes);
+
+  if (!pendingSlab) return null;
+
+  const selectedType = pendingSlab.slabTypeId
+    ? slabTypes.find(s => s.id === pendingSlab.slabTypeId)
+    : undefined;
+
+  return (
+    <div className="p-3 border-b border-cad-border">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold text-cad-accent uppercase tracking-wide">Slab Tool</span>
+      </div>
+
+      {/* Slab Type selector at top */}
+      <div className="mb-3">
+        <label className={labelClass}>Slab Type</label>
+        <select
+          value={pendingSlab.slabTypeId || ''}
+          onChange={(e) => {
+            const typeId = e.target.value || undefined;
+            const st = slabTypes.find(s => s.id === typeId);
+            setPendingSlab({
+              ...pendingSlab,
+              slabTypeId: typeId,
+              thickness: st ? st.thickness : pendingSlab.thickness,
+              material: st ? st.material as SlabMaterial : pendingSlab.material,
+            });
+          }}
+          className={inputClass}
+        >
+          <option value="">(Custom)</option>
+          {slabTypes.map(st => (
+            <option key={st.id} value={st.id}>{st.name} {st.thickness}mm</option>
+          ))}
+        </select>
+      </div>
+
+      <PropertyGroup label="Properties">
+        <NumberField
+          label="Thickness (mm)"
+          value={pendingSlab.thickness}
+          onChange={(v) => setPendingSlab({ ...pendingSlab, thickness: v, slabTypeId: undefined })}
+          step={10}
+          min={10}
+        />
+        <SelectField<SlabMaterial>
+          label="Material"
+          value={pendingSlab.material}
+          options={[
+            { value: 'concrete', label: 'Concrete' },
+            { value: 'timber', label: 'Timber' },
+            { value: 'steel', label: 'Steel' },
+            { value: 'generic', label: 'Generic' },
+          ]}
+          onChange={(v) => setPendingSlab({ ...pendingSlab, material: v, slabTypeId: undefined })}
+        />
+        <TextField
+          label="Level"
+          value={pendingSlab.level}
+          onChange={(v) => setPendingSlab({ ...pendingSlab, level: v })}
+          placeholder="e.g. 0, 1, 2"
+        />
+        <NumberField
+          label="Elevation (mm)"
+          value={pendingSlab.elevation}
+          onChange={(v) => setPendingSlab({ ...pendingSlab, elevation: v })}
+          step={100}
+        />
+      </PropertyGroup>
+
+      {selectedType && (
+        <div className="mt-1 px-2 py-1 bg-cad-bg rounded border border-cad-border">
+          <div className="text-[10px] text-cad-text-dim">
+            Material: <span className="text-cad-text capitalize">{selectedType.material}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Space tool properties - edits pendingSpace state */
+function SpaceToolProperties() {
+  const pendingSpace = useAppStore(s => s.pendingSpace);
+  const setPendingSpace = useAppStore(s => s.setPendingSpace);
+
+  if (!pendingSpace) return null;
+
+  return (
+    <div className="p-3 border-b border-cad-border">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold text-cad-accent uppercase tracking-wide">Space Tool</span>
+      </div>
+      <p className="text-[10px] text-cad-text-dim mb-3">
+        Click inside an area enclosed by walls to detect and create an IfcSpace.
+      </p>
+
+      <PropertyGroup label="Properties">
+        <TextField
+          label="Name"
+          value={pendingSpace.name}
+          onChange={(v) => setPendingSpace({ ...pendingSpace, name: v })}
+          placeholder="e.g. Living Room"
+        />
+        <TextField
+          label="Number"
+          value={pendingSpace.number || ''}
+          onChange={(v) => setPendingSpace({ ...pendingSpace, number: v || undefined })}
+          placeholder="e.g. 101"
+        />
+        <TextField
+          label="Level"
+          value={pendingSpace.level || ''}
+          onChange={(v) => setPendingSpace({ ...pendingSpace, level: v || undefined })}
+          placeholder="e.g. Ground Floor"
+        />
+      </PropertyGroup>
+
+      <PropertyGroup label="Display">
+        <TextField
+          label="Fill Color"
+          value={pendingSpace.fillColor || '#00ff00'}
+          onChange={(v) => setPendingSpace({ ...pendingSpace, fillColor: v })}
+        />
+        <NumberField
+          label="Fill Opacity"
+          value={pendingSpace.fillOpacity ?? 0.1}
+          onChange={(v) => setPendingSpace({ ...pendingSpace, fillOpacity: v })}
+          step={0.05}
+          min={0}
+          max={1}
+        />
+      </PropertyGroup>
+    </div>
+  );
+}
+
+/** Gridline tool properties - edits pendingGridline state */
+function GridlineToolProperties() {
+  const pendingGridline = useAppStore(s => s.pendingGridline);
+  const setPendingGridline = useAppStore(s => s.setPendingGridline);
+
+  if (!pendingGridline) return null;
+
+  return (
+    <div className="p-3 border-b border-cad-border">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold text-cad-accent uppercase tracking-wide">Gridline Tool</span>
+      </div>
+
+      <PropertyGroup label="Properties">
+        <TextField
+          label="Label"
+          value={pendingGridline.label}
+          onChange={(v) => setPendingGridline({ ...pendingGridline, label: v })}
+          placeholder="A, B, 1, 2..."
+        />
+        <SelectField<GridlineBubblePosition>
+          label="Bubble Position"
+          value={pendingGridline.bubblePosition}
+          options={[
+            { value: 'start', label: 'Start' },
+            { value: 'end', label: 'End' },
+            { value: 'both', label: 'Both' },
+          ]}
+          onChange={(v) => setPendingGridline({ ...pendingGridline, bubblePosition: v })}
+        />
+        <NumberField
+          label="Bubble Radius (mm)"
+          value={pendingGridline.bubbleRadius}
+          onChange={(v) => setPendingGridline({ ...pendingGridline, bubbleRadius: v })}
+          step={25}
+          min={50}
+        />
+        <NumberField
+          label="Font Size (mm)"
+          value={pendingGridline.fontSize}
+          onChange={(v) => setPendingGridline({ ...pendingGridline, fontSize: v })}
+          step={25}
+          min={50}
+        />
+      </PropertyGroup>
+    </div>
+  );
+}
+
+/** Level tool properties - edits pendingLevel state */
+function LevelToolProperties() {
+  const pendingLevel = useAppStore(s => s.pendingLevel);
+  const setPendingLevel = useAppStore(s => s.setPendingLevel);
+
+  if (!pendingLevel) return null;
+
+  return (
+    <div className="p-3 border-b border-cad-border">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold text-cad-accent uppercase tracking-wide">Level Tool</span>
+      </div>
+
+      <PropertyGroup label="Properties">
+        <TextField
+          label="Label"
+          value={pendingLevel.label}
+          onChange={(v) => setPendingLevel({ ...pendingLevel, label: v })}
+          placeholder="e.g. +0, +3000"
+        />
+        <NumberField
+          label="Elevation (mm)"
+          value={pendingLevel.elevation}
+          onChange={(v) => setPendingLevel({ ...pendingLevel, elevation: v })}
+          step={100}
+        />
+        <NumberField
+          label="Peil (mm)"
+          value={pendingLevel.peil}
+          onChange={(v) => setPendingLevel({ ...pendingLevel, peil: v })}
+          step={100}
+        />
+        <TextField
+          label="Description"
+          value={pendingLevel.description || ''}
+          onChange={(v) => setPendingLevel({ ...pendingLevel, description: v || undefined })}
+          placeholder="e.g. Vloerpeil, Bovenkant vloer"
+        />
+      </PropertyGroup>
+
+      <PropertyGroup label="Display">
+        <NumberField
+          label="Bubble Radius (mm)"
+          value={pendingLevel.bubbleRadius}
+          onChange={(v) => setPendingLevel({ ...pendingLevel, bubbleRadius: v })}
+          step={25}
+          min={50}
+        />
+        <NumberField
+          label="Font Size (mm)"
+          value={pendingLevel.fontSize}
+          onChange={(v) => setPendingLevel({ ...pendingLevel, fontSize: v })}
+          step={25}
+          min={50}
+        />
+      </PropertyGroup>
+    </div>
+  );
+}
+
+/** Pile tool properties - edits pendingPile state */
+function PileToolProperties() {
+  const pendingPile = useAppStore(s => s.pendingPile);
+  const setPendingPile = useAppStore(s => s.setPendingPile);
+
+  if (!pendingPile) return null;
+
+  return (
+    <div className="p-3 border-b border-cad-border">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold text-cad-accent uppercase tracking-wide">Pile Tool</span>
+      </div>
+
+      <PropertyGroup label="Properties">
+        <TextField
+          label="Label"
+          value={pendingPile.label}
+          onChange={(v) => setPendingPile({ ...pendingPile, label: v })}
+          placeholder="P1, P2..."
+        />
+        <NumberField
+          label="Diameter (mm)"
+          value={pendingPile.diameter}
+          onChange={(v) => setPendingPile({ ...pendingPile, diameter: v })}
+          step={50}
+          min={100}
+        />
+        <NumberField
+          label="Font Size (mm)"
+          value={pendingPile.fontSize}
+          onChange={(v) => setPendingPile({ ...pendingPile, fontSize: v })}
+          step={25}
+          min={50}
+        />
+        <CheckboxField
+          label="Show Cross"
+          value={pendingPile.showCross}
+          onChange={(v) => setPendingPile({ ...pendingPile, showCross: v })}
+        />
+      </PropertyGroup>
+    </div>
+  );
+}
+
+/** CPT tool properties - edits pendingCPT state */
+function CPTToolProperties() {
+  const pendingCPT = useAppStore(s => s.pendingCPT);
+  const setPendingCPT = useAppStore(s => s.setPendingCPT);
+
+  if (!pendingCPT) return null;
+
+  return (
+    <div className="p-3 border-b border-cad-border">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold text-cad-accent uppercase tracking-wide">CPT Tool</span>
+      </div>
+
+      <PropertyGroup label="Properties">
+        <TextField
+          label="Name"
+          value={pendingCPT.name}
+          onChange={(v) => setPendingCPT({ ...pendingCPT, name: v })}
+          placeholder="CPT-01, CPT-02..."
+        />
+        <NumberField
+          label="Marker Size (mm)"
+          value={pendingCPT.markerSize}
+          onChange={(v) => setPendingCPT({ ...pendingCPT, markerSize: v })}
+          step={50}
+          min={100}
+        />
+        <NumberField
+          label="Font Size (mm)"
+          value={pendingCPT.fontSize}
+          onChange={(v) => setPendingCPT({ ...pendingCPT, fontSize: v })}
+          step={25}
+          min={50}
+        />
+      </PropertyGroup>
+    </div>
+  );
+}
+
+/** Section Callout tool properties - edits pendingSectionCallout state */
+function SectionCalloutToolProperties() {
+  const pendingSectionCallout = useAppStore(s => s.pendingSectionCallout);
+  const setPendingSectionCallout = useAppStore(s => s.setPendingSectionCallout);
+
+  if (!pendingSectionCallout) return null;
+
+  return (
+    <div className="p-3 border-b border-cad-border">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold text-cad-accent uppercase tracking-wide">Section Callout Tool</span>
+      </div>
+
+      <PropertyGroup label="Properties">
+        <TextField
+          label="Label"
+          value={pendingSectionCallout.label}
+          onChange={(v) => setPendingSectionCallout({ ...pendingSectionCallout, label: v })}
+          placeholder="A, B, 1..."
+        />
+        <NumberField
+          label="Bubble Radius (mm)"
+          value={pendingSectionCallout.bubbleRadius}
+          onChange={(v) => setPendingSectionCallout({ ...pendingSectionCallout, bubbleRadius: v })}
+          step={25}
+          min={50}
+        />
+        <NumberField
+          label="Font Size (mm)"
+          value={pendingSectionCallout.fontSize}
+          onChange={(v) => setPendingSectionCallout({ ...pendingSectionCallout, fontSize: v })}
+          step={25}
+          min={50}
+        />
+        <CheckboxField
+          label="Flip Direction"
+          value={pendingSectionCallout.flipDirection}
+          onChange={(v) => setPendingSectionCallout({ ...pendingSectionCallout, flipDirection: v })}
+        />
+        <CheckboxField
+          label="Show Start Head"
+          value={!pendingSectionCallout.hideStartHead}
+          onChange={(v) => setPendingSectionCallout({ ...pendingSectionCallout, hideStartHead: !v })}
+        />
+        <CheckboxField
+          label="Show End Head"
+          value={!pendingSectionCallout.hideEndHead}
+          onChange={(v) => setPendingSectionCallout({ ...pendingSectionCallout, hideEndHead: !v })}
+        />
+        <NumberField
+          label="View Depth (mm)"
+          value={pendingSectionCallout.viewDepth}
+          onChange={(v) => setPendingSectionCallout({ ...pendingSectionCallout, viewDepth: v })}
+          step={500}
+          min={0}
+        />
+      </PropertyGroup>
+    </div>
+  );
+}
+
+/** Line tool properties - edits currentStyle (stroke color, width, lineStyle) and active layer */
+function LineToolProperties() {
+  const currentStyle = useAppStore(s => s.currentStyle);
+  const setCurrentStyle = useAppStore(s => s.setCurrentStyle);
+  const layers = useAppStore(s => s.layers);
+  const activeLayerId = useAppStore(s => s.activeLayerId);
+  const activeDrawingId = useAppStore(s => s.activeDrawingId);
+  const setActiveLayer = useAppStore(s => s.setActiveLayer);
+
+  // Filter layers to current drawing only
+  const drawingLayers = layers.filter(l => l.drawingId === activeDrawingId);
+
+  return (
+    <div className="p-3 border-b border-cad-border">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold text-cad-accent uppercase tracking-wide">Line Tool</span>
+      </div>
+
+      <PropertyGroup label="Style">
+        <ColorPalette
+          label="Color"
+          value={currentStyle.strokeColor}
+          onChange={(v) => setCurrentStyle({ strokeColor: v })}
+        />
+        <LineweightInput
+          value={currentStyle.strokeWidth}
+          onChange={(v) => setCurrentStyle({ strokeWidth: v })}
+        />
+        <SelectField<LineStyle>
+          label="Line Style"
+          value={currentStyle.lineStyle}
+          options={[
+            { value: 'solid', label: 'Solid' },
+            { value: 'dashed', label: 'Dashed' },
+            { value: 'dotted', label: 'Dotted' },
+            { value: 'dashdot', label: 'Dash-Dot' },
+          ]}
+          onChange={(v) => setCurrentStyle({ lineStyle: v })}
+        />
+      </PropertyGroup>
+
+      <PropertyGroup label="Layer">
+        <div className="mb-2">
+          <label className={labelClass}>Active Layer</label>
+          <select
+            value={activeLayerId}
+            onChange={(e) => setActiveLayer(e.target.value)}
+            className={inputClass}
+          >
+            {drawingLayers.map(l => (
+              <option key={l.id} value={l.id}>
+                {l.name}{l.locked ? ' (locked)' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+      </PropertyGroup>
+    </div>
+  );
+}
+
+/** Renders the appropriate tool-specific panel based on active tool */
+function ActiveToolProperties({ activeTool }: { activeTool: string }) {
+  switch (activeTool) {
+    case 'line':
+      return <LineToolProperties />;
+    case 'wall':
+      return <WallToolProperties />;
+    case 'beam':
+      return <BeamToolProperties />;
+    case 'slab':
+      return <SlabToolProperties />;
+    case 'gridline':
+      return <GridlineToolProperties />;
+    case 'level':
+      return <LevelToolProperties />;
+    case 'pile':
+      return <PileToolProperties />;
+    case 'cpt':
+      return <CPTToolProperties />;
+    case 'section-callout':
+      return <SectionCalloutToolProperties />;
+    case 'space':
+      return <SpaceToolProperties />;
+    case 'plate-system':
+      return <PlateSystemToolProperties />;
+    case 'hatch':
+      return <HatchToolProperties />;
+    case 'array':
+      return <ArrayToolProperties />;
+    default:
+      return null;
+  }
+}
+
+/** Plate System shape properties - shown when a PlateSystem shape is selected */
+function PlateSystemShapeProperties({ shape, updateShape }: { shape: PlateSystemShape; updateShape: (id: string, updates: Partial<Shape>) => void }) {
+  const update = (updates: Record<string, unknown>) => updateShape(shape.id, updates as Partial<Shape>);
+  const ps = shape;
+
+  // Profile picker dialog state: which target is being browsed ('main' or 'edge')
+  const [profilePickerTarget, setProfilePickerTarget] = useState<'main' | 'edge' | null>(null);
+
+  // Calculate area using shoelace formula
+  let psArea = 0;
+  for (let i = 0; i < ps.contourPoints.length; i++) {
+    const j = (i + 1) % ps.contourPoints.length;
+    psArea += ps.contourPoints[i].x * ps.contourPoints[j].y;
+    psArea -= ps.contourPoints[j].x * ps.contourPoints[i].y;
+  }
+  psArea = Math.abs(psArea) / 2;
+  // Calculate perimeter
+  let psPerimeter = 0;
+  for (let i = 0; i < ps.contourPoints.length; i++) {
+    const j = (i + 1) % ps.contourPoints.length;
+    const pdx = ps.contourPoints[j].x - ps.contourPoints[i].x;
+    const pdy = ps.contourPoints[j].y - ps.contourPoints[i].y;
+    psPerimeter += Math.sqrt(pdx * pdx + pdy * pdy);
+  }
+  const joistCount = ps.mainProfile.spacing > 0
+    ? Math.floor(Math.sqrt(psArea) / ps.mainProfile.spacing) + 1
+    : 0;
+
+  const SYSTEM_TYPE_LABELS: Record<string, string> = {
+    'timber-floor': 'Timber Floor (Houten Balklaag)',
+    'hsb-wall': 'HSB Wall (Houtskeletbouw)',
+    'ceiling': 'Suspended Ceiling',
+    'custom': 'Custom',
+  };
+
+  return (
+    <>
+      <PropertyGroup label="Identity">
+        <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+          <div className="text-xs font-semibold text-cad-accent mb-1">Plate System</div>
+          <div className="text-xs text-cad-text-dim">Type: {SYSTEM_TYPE_LABELS[ps.systemType] || ps.systemType}</div>
+        </div>
+        <TextField label="Name" value={ps.name || ''} onChange={(v) => update({ name: v || undefined })} />
+        <SelectField<string>
+          label="System Type"
+          value={ps.systemType}
+          options={[
+            { value: 'timber-floor', label: 'Timber Floor' },
+            { value: 'hsb-wall', label: 'HSB Wall' },
+            { value: 'ceiling', label: 'Ceiling' },
+            { value: 'custom', label: 'Custom' },
+          ]}
+          onChange={(v) => update({ systemType: v })}
+        />
+      </PropertyGroup>
+
+      <PropertyGroup label="Main Profile">
+        <div className="mb-2 flex items-center gap-1">
+          {ps.mainProfile.profileId ? (() => {
+            const profilePreset = getPresetById(ps.mainProfile.profileId!);
+            return profilePreset ? (
+              <div className="flex-1 p-2 bg-cad-bg rounded border border-cad-border text-xs">
+                <span className="text-cad-text-dim">Profile: </span>
+                <span className="text-cad-text font-semibold">{profilePreset.name}</span>
+                <span className="text-cad-text-dim ml-1">({profilePreset.standard} {profilePreset.category})</span>
+              </div>
+            ) : null;
+          })() : (
+            <div className="flex-1 p-2 bg-cad-bg rounded border border-cad-border text-xs text-cad-text-dim">
+              No profile selected
+            </div>
+          )}
+          <button
+            onClick={() => setProfilePickerTarget('main')}
+            className="flex-shrink-0 w-7 h-7 flex items-center justify-center bg-cad-accent/10 hover:bg-cad-accent/20 border border-cad-accent/30 rounded text-cad-accent text-sm font-bold"
+            title="Browse profiles"
+          >
+            +
+          </button>
+        </div>
+        <NumberField
+          label="Width (mm)"
+          value={ps.mainProfile.width}
+          onChange={(v) => update({ mainProfile: { ...ps.mainProfile, width: v } })}
+          step={5} min={10}
+        />
+        <NumberField
+          label="Height (mm)"
+          value={ps.mainProfile.height}
+          onChange={(v) => update({ mainProfile: { ...ps.mainProfile, height: v } })}
+          step={5} min={10}
+        />
+        <NumberField
+          label="Spacing h.o.h. (mm)"
+          value={ps.mainProfile.spacing}
+          onChange={(v) => update({ mainProfile: { ...ps.mainProfile, spacing: v } })}
+          step={50} min={50}
+        />
+        <NumberField
+          label="Direction (deg)"
+          value={ps.mainProfile.direction * RAD2DEG}
+          onChange={(v) => update({ mainProfile: { ...ps.mainProfile, direction: v * DEG2RAD } })}
+          step={15}
+        />
+        <SelectField<string>
+          label="Material"
+          value={ps.mainProfile.material}
+          options={[
+            { value: 'timber', label: 'Timber' },
+            { value: 'steel', label: 'Steel' },
+            { value: 'concrete', label: 'Concrete' },
+            { value: 'aluminum', label: 'Aluminum' },
+            { value: 'generic', label: 'Generic' },
+          ]}
+          onChange={(v) => update({ mainProfile: { ...ps.mainProfile, material: v } })}
+        />
+      </PropertyGroup>
+
+      <PropertyGroup label="Geometry">
+        <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+            <div className="text-cad-text-dim">Contour Points:</div>
+            <div className="text-cad-text">{ps.contourPoints.length}</div>
+            <div className="text-cad-text-dim">Area:</div>
+            <div className="text-cad-text">{psArea.toFixed(2)} mm2</div>
+            <div className="text-cad-text-dim">Perimeter:</div>
+            <div className="text-cad-text">{psPerimeter.toFixed(2)} mm</div>
+            <div className="text-cad-text-dim">Est. Joists:</div>
+            <div className="text-cad-text">~{joistCount}</div>
+          </div>
+        </div>
+      </PropertyGroup>
+
+      {ps.edgeProfile && (
+        <PropertyGroup label="Edge Beams">
+          <div className="mb-2 flex items-center gap-1">
+            {ps.edgeProfile.profileId ? (() => {
+              const edgePreset = getPresetById(ps.edgeProfile!.profileId!);
+              return edgePreset ? (
+                <div className="flex-1 p-2 bg-cad-bg rounded border border-cad-border text-xs">
+                  <span className="text-cad-text-dim">Profile: </span>
+                  <span className="text-cad-text font-semibold">{edgePreset.name}</span>
+                  <span className="text-cad-text-dim ml-1">({edgePreset.standard} {edgePreset.category})</span>
+                </div>
+              ) : null;
+            })() : (
+              <div className="flex-1 p-2 bg-cad-bg rounded border border-cad-border text-xs text-cad-text-dim">
+                No edge profile selected
+              </div>
+            )}
+            <button
+              onClick={() => setProfilePickerTarget('edge')}
+              className="flex-shrink-0 w-7 h-7 flex items-center justify-center bg-cad-accent/10 hover:bg-cad-accent/20 border border-cad-accent/30 rounded text-cad-accent text-sm font-bold"
+              title="Browse edge profiles"
+            >
+              +
+            </button>
+          </div>
+          {ps.contourPoints.map((pt, idx) => {
+            const nextIdx = (idx + 1) % ps.contourPoints.length;
+            const nextPt = ps.contourPoints[nextIdx];
+            const edgeDx = nextPt.x - pt.x;
+            const edgeDy = nextPt.y - pt.y;
+            const edgeLen = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy);
+            // Default: all edges enabled when edgeBeamEnabled is undefined
+            const enabled = ps.edgeBeamEnabled ? ps.edgeBeamEnabled[idx] !== false : true;
+
+            return (
+              <div key={idx} className="mb-1 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={(e) => {
+                    const n = ps.contourPoints.length;
+                    const newEnabled = ps.edgeBeamEnabled
+                      ? [...ps.edgeBeamEnabled]
+                      : new Array(n).fill(true);
+                    // Ensure array is at least long enough
+                    while (newEnabled.length < n) newEnabled.push(true);
+                    newEnabled[idx] = e.target.checked;
+                    // Update edgeBeamEnabled on shape
+                    updateShape(shape.id, { edgeBeamEnabled: newEnabled } as any);
+                    // Regenerate child beams using centralized utility
+                    // (edgeBeamEnabled was just updated on the shape above,
+                    //  but the store hasn't flushed yet so we trigger a micro-delay)
+                    setTimeout(() => regeneratePlateSystemBeams(shape.id), 0);
+                  }}
+                  className="accent-cad-accent"
+                />
+                <label className="text-xs text-cad-text">
+                  Edge {idx + 1}
+                  <span className="text-cad-text-dim ml-1">({edgeLen.toFixed(0)} mm)</span>
+                </label>
+              </div>
+            );
+          })}
+        </PropertyGroup>
+      )}
+
+      {ps.layers && ps.layers.length > 0 && (
+        <PropertyGroup label="Layers">
+          {ps.layers.map((layer, idx) => (
+            <div key={idx} className="mb-2 p-2 bg-cad-bg rounded border border-cad-border text-xs">
+              <div className="font-semibold text-cad-text">{layer.name}</div>
+              <div className="text-cad-text-dim">{layer.thickness}mm {layer.material} ({layer.position})</div>
+            </div>
+          ))}
+        </PropertyGroup>
+      )}
+
+      <PropertyGroup label="Openings">
+        <div className="mb-2">
+          <button
+            className="w-full py-1.5 text-xs bg-orange-900/40 hover:bg-orange-800/50 border border-orange-600/40 text-orange-200 rounded transition-colors"
+            onClick={() => {
+              const s = useAppStore.getState();
+              if (s.plateSystemEditMode && s.editingPlateSystemId === shape.id) {
+                s.setPlateSystemOpeningMode(true);
+              } else {
+                // Enter edit mode first, then activate opening mode
+                s.setPlateSystemEditMode(true, shape.id);
+                s.setPlateSystemOpeningMode(true);
+              }
+            }}
+          >
+            + Add Opening
+          </button>
+        </div>
+        {(ps.openings ?? []).length === 0 && (
+          <div className="text-xs text-cad-text-dim italic">No openings</div>
+        )}
+        {(ps.openings ?? []).map((opening, idx) => (
+          <div key={opening.id} className="mb-2 p-2 bg-cad-bg rounded border border-cad-border">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-semibold text-orange-300">Opening {idx + 1}</span>
+              <button
+                className="text-[10px] text-red-400 hover:text-red-300"
+                onClick={() => {
+                  const newOpenings = (ps.openings ?? []).filter(o => o.id !== opening.id);
+                  update({ openings: newOpenings });
+                  const s = useAppStore.getState();
+                  if (s.selectedOpeningId === opening.id) {
+                    s.setSelectedOpeningId(null);
+                  }
+                }}
+              >
+                Delete
+              </button>
+            </div>
+            <NumberField
+              label="Width (mm)"
+              value={opening.width}
+              onChange={(v) => {
+                const newOpenings = (ps.openings ?? []).map(o =>
+                  o.id === opening.id ? { ...o, width: v } : o
+                );
+                update({ openings: newOpenings });
+              }}
+              min={10}
+            />
+            <NumberField
+              label="Height (mm)"
+              value={opening.height}
+              onChange={(v) => {
+                const newOpenings = (ps.openings ?? []).map(o =>
+                  o.id === opening.id ? { ...o, height: v } : o
+                );
+                update({ openings: newOpenings });
+              }}
+              min={10}
+            />
+            <NumberField
+              label="Rotation (deg)"
+              value={(opening.rotation ?? 0) * RAD2DEG}
+              onChange={(v) => {
+                const newOpenings = (ps.openings ?? []).map(o =>
+                  o.id === opening.id ? { ...o, rotation: v * DEG2RAD } : o
+                );
+                update({ openings: newOpenings });
+              }}
+            />
+            <div className="text-[10px] text-cad-text-dim mt-1">
+              Position: ({opening.position.x.toFixed(0)}, {opening.position.y.toFixed(0)})
+            </div>
+          </div>
+        ))}
+      </PropertyGroup>
+
+      {/* Profile picker dialog (SectionDialog) for browsing profiles */}
+      <SectionDialog
+        isOpen={profilePickerTarget !== null}
+        onClose={() => setProfilePickerTarget(null)}
+        onInsert={(_profileType: ProfileType, _parameters: ParameterValues, presetId?: string) => {
+          if (!presetId) {
+            setProfilePickerTarget(null);
+            return;
+          }
+          const preset = getPresetById(presetId);
+          if (!preset) {
+            setProfilePickerTarget(null);
+            return;
+          }
+          const params = preset.parameters;
+          const height = typeof params.height === 'number' ? params.height : undefined;
+          let width: number | undefined;
+          if (typeof params.width === 'number') width = params.width;
+          else if (typeof params.flangeWidth === 'number') width = params.flangeWidth as number;
+
+          if (profilePickerTarget === 'main') {
+            update({
+              mainProfile: {
+                ...ps.mainProfile,
+                profileId: presetId,
+                ...(width !== undefined ? { width } : {}),
+                ...(height !== undefined ? { height } : {}),
+              },
+            });
+          } else if (profilePickerTarget === 'edge' && ps.edgeProfile) {
+            update({
+              edgeProfile: {
+                ...ps.edgeProfile,
+                profileId: presetId,
+                ...(width !== undefined ? { width } : {}),
+                ...(height !== undefined ? { height } : {}),
+              },
+            });
+          }
+          setProfilePickerTarget(null);
+        }}
+      />
+    </>
+  );
+}
+
+/** Plate System tool properties - edits pendingPlateSystem state */
+function PlateSystemToolProperties() {
+  const pendingPlateSystem = useAppStore(s => s.pendingPlateSystem);
+  const setPendingPlateSystem = useAppStore(s => s.setPendingPlateSystem);
+
+  // Profile picker dialog state
+  const [profilePickerTarget, setProfilePickerTarget] = useState<'main' | 'edge' | null>(null);
+
+  if (!pendingPlateSystem) return null;
+
+  const SYSTEM_TYPE_LABELS: Record<string, string> = {
+    'timber-floor': 'Timber Floor',
+    'hsb-wall': 'HSB Wall',
+    'ceiling': 'Ceiling',
+    'custom': 'Custom',
+  };
+
+  return (
+    <div className="p-3 border-b border-cad-border">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold text-cad-accent uppercase tracking-wide">Plate System</span>
+      </div>
+
+      <PropertyGroup label="System">
+        <div className="mb-2 p-2 bg-cad-bg rounded border border-cad-border text-xs text-cad-text-dim">
+          {SYSTEM_TYPE_LABELS[pendingPlateSystem.systemType] || pendingPlateSystem.systemType}
+        </div>
+        <TextField
+          label="Name"
+          value={pendingPlateSystem.name || ''}
+          onChange={(v) => setPendingPlateSystem({ ...pendingPlateSystem, name: v || undefined })}
+        />
+      </PropertyGroup>
+
+      <PropertyGroup label="Main Profile">
+        <div className="mb-2 flex items-center gap-1">
+          {pendingPlateSystem.mainProfileId ? (() => {
+            const profilePreset = getPresetById(pendingPlateSystem.mainProfileId!);
+            return profilePreset ? (
+              <div className="flex-1 p-2 bg-cad-bg rounded border border-cad-border text-xs">
+                <span className="text-cad-text-dim">Profile: </span>
+                <span className="text-cad-text font-semibold">{profilePreset.name}</span>
+                <span className="text-cad-text-dim ml-1">({profilePreset.standard})</span>
+              </div>
+            ) : null;
+          })() : (
+            <div className="flex-1 p-2 bg-cad-bg rounded border border-cad-border text-xs text-cad-text-dim">
+              No profile selected
+            </div>
+          )}
+          <button
+            onClick={() => setProfilePickerTarget('main')}
+            className="flex-shrink-0 w-7 h-7 flex items-center justify-center bg-cad-accent/10 hover:bg-cad-accent/20 border border-cad-accent/30 rounded text-cad-accent text-sm font-bold"
+            title="Browse profiles"
+          >
+            +
+          </button>
+        </div>
+        <NumberField
+          label="Width (mm)"
+          value={pendingPlateSystem.mainWidth}
+          onChange={(v) => setPendingPlateSystem({ ...pendingPlateSystem, mainWidth: v })}
+          step={5} min={10}
+        />
+        <NumberField
+          label="Height (mm)"
+          value={pendingPlateSystem.mainHeight}
+          onChange={(v) => setPendingPlateSystem({ ...pendingPlateSystem, mainHeight: v })}
+          step={5} min={10}
+        />
+        <NumberField
+          label="Spacing h.o.h. (mm)"
+          value={pendingPlateSystem.mainSpacing}
+          onChange={(v) => setPendingPlateSystem({ ...pendingPlateSystem, mainSpacing: v })}
+          step={50} min={50}
+        />
+        <NumberField
+          label="Direction (deg)"
+          value={pendingPlateSystem.mainDirection * (180 / Math.PI)}
+          onChange={(v) => setPendingPlateSystem({ ...pendingPlateSystem, mainDirection: v * (Math.PI / 180) })}
+          step={15}
+        />
+      </PropertyGroup>
+
+      {pendingPlateSystem.edgeProfileId !== undefined && (
+        <PropertyGroup label="Edge Profile">
+          <div className="mb-2 flex items-center gap-1">
+            {pendingPlateSystem.edgeProfileId ? (() => {
+              const edgePreset = getPresetById(pendingPlateSystem.edgeProfileId!);
+              return edgePreset ? (
+                <div className="flex-1 p-2 bg-cad-bg rounded border border-cad-border text-xs">
+                  <span className="text-cad-text-dim">Profile: </span>
+                  <span className="text-cad-text font-semibold">{edgePreset.name}</span>
+                  <span className="text-cad-text-dim ml-1">({edgePreset.standard})</span>
+                </div>
+              ) : null;
+            })() : (
+              <div className="flex-1 p-2 bg-cad-bg rounded border border-cad-border text-xs text-cad-text-dim">
+                No edge profile selected
+              </div>
+            )}
+            <button
+              onClick={() => setProfilePickerTarget('edge')}
+              className="flex-shrink-0 w-7 h-7 flex items-center justify-center bg-cad-accent/10 hover:bg-cad-accent/20 border border-cad-accent/30 rounded text-cad-accent text-sm font-bold"
+              title="Browse edge profiles"
+            >
+              +
+            </button>
+          </div>
+        </PropertyGroup>
+      )}
+
+      {/* Profile picker dialog (SectionDialog) for browsing profiles */}
+      <SectionDialog
+        isOpen={profilePickerTarget !== null}
+        onClose={() => setProfilePickerTarget(null)}
+        onInsert={(_profileType: ProfileType, _parameters: ParameterValues, presetId?: string) => {
+          if (!presetId || !pendingPlateSystem) {
+            setProfilePickerTarget(null);
+            return;
+          }
+          const preset = getPresetById(presetId);
+          if (!preset) {
+            setProfilePickerTarget(null);
+            return;
+          }
+          const params = preset.parameters;
+          const height = typeof params.height === 'number' ? params.height : undefined;
+          let width: number | undefined;
+          if (typeof params.width === 'number') width = params.width;
+          else if (typeof params.flangeWidth === 'number') width = params.flangeWidth as number;
+
+          if (profilePickerTarget === 'main') {
+            setPendingPlateSystem({
+              ...pendingPlateSystem,
+              mainProfileId: presetId,
+              ...(width !== undefined ? { mainWidth: width } : {}),
+              ...(height !== undefined ? { mainHeight: height } : {}),
+            });
+          } else if (profilePickerTarget === 'edge') {
+            setPendingPlateSystem({
+              ...pendingPlateSystem,
+              edgeProfileId: presetId,
+              ...(width !== undefined ? { edgeWidth: width } : {}),
+              ...(height !== undefined ? { edgeHeight: height } : {}),
+            });
+          }
+          setProfilePickerTarget(null);
+        }}
+      />
+    </div>
+  );
+}
+
+function ArrayToolProperties() {
+  const arrayMode = useAppStore(s => s.arrayMode);
+  const setArrayMode = useAppStore(s => s.setArrayMode);
+  const arrayCount = useAppStore(s => s.arrayCount);
+  const setArrayCount = useAppStore(s => s.setArrayCount);
+  const arrayAngle = useAppStore(s => s.arrayAngle);
+  const setArrayAngle = useAppStore(s => s.setArrayAngle);
+  const arrayMaintainRelation = useAppStore(s => s.arrayMaintainRelation);
+  const setArrayMaintainRelation = useAppStore(s => s.setArrayMaintainRelation);
+
+  return (
+    <div className="p-3 border-b border-cad-border">
+      <PropertyGroup label="Array">
+        <div className="mb-3">
+          <label className={labelClass}>Type</label>
+          <select
+            value={arrayMode}
+            onChange={(e) => setArrayMode(e.target.value as 'linear' | 'radial')}
+            className={inputClass}
+          >
+            <option value="linear">Linear</option>
+            <option value="radial">Radial</option>
+          </select>
+        </div>
+        <div className="mb-3">
+          <label className={labelClass}>Count (incl. original)</label>
+          <input
+            type="number"
+            min={2}
+            max={100}
+            value={arrayCount}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              if (!isNaN(v) && v >= 2) setArrayCount(v);
+            }}
+            className={inputClass}
+          />
+        </div>
+        {arrayMode === 'radial' && (
+          <div className="mb-3">
+            <label className={labelClass}>Total Angle (deg)</label>
+            <input
+              type="number"
+              min={1}
+              max={360}
+              value={arrayAngle}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (!isNaN(v) && v > 0) setArrayAngle(v);
+              }}
+              className={inputClass}
+            />
+          </div>
+        )}
+        <CheckboxField
+          label="Maintain relation"
+          value={arrayMaintainRelation}
+          onChange={setArrayMaintainRelation}
+        />
+      </PropertyGroup>
+      <div className="text-[10px] text-cad-text-dim px-1 py-1">
+        {arrayMode === 'linear'
+          ? 'Select elements, click base point, then click end point. Copies distribute evenly between base and end. Hold Shift to constrain to X/Y axis.'
+          : 'Select elements, click center point, then click to confirm. Copies distribute around the center.'}
+      </div>
+    </div>
+  );
 }
 
 function HatchToolProperties() {
@@ -1419,6 +3351,7 @@ function HatchToolProperties() {
 
 export const PropertiesPanel = memo(function PropertiesPanel() {
   const selectedShapeIds = useAppStore(s => s.selectedShapeIds);
+  const selectionFilter = useAppStore(s => s.selectionFilter);
   const shapes = useAppStore(s => s.shapes);
   const parametricShapes = useAppStore(s => s.parametricShapes);
   const currentStyle = useAppStore(s => s.currentStyle);
@@ -1427,11 +3360,17 @@ export const PropertiesPanel = memo(function PropertiesPanel() {
   const activeTool = useAppStore(s => s.activeTool);
 
   const selectedIdSet = useMemo(() => new Set(selectedShapeIds), [selectedShapeIds]);
-  const selectedShapes = shapes.filter((s) => selectedIdSet.has(s.id));
-  const selectedParametricShapes = parametricShapes.filter((s) => selectedIdSet.has(s.id));
+  const selectedShapes = shapes.filter((s) => {
+    if (!selectedIdSet.has(s.id)) return false;
+    if (selectionFilter && s.type !== selectionFilter) return false;
+    return true;
+  });
+  const selectedParametricShapes = parametricShapes.filter((s) => {
+    if (!selectedIdSet.has(s.id)) return false;
+    return true;
+  });
   const hasSelection = selectedShapes.length > 0 || selectedParametricShapes.length > 0;
   const hasRegularShapeSelection = selectedShapes.length > 0;
-  const isHatchToolActive = activeTool === 'hatch';
 
   // Get common style from selection (or use current style)
   // For parametric shapes, use their style or fall back to current style
@@ -1471,10 +3410,15 @@ export const PropertiesPanel = memo(function PropertiesPanel() {
     }
   };
 
+  // Determine if a structural/drawing tool with pending state is active
+  const isToolWithProperties = [
+    'line', 'wall', 'beam', 'slab', 'plate-system', 'gridline', 'level', 'pile', 'section-callout', 'hatch', 'array',
+  ].includes(activeTool);
+
   if (!hasSelection) {
     return (
       <div className="flex-1 overflow-auto">
-        {isHatchToolActive && <HatchToolProperties />}
+        {isToolWithProperties && <ActiveToolProperties activeTool={activeTool} />}
         <DrawingPropertiesPanel showHeader={false} />
       </div>
     );
@@ -1507,23 +3451,13 @@ export const PropertiesPanel = memo(function PropertiesPanel() {
 
   return (
     <div className="flex-1 overflow-auto">
-      {isHatchToolActive && <HatchToolProperties />}
+      {isToolWithProperties && <ActiveToolProperties activeTool={activeTool} />}
       <div>
-        <PropertyGroup label="Style">
+        {/* Hide Style section for walls and gridlines */}
+        {!(selectedShapes.length > 0 && selectedShapes.every(s => s.type === 'wall' || s.type === 'gridline')) && <PropertyGroup label="Style">
           <ColorPalette label="Color" value={displayStyle.strokeColor} onChange={handleColorChange} />
 
-          <div className="mb-3">
-            <label className="block text-xs text-cad-text-dim mb-1">Lineweight</label>
-            <input
-              type="number"
-              min="0.5"
-              max="20"
-              step="0.5"
-              value={displayStyle.strokeWidth}
-              onChange={(e) => handleWidthChange(parseFloat(e.target.value) || 1)}
-              className="w-full bg-cad-bg border border-cad-border rounded px-2 py-1 text-xs text-cad-text"
-            />
-          </div>
+          <LineweightInput value={displayStyle.strokeWidth} onChange={handleWidthChange} />
 
           <div className="mb-3">
             <label className="block text-xs text-cad-text-dim mb-1">Line Style</label>
@@ -1538,7 +3472,7 @@ export const PropertiesPanel = memo(function PropertiesPanel() {
               <option value="dashdot">Dash-Dot</option>
             </select>
           </div>
-        </PropertyGroup>
+        </PropertyGroup>}
 
         {/* Shape-specific properties - single selection */}
         {selectedShapes.length === 1 && selectedParametricShapes.length === 0 && (

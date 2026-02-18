@@ -7,14 +7,16 @@
  */
 
 import type { Shape, Drawing, SheetViewport, Viewport, Layer, CropRegion, ViewportLayerOverride } from '../types';
+import type { WallType } from '../../../types/geometry';
 import type { ParametricShape, ProfileParametricShape } from '../../../types/parametric';
-import type { CustomHatchPattern } from '../../../types/hatch';
+import type { CustomHatchPattern, MaterialHatchSettings } from '../../../types/hatch';
 import { BaseRenderer } from '../core/BaseRenderer';
 import { ShapeRenderer } from '../core/ShapeRenderer';
 import { HandleRenderer } from '../ui/HandleRenderer';
 import { MM_TO_PIXELS, COLORS } from '../types';
 import { CAD_DEFAULT_FONT } from '../../../constants/cadDefaults';
 import { PROFILE_TEMPLATES } from '../../../services/parametric/profileTemplates';
+import { isShapeInHiddenCategory } from '../../../utils/ifcCategoryUtils';
 
 export interface ViewportRenderOptions {
   /** All layers for filtering */
@@ -34,6 +36,16 @@ export interface ViewportRenderOptions {
   totalViewportsOnSheet?: number;
   /** Whether to display actual line weights (false = all lines 1px thin) */
   showLineweight?: boolean;
+  /** Wall types for material-based hatch lookup */
+  wallTypes?: WallType[];
+  /** Material hatch settings from Drawing Standards */
+  materialHatchSettings?: MaterialHatchSettings;
+  /** Gridline extension distance in mm */
+  gridlineExtension?: number;
+  /** Sea level datum: peil=0 elevation relative to NAP in meters */
+  seaLevelDatum?: number;
+  /** Hidden IFC categories — shapes in these categories are not rendered */
+  hiddenIfcCategories?: string[];
 }
 
 export class ViewportRenderer extends BaseRenderer {
@@ -216,6 +228,29 @@ export class ViewportRenderer extends BaseRenderer {
       this.shapeRenderer.setCustomPatterns(options.customPatterns.userPatterns, options.customPatterns.projectPatterns);
     }
 
+    // Set wall types for material-based hatch lookup
+    if (options?.wallTypes) {
+      this.shapeRenderer.setWallTypes(options.wallTypes);
+    }
+
+    // Set material hatch settings from Drawing Standards
+    if (options?.materialHatchSettings) {
+      this.shapeRenderer.setMaterialHatchSettings(options.materialHatchSettings);
+    }
+
+    // Set gridline extension distance
+    if (options?.gridlineExtension !== undefined) {
+      this.shapeRenderer.setGridlineExtension(options.gridlineExtension);
+    }
+
+    // Set sea level datum for NAP elevation display on levels
+    if (options?.seaLevelDatum !== undefined) {
+      this.shapeRenderer.setSeaLevelDatum(options.seaLevelDatum);
+    }
+
+    // Set shapes lookup for linked label text resolution
+    this.shapeRenderer.setShapesLookup(shapes);
+
     // Set lineweight display mode and effective zoom for line width calculation
     this._showLineweight = options?.showLineweight !== false;
     this.shapeRenderer.setShowLineweight(this._showLineweight);
@@ -244,8 +279,9 @@ export class ViewportRenderer extends BaseRenderer {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(vpX, vpY, vpWidth, vpHeight);
 
-    // Get shapes for this drawing, filtered by visibility and layer overrides
-    let drawingShapes = shapes.filter(s => s.drawingId === vp.drawingId && s.visible);
+    // Get shapes for this drawing, filtered by visibility, layer overrides, and IFC category
+    const hiddenCats = options?.hiddenIfcCategories || [];
+    let drawingShapes = shapes.filter(s => s.drawingId === vp.drawingId && s.visible && !isShapeInHiddenCategory(s, hiddenCats));
     drawingShapes = this.filterShapesByLayerOverrides(drawingShapes, layers, vp.layerOverrides);
 
     // Get parametric shapes for this drawing
@@ -524,7 +560,7 @@ export class ViewportRenderer extends BaseRenderer {
 
     ctx.save();
     ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = this._showLineweight ? shape.style.strokeWidth : 1;
+    ctx.lineWidth = this._showLineweight ? Math.max(shape.style.strokeWidth * 3, 2) : 1;
 
     // Draw each outline
     for (let i = 0; i < geometry.outlines.length; i++) {

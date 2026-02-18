@@ -63,7 +63,7 @@ async function saveActiveDocument(): Promise<boolean> {
       activeSheetId: s.activeSheetId,
       drawingViewports: s.drawingViewports,
       sheetViewports: s.sheetViewports,
-      shapes: s.shapes,
+      shapes: s.shapes.filter((sh: any) => !sh.id?.startsWith('section-ref-')),
       layers: s.layers,
       activeLayerId: s.activeLayerId,
       settings: {

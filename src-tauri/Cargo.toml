@@ -1,9 +1,9 @@
 [package]
-name = "open-2d-studio"
-version = "0.22.0"
+name = "open-nd-studio"
+version = "0.21.0"
 description = "A cross-platform 2D CAD application"
-authors = ["Open 2D Studio Contributors"]
-license = "MIT"
+authors = ["Open nD Studio Contributors"]
+license = "LGPL-3.0-or-later"
 repository = ""
 edition = "2021"
 rust-version = "1.70"

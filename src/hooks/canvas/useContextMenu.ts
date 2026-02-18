@@ -1,11 +1,14 @@
 /**
  * useContextMenu - Manages right-click context menu state and items
+ *
+ * Simplified menu: only essential items are shown.
+ * Special handling for section-callout shapes: adds "Open Section" option.
  */
 
 import { useState, useCallback, useMemo } from 'react';
 import { useAppStore } from '../../state/appStore';
 import type { ContextMenuEntry } from '../../components/shared/ContextMenu';
-import type { Point } from '../../types/geometry';
+import type { Point, SectionCalloutShape } from '../../types/geometry';
 import type { ToolType } from '../../state/slices/types';
 
 // Tool display names for "Repeat [Tool]" menu item
@@ -27,9 +30,18 @@ const TOOL_DISPLAY_NAMES: Record<ToolType, string> = {
   'hatch': 'Hatch',
   'detail-component': 'Detail Component',
   'beam': 'Beam',
+  'gridline': 'Grid Line',
+  'level': 'Level',
+  'pile': 'Pile',
+  'cpt': 'CPT',
+  'wall': 'Wall',
+  'slab': 'Slab',
+  'section-callout': 'Section Callout',
+  'label': 'Label',
   'image': 'Image',
   'move': 'Move',
   'copy': 'Copy',
+  'copy2': 'Copy2',
   'rotate': 'Rotate',
   'scale': 'Scale',
   'mirror': 'Mirror',
@@ -39,6 +51,12 @@ const TOOL_DISPLAY_NAMES: Record<ToolType, string> = {
   'chamfer': 'Chamfer',
   'offset': 'Offset',
   'array': 'Array',
+  'elastic': 'Elastic',
+  'space': 'Space',
+  'plate-system': 'Plate System',
+  'spot-elevation': 'Spot Elevation',
+  'align': 'Align',
+  'trim-walls': 'Wall/Beam/Duct Join',
   'sheet-text': 'Sheet Text',
   'sheet-leader': 'Sheet Leader',
   'sheet-dimension': 'Sheet Dimension',
@@ -62,34 +80,16 @@ export function useContextMenu() {
   const {
     selectedShapeIds,
     shapes,
+    drawings,
     lastTool,
     // Actions
     deleteSelectedShapes,
-    copySelectedShapes,
-    cutSelectedShapes,
+    selectAll,
+    repeatLastTool,
     pasteShapes,
     hasClipboardContent,
-    selectAll,
-    setActiveTool,
-    repeatLastTool,
-    hideSelectedShapes,
-    showAllShapes,
-    isolateSelectedShapes,
-    lockSelectedShapes,
-    unlockSelectedShapes,
-    unlockAllShapes,
-    groupSelectedShapes,
-    ungroupSelectedShapes,
-    bringToFront,
-    bringForward,
-    sendBackward,
-    sendToBack,
-    zoomToSelection,
     zoomToFit,
-    // 2D Cursor
-    resetCursor2D,
-    setCursor2DToSelected,
-    snapSelectionToCursor2D,
+    switchToDrawing,
   } = useAppStore();
 
   const openMenu = useCallback((x: number, y: number) => {
@@ -100,18 +100,27 @@ export function useContextMenu() {
     setMenuState(prev => ({ ...prev, isOpen: false }));
   }, []);
 
-  // Check if selected shapes have groups
-  const hasGroupedShapes = useMemo(() => {
-    const idSet = new Set(selectedShapeIds);
-    const selected = shapes.filter(s => idSet.has(s.id));
-    return selected.some(s => s.groupId);
-  }, [shapes, selectedShapeIds]);
+  // Detect if exactly one section-callout is selected and find its target drawing
+  const sectionCalloutInfo = useMemo(() => {
+    if (selectedShapeIds.length !== 1) return null;
+    const shape = shapes.find(s => s.id === selectedShapeIds[0]);
+    if (!shape || shape.type !== 'section-callout') return null;
+    const callout = shape as SectionCalloutShape;
+    if (!callout.targetDrawingId) return null;
+    // Verify the target drawing exists
+    const targetDrawing = drawings.find(d => d.id === callout.targetDrawingId);
+    if (!targetDrawing) return null;
+    return {
+      drawingId: callout.targetDrawingId,
+      drawingName: targetDrawing.name,
+      label: callout.label,
+    };
+  }, [selectedShapeIds, shapes, drawings]);
 
   // Build menu items based on context
   const getMenuItems = useCallback((clickedOnShape: boolean, pastePosition?: Point): ContextMenuEntry[] => {
     const hasSelection = selectedShapeIds.length > 0;
     const hasClipboard = hasClipboardContent();
-    const canGroup = selectedShapeIds.length >= 2;
 
     // "Repeat [Tool]" item at the top when lastTool exists
     const repeatItem: ContextMenuEntry[] = lastTool ? [
@@ -128,6 +137,19 @@ export function useContextMenu() {
     if (hasSelection || clickedOnShape) {
       const items: ContextMenuEntry[] = [
         ...repeatItem,
+      ];
+
+      // "Open Section" for section-callout shapes
+      if (sectionCalloutInfo) {
+        items.push({
+          id: 'open-section',
+          label: `Open Section ${sectionCalloutInfo.label}`,
+          action: () => switchToDrawing(sectionCalloutInfo.drawingId),
+        });
+        items.push({ type: 'divider' });
+      }
+
+      items.push(
         {
           id: 'delete',
           label: 'Delete',
@@ -137,166 +159,12 @@ export function useContextMenu() {
         },
         { type: 'divider' },
         {
-          id: 'copy',
-          label: 'Copy',
-          shortcut: 'Ctrl+C',
-          action: copySelectedShapes,
-          disabled: !hasSelection,
-        },
-        {
-          id: 'cut',
-          label: 'Cut',
-          shortcut: 'Ctrl+X',
-          action: cutSelectedShapes,
-          disabled: !hasSelection,
-        },
-        {
-          id: 'paste',
-          label: 'Paste',
-          shortcut: 'Ctrl+V',
-          action: () => pasteShapes(pastePosition),
-          disabled: !hasClipboard,
-        },
-        { type: 'divider' },
-        {
-          id: 'move',
-          label: 'Move',
-          shortcut: 'MV',
-          action: () => setActiveTool('move'),
-          disabled: !hasSelection,
-        },
-        {
-          id: 'rotate',
-          label: 'Rotate',
-          shortcut: 'RO',
-          action: () => setActiveTool('rotate'),
-          disabled: !hasSelection,
-        },
-        {
-          id: 'scale',
-          label: 'Scale',
-          shortcut: 'RE',
-          action: () => setActiveTool('scale'),
-          disabled: !hasSelection,
-        },
-        {
-          id: 'mirror',
-          label: 'Mirror',
-          shortcut: 'MM',
-          action: () => setActiveTool('mirror'),
-          disabled: !hasSelection,
-        },
-        { type: 'divider' },
-        {
           id: 'select-all',
           label: 'Select All',
           shortcut: 'Ctrl+A',
           action: selectAll,
         },
-        { type: 'divider' },
-        {
-          id: 'group',
-          label: 'Group',
-          shortcut: 'Ctrl+G',
-          action: groupSelectedShapes,
-          disabled: !canGroup,
-        },
-        {
-          id: 'ungroup',
-          label: 'Ungroup',
-          shortcut: 'Ctrl+Shift+G',
-          action: ungroupSelectedShapes,
-          disabled: !hasGroupedShapes,
-        },
-        { type: 'divider' },
-        {
-          id: 'bring-to-front',
-          label: 'Bring to Front',
-          action: bringToFront,
-          disabled: !hasSelection,
-        },
-        {
-          id: 'bring-forward',
-          label: 'Bring Forward',
-          action: bringForward,
-          disabled: !hasSelection,
-        },
-        {
-          id: 'send-backward',
-          label: 'Send Backward',
-          action: sendBackward,
-          disabled: !hasSelection,
-        },
-        {
-          id: 'send-to-back',
-          label: 'Send to Back',
-          action: sendToBack,
-          disabled: !hasSelection,
-        },
-        { type: 'divider' },
-        {
-          id: 'hide',
-          label: 'Hide',
-          shortcut: 'H',
-          action: hideSelectedShapes,
-          disabled: !hasSelection,
-        },
-        {
-          id: 'show-all',
-          label: 'Show All',
-          shortcut: 'Shift+H',
-          action: showAllShapes,
-        },
-        {
-          id: 'isolate',
-          label: 'Isolate',
-          shortcut: 'I',
-          action: isolateSelectedShapes,
-          disabled: !hasSelection,
-        },
-        { type: 'divider' },
-        {
-          id: 'lock',
-          label: 'Lock',
-          shortcut: 'L',
-          action: lockSelectedShapes,
-          disabled: !hasSelection,
-        },
-        {
-          id: 'unlock',
-          label: 'Unlock',
-          shortcut: 'Shift+L',
-          action: unlockSelectedShapes,
-          disabled: !hasSelection,
-        },
-        { type: 'divider' },
-        {
-          id: 'cursor-to-selected',
-          label: 'Cursor to Selected',
-          shortcut: 'Shift+S',
-          action: setCursor2DToSelected,
-          disabled: !hasSelection,
-        },
-        {
-          id: 'selection-to-cursor',
-          label: 'Selection to Cursor',
-          action: snapSelectionToCursor2D,
-          disabled: !hasSelection,
-        },
-        {
-          id: 'cursor-to-origin',
-          label: 'Cursor to Origin',
-          shortcut: 'Shift+C',
-          action: resetCursor2D,
-        },
-        { type: 'divider' },
-        {
-          id: 'zoom-to-selection',
-          label: 'Zoom to Selection',
-          action: zoomToSelection,
-          disabled: !hasSelection,
-        },
-      ];
+      );
 
       return items;
     }
@@ -320,24 +188,6 @@ export function useContextMenu() {
       },
       { type: 'divider' },
       {
-        id: 'show-all',
-        label: 'Show All Hidden',
-        action: showAllShapes,
-      },
-      {
-        id: 'unlock-all',
-        label: 'Unlock All',
-        action: unlockAllShapes,
-      },
-      { type: 'divider' },
-      {
-        id: 'cursor-to-origin',
-        label: 'Cursor to Origin',
-        shortcut: 'Shift+C',
-        action: resetCursor2D,
-      },
-      { type: 'divider' },
-      {
         id: 'zoom-to-fit',
         label: 'Zoom to Fit',
         action: zoomToFit,
@@ -346,32 +196,14 @@ export function useContextMenu() {
   }, [
     selectedShapeIds,
     hasClipboardContent,
-    hasGroupedShapes,
     lastTool,
     deleteSelectedShapes,
-    copySelectedShapes,
-    cutSelectedShapes,
     pasteShapes,
     selectAll,
-    setActiveTool,
     repeatLastTool,
-    hideSelectedShapes,
-    showAllShapes,
-    isolateSelectedShapes,
-    lockSelectedShapes,
-    unlockSelectedShapes,
-    unlockAllShapes,
-    groupSelectedShapes,
-    ungroupSelectedShapes,
-    bringToFront,
-    bringForward,
-    sendBackward,
-    sendToBack,
-    zoomToSelection,
     zoomToFit,
-    resetCursor2D,
-    setCursor2DToSelected,
-    snapSelectionToCursor2D,
+    sectionCalloutInfo,
+    switchToDrawing,
   ]);
 
   return {

@@ -19,6 +19,17 @@ import type {
   SplineShape,
   TextShape,
   PointShape,
+  GridlineShape,
+  LevelShape,
+  SlabShape,
+  SectionCalloutShape,
+  SpaceShape,
+  PlateSystemShape,
+  WallShape,
+  BeamShape,
+  SpotElevationShape,
+  CPTShape,
+  FoundationZoneShape,
   ShapeType,
   Point,
   BoundingBox,
@@ -115,6 +126,69 @@ export function isTextShape(shape: Shape): shape is TextShape {
  */
 export function isPointShape(shape: Shape): shape is PointShape {
   return shape.type === 'point';
+}
+
+/**
+ * Check if a shape is a gridline
+ */
+export function isGridlineShape(shape: Shape): shape is GridlineShape {
+  return shape.type === 'gridline';
+}
+
+/**
+ * Check if a shape is a level
+ */
+export function isLevelShape(shape: Shape): shape is LevelShape {
+  return shape.type === 'level';
+}
+
+/**
+ * Check if a shape is a slab
+ */
+export function isSlabShape(shape: Shape): shape is SlabShape {
+  return shape.type === 'slab';
+}
+
+/**
+ * Check if a shape is a section callout
+ */
+export function isSectionCalloutShape(shape: Shape): shape is SectionCalloutShape {
+  return shape.type === 'section-callout';
+}
+
+/**
+ * Check if a shape is a space (IfcSpace)
+ */
+export function isSpaceShape(shape: Shape): shape is SpaceShape {
+  return shape.type === 'space';
+}
+
+/**
+ * Check if a shape is a plate system
+ */
+export function isPlateSystemShape(shape: Shape): shape is PlateSystemShape {
+  return shape.type === 'plate-system';
+}
+
+/**
+ * Check if a shape is a spot elevation
+ */
+export function isSpotElevationShape(shape: Shape): shape is SpotElevationShape {
+  return shape.type === 'spot-elevation';
+}
+
+/**
+ * Check if a shape is a CPT (Cone Penetration Test)
+ */
+export function isCPTShape(shape: Shape): shape is CPTShape {
+  return shape.type === 'cpt';
+}
+
+/**
+ * Check if a shape is a foundation zone
+ */
+export function isFoundationZoneShape(shape: Shape): shape is FoundationZoneShape {
+  return shape.type === 'foundation-zone';
 }
 
 /**
@@ -404,7 +478,7 @@ export function isSnapType(value: unknown): value is SnapType {
 const TOOL_TYPES: ToolType[] = [
   'select', 'pan', 'line', 'rectangle', 'circle', 'arc',
   'polyline', 'ellipse', 'spline', 'text', 'leader', 'dimension',
-  'hatch', 'filled-region', 'insulation', 'beam', 'image',
+  'hatch', 'filled-region', 'insulation', 'beam', 'gridline', 'level', 'pile', 'cpt', 'wall', 'slab', 'section-callout', 'space', 'plate-system', 'spot-elevation', 'image',
   'move', 'copy', 'rotate', 'scale', 'mirror', 'trim', 'extend',
   'fillet', 'chamfer', 'offset', 'array', 'detail-component',
   'sheet-text', 'sheet-leader', 'sheet-dimension', 'sheet-callout', 'sheet-revision-cloud'
@@ -421,7 +495,7 @@ export function isToolType(value: unknown): value is ToolType {
  * Check if a tool is a drawing tool
  */
 export function isDrawingTool(tool: ToolType): boolean {
-  return ['line', 'rectangle', 'circle', 'arc', 'polyline', 'ellipse', 'spline', 'text', 'leader', 'dimension', 'hatch', 'beam', 'image'].includes(tool);
+  return ['line', 'rectangle', 'circle', 'arc', 'polyline', 'ellipse', 'spline', 'text', 'leader', 'dimension', 'hatch', 'beam', 'image', 'gridline', 'level', 'pile', 'cpt', 'wall', 'slab', 'section-callout', 'space', 'plate-system', 'spot-elevation'].includes(tool);
 }
 
 /**
@@ -453,7 +527,7 @@ export function isNavigationTool(tool: ToolType): boolean {
  * Valid shape types
  */
 const SHAPE_TYPES: ShapeType[] = [
-  'line', 'rectangle', 'circle', 'arc', 'polyline', 'ellipse', 'spline', 'text', 'point'
+  'line', 'rectangle', 'circle', 'arc', 'polyline', 'ellipse', 'spline', 'text', 'point', 'section-callout'
 ];
 
 /**
@@ -568,6 +642,20 @@ export function isLayerArray(value: unknown): value is Layer[] {
 // ============================================================================
 // Utility Type Guards
 // ============================================================================
+
+/**
+ * Check if a wall shape has an arc (nonzero bulge)
+ */
+export function isArcWall(shape: Shape): boolean {
+  return shape.type === 'wall' && !!(shape as WallShape).bulge && Math.abs((shape as WallShape).bulge!) > 0.0001;
+}
+
+/**
+ * Check if a beam shape has an arc (nonzero bulge)
+ */
+export function isArcBeam(shape: Shape): boolean {
+  return shape.type === 'beam' && !!(shape as BeamShape).bulge && Math.abs((shape as BeamShape).bulge!) > 0.0001;
+}
 
 /**
  * Check if a value is defined (not null or undefined)

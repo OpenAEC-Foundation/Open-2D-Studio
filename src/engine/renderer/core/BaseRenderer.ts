@@ -56,6 +56,9 @@ export class BaseRenderer {
    */
   applyViewportTransform(viewport: Viewport): void {
     this.ctx.translate(viewport.offsetX, viewport.offsetY);
+    if (viewport.rotation) {
+      this.ctx.rotate(viewport.rotation);
+    }
     this.ctx.scale(viewport.zoom, viewport.zoom);
   }
 

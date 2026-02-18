@@ -5,8 +5,8 @@
 import type { Shape, Viewport, SnapPoint, DrawingBoundary } from '../types';
 import type { DrawingPreview, SelectionBox, TrackingLine, Point } from '../types';
 import type { ParametricShape } from '../../../types/parametric';
-import type { BlockDefinition } from '../../../types/geometry';
-import type { CustomHatchPattern } from '../../../types/hatch';
+import type { CustomHatchPattern, MaterialHatchSettings } from '../../../types/hatch';
+import type { WallType, ImageShape } from '../../../types/geometry';
 import { BaseRenderer } from '../core/BaseRenderer';
 import { ShapeRenderer } from '../core/ShapeRenderer';
 import { ParametricRenderer } from '../core/ParametricRenderer';
@@ -18,6 +18,7 @@ import { CursorLayer } from '../layers/CursorLayer';
 import { HandleRenderer } from '../ui/HandleRenderer';
 import { COLORS } from '../types';
 import { generateProfileGeometry } from '../../../services/parametric/geometryGenerators';
+import { isShapeInHiddenCategory } from '../../../utils/ifcCategoryUtils';
 
 export interface DrawingRenderOptions {
   shapes: Shape[];
@@ -27,6 +28,7 @@ export interface DrawingRenderOptions {
   viewport: Viewport;
   drawingScale?: number;
   gridVisible: boolean;
+  axesVisible?: boolean;
   gridSize: number;
   drawingPreview?: DrawingPreview;
   currentStyle?: { strokeColor: string; strokeWidth: number };
@@ -59,10 +61,16 @@ export interface DrawingRenderOptions {
   cursor2DVisible?: boolean;
   /** Whether to display actual line weights (false = all lines 1px thin) */
   showLineweight?: boolean;
-  /** Block definitions for rendering block instances */
-  blockDefinitions?: BlockDefinition[];
-  /** Whether to show rotation gizmo handles on selected shapes */
-  showRotationGizmo?: boolean;
+  /** Wall types for material-based hatch lookup */
+  wallTypes?: WallType[];
+  /** Material hatch settings from Drawing Standards */
+  materialHatchSettings?: MaterialHatchSettings;
+  /** Gridline extension distance in mm */
+  gridlineExtension?: number;
+  /** Sea level datum: peil=0 elevation relative to NAP in meters */
+  seaLevelDatum?: number;
+  /** Hidden IFC categories — shapes in these categories are not rendered */
+  hiddenIfcCategories?: string[];
 }
 
 // Legacy alias
@@ -116,6 +124,7 @@ export class DrawingRenderer extends BaseRenderer {
       viewport,
       drawingScale,
       gridVisible,
+      axesVisible = true,
       gridSize,
       drawingPreview,
       currentStyle,
@@ -137,9 +146,6 @@ export class DrawingRenderer extends BaseRenderer {
       this.shapeRenderer.setDrawingScale(drawingScale);
     }
 
-    // Set block definitions for block instance rendering
-    this.shapeRenderer.setBlockDefinitions(options.blockDefinitions ?? []);
-
     const ctx = this.ctx;
 
     // Set custom patterns for hatch rendering
@@ -147,14 +153,35 @@ export class DrawingRenderer extends BaseRenderer {
       this.shapeRenderer.setCustomPatterns(customPatterns.userPatterns, customPatterns.projectPatterns);
     }
 
+    // Set wall types for material-based hatch lookup
+    if (options.wallTypes) {
+      this.shapeRenderer.setWallTypes(options.wallTypes);
+    }
+
+    // Set material hatch settings from Drawing Standards
+    if (options.materialHatchSettings) {
+      this.shapeRenderer.setMaterialHatchSettings(options.materialHatchSettings);
+    }
+
+    // Set gridline extension distance
+    if (options.gridlineExtension !== undefined) {
+      this.shapeRenderer.setGridlineExtension(options.gridlineExtension);
+    }
+
+    // Set sea level datum for NAP elevation display on levels
+    if (options.seaLevelDatum !== undefined) {
+      this.shapeRenderer.setSeaLevelDatum(options.seaLevelDatum);
+    }
+
+    // Set shapes lookup for linked label text resolution
+    this.shapeRenderer.setShapesLookup(shapes);
+
     // Set live preview pattern
     this.shapeRenderer.setPreviewPattern(options.previewPatternId || null, selectedShapeIds);
 
     // Set lineweight display mode and current zoom
     this.shapeRenderer.setShowLineweight(options.showLineweight !== false);
     this.shapeRenderer.setZoom(viewport.zoom);
-    // Set rotation gizmo display
-    this.shapeRenderer.setShowRotationGizmo(options.showRotationGizmo !== false);
     this.parametricRenderer.setShowLineweight(options.showLineweight !== false);
 
     // Clear canvas
@@ -169,9 +196,12 @@ export class DrawingRenderer extends BaseRenderer {
     // Draw grid and axes
     if (gridVisible) {
       this.gridLayer.drawGrid(viewport, gridSize, whiteBackground);
-    } else {
+    } else if (axesVisible) {
       this.gridLayer.drawAxes(viewport);
     }
+
+    // Always draw origin marker (small cross at 0,0)
+    this.gridLayer.drawOriginMarker(viewport);
 
     // Draw drawing boundary (region)
     if (drawingBoundary) {
@@ -186,9 +216,35 @@ export class DrawingRenderer extends BaseRenderer {
     // Build Set for O(1) selection lookups (avoids O(n²) with .includes() in loop)
     const selectedSet = new Set(selectedShapeIds);
 
-    // Draw shapes
+    // Pass selected IDs to shape renderer for associative dimension highlighting
+    this.shapeRenderer.setSelectedShapeIds(selectedSet);
+
+    // IFC category filter
+    const hiddenCats = options.hiddenIfcCategories || [];
+
+    // Draw shapes in three passes:
+    // 1. Underlay images (background reference images)
+    // 2. Non-text shapes (skip underlays)
+    // 3. Text shapes (labels on top)
     for (const shape of shapes) {
       if (!shape.visible) continue;
+      if (shape.type !== 'image' || !(shape as ImageShape).isUnderlay) continue;
+      if (isShapeInHiddenCategory(shape, hiddenCats)) continue;
+      const isSelected = selectedSet.has(shape.id);
+      const isHovered = hoveredShapeId === shape.id;
+      this.shapeRenderer.drawShape(shape, isSelected, isHovered, whiteBackground, hideSelectionHandles);
+    }
+    for (const shape of shapes) {
+      if (!shape.visible || shape.type === 'text') continue;
+      if (shape.type === 'image' && (shape as ImageShape).isUnderlay) continue;
+      if (isShapeInHiddenCategory(shape, hiddenCats)) continue;
+      const isSelected = selectedSet.has(shape.id);
+      const isHovered = hoveredShapeId === shape.id;
+      this.shapeRenderer.drawShape(shape, isSelected, isHovered, whiteBackground, hideSelectionHandles);
+    }
+    for (const shape of shapes) {
+      if (!shape.visible || shape.type !== 'text') continue;
+      if (isShapeInHiddenCategory(shape, hiddenCats)) continue;
       const isSelected = selectedSet.has(shape.id);
       const isHovered = hoveredShapeId === shape.id;
       this.shapeRenderer.drawShape(shape, isSelected, isHovered, whiteBackground, hideSelectionHandles);

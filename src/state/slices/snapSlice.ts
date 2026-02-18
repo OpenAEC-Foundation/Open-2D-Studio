@@ -48,6 +48,19 @@ export interface SnapState {
   whiteBackground: boolean;
   boundaryVisible: boolean;
   uiTheme: UITheme;
+
+  // Rotation gizmo
+  showRotationGizmo: boolean;
+
+  // Axes visibility
+  axesVisible: boolean;
+
+  // 3D view settings
+  show3DView: boolean;
+  viewMode3D: 'wireframe' | 'shaded' | 'hidden-line';
+
+  // IFC category visibility filter
+  hiddenIfcCategories: string[];
 }
 
 // ============================================================================
@@ -73,6 +86,12 @@ export interface SnapActions {
   toggleWhiteBackground: () => void;
   toggleBoundaryVisible: () => void;
   setUITheme: (theme: UITheme) => void;
+  toggleRotationGizmo: () => void;
+  toggleAxesVisible: () => void;
+  setShow3DView: (show: boolean) => void;
+  setViewMode3D: (mode: 'wireframe' | 'shaded' | 'hidden-line') => void;
+  toggleIfcCategoryVisibility: (category: string) => void;
+  setHiddenIfcCategories: (categories: string[]) => void;
 }
 
 export type SnapSlice = SnapState & SnapActions;
@@ -96,9 +115,14 @@ export const initialSnapState: SnapState = {
   currentTrackingLines: [],
   trackingPoint: null,
   directDistanceAngle: null,
-  whiteBackground: false,
-  boundaryVisible: true,
+  whiteBackground: true,
+  boundaryVisible: false,
   uiTheme: 'dark',
+  showRotationGizmo: true,
+  axesVisible: false,
+  show3DView: false,
+  viewMode3D: 'shaded',
+  hiddenIfcCategories: [],
 };
 
 // ============================================================================
@@ -208,5 +232,35 @@ export const createSnapSlice = (
       state.uiTheme = theme;
       // Apply theme to document root for CSS variables
       document.documentElement.setAttribute('data-theme', theme);
+    }),
+
+  toggleRotationGizmo: () =>
+    set((state) => {
+      state.showRotationGizmo = !state.showRotationGizmo;
+    }),
+  toggleAxesVisible: () =>
+    set((state) => {
+      state.axesVisible = !state.axesVisible;
+    }),
+  setShow3DView: (show) =>
+    set((state) => {
+      state.show3DView = show;
+    }),
+  setViewMode3D: (mode) =>
+    set((state) => {
+      state.viewMode3D = mode;
+    }),
+  toggleIfcCategoryVisibility: (category) =>
+    set((state) => {
+      const index = state.hiddenIfcCategories.indexOf(category);
+      if (index >= 0) {
+        state.hiddenIfcCategories.splice(index, 1);
+      } else {
+        state.hiddenIfcCategories.push(category);
+      }
+    }),
+  setHiddenIfcCategories: (categories) =>
+    set((state) => {
+      state.hiddenIfcCategories = categories;
     }),
 });

@@ -6,6 +6,10 @@ import { useCallback, useRef, useMemo } from 'react';
 import { useAppStore, type SelectionBox } from '../../state/appStore';
 import type { Point, Shape, TextShape, BlockDefinition } from '../../types/geometry';
 import { getShapeBounds, getTextBounds, screenToWorld } from '../../engine/geometry/GeometryUtils';
+import type { SelectedGrip } from '../../state/slices/selectionSlice';
+
+/** Shape types that have start/end endpoints which can be grip-selected. */
+const LINE_LIKE_TYPES = ['line', 'beam', 'wall', 'gridline', 'level', 'section-callout'];
 
 /**
  * Test if a line segment intersects an axis-aligned rectangle.
@@ -154,6 +158,21 @@ function getShapeEdges(shape: Shape, drawingScale?: number): Edge[] {
       return edges;
     }
 
+    case 'gridline': {
+      // Only use the core start-to-end segment for selection testing.
+      // Gridlines are rendered with long extensions beyond start/end, but
+      // cross-selection should only match the main segment to avoid
+      // selecting gridlines that are far from the selection box.
+      const gl = shape as import('../../types/geometry').GridlineShape;
+      return [{ x1: gl.start.x, y1: gl.start.y, x2: gl.end.x, y2: gl.end.y }];
+    }
+
+    case 'level': {
+      // Same as gridline: only the core start-to-end line, not visual extensions.
+      const lv = shape as import('../../types/geometry').LevelShape;
+      return [{ x1: lv.start.x, y1: lv.start.y, x2: lv.end.x, y2: lv.end.y }];
+    }
+
     case 'text': {
       // Get text bounds and rotation
       const textShape = shape as TextShape;
@@ -292,6 +311,7 @@ export function useBoxSelection() {
     activeTool,
     selectShapes,
     setSelectionBox,
+    setSelectedGrip,
     editorMode,
     activeDrawingId,
     drawings,
@@ -466,6 +486,40 @@ export function useBoxSelection() {
 
         const selectedIds = getShapesInSelectionBox(box);
 
+        // --- Endpoint grip detection ---
+        // After determining which shapes are selected, check if only one endpoint
+        // of a line-like shape (beam/wall/line/gridline/level) is inside the box.
+        // If so, activate grip selection on that endpoint for stretch editing.
+        const startWorld = screenToWorld(box.start.x, box.start.y, viewport);
+        const endWorld = screenToWorld(box.end.x, box.end.y, viewport);
+        const boxMinX = Math.min(startWorld.x, endWorld.x);
+        const boxMaxX = Math.max(startWorld.x, endWorld.x);
+        const boxMinY = Math.min(startWorld.y, endWorld.y);
+        const boxMaxY = Math.max(startWorld.y, endWorld.y);
+
+        const isInsideBox = (p: Point) =>
+          p.x >= boxMinX && p.x <= boxMaxX && p.y >= boxMinY && p.y <= boxMaxY;
+
+        let gripToSelect: SelectedGrip | null = null;
+
+        // Only detect endpoint grips for crossing selection (right-to-left drag)
+        // where exactly one line-like shape is involved and only one endpoint is inside
+        if (mode === 'crossing' && selectedIds.length === 1) {
+          const selectedShape = shapes.find(s => s.id === selectedIds[0]);
+          if (selectedShape && LINE_LIKE_TYPES.includes(selectedShape.type)) {
+            const s = selectedShape as any;
+            const startInside = isInsideBox(s.start);
+            const endInside = isInsideBox(s.end);
+
+            if (startInside && !endInside) {
+              gripToSelect = { shapeId: selectedShape.id, gripIndex: 0 };
+            } else if (endInside && !startInside) {
+              gripToSelect = { shapeId: selectedShape.id, gripIndex: 1 };
+            }
+            // If both endpoints are inside, the whole shape is selected — no grip selection
+          }
+        }
+
         if (addToSelection) {
           // Toggle selection (Ctrl or Shift held)
           // - Objects in box that are already selected → remove them
@@ -474,9 +528,13 @@ export function useBoxSelection() {
           const newSelection = currentSelection.filter(id => !selectedIds.includes(id));
           const toAdd = selectedIds.filter(id => !currentSelection.includes(id));
           selectShapes([...newSelection, ...toAdd]);
+          // Clear grip selection when using additive selection
+          setSelectedGrip(null);
         } else {
           // Replace selection
           selectShapes(selectedIds);
+          // Set grip selection if endpoint was detected
+          setSelectedGrip(gripToSelect);
         }
 
         selectionState.current.justFinishedBoxSelection = true;
@@ -489,7 +547,7 @@ export function useBoxSelection() {
 
       return wasBoxSelection;
     },
-    [getShapesInSelectionBox, selectShapes, setSelectionBox]
+    [getShapesInSelectionBox, selectShapes, setSelectionBox, setSelectedGrip, viewport, shapes]
   );
 
   /**

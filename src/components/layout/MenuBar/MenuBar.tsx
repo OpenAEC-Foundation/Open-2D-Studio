@@ -125,9 +125,13 @@ function LinuxControls({
 function WindowControls() {
   const [isMaximized, setIsMaximized] = useState(false);
   const [platform] = useState<Platform>(getPlatform);
-  const appWindow = getCurrentWindow();
+
+  // Tauri window API is only available inside a Tauri app, not in the browser
+  const isTauri = !!(window as any).__TAURI_INTERNALS__;
+  const appWindow = isTauri ? getCurrentWindow() : null;
 
   useEffect(() => {
+    if (!appWindow) return;
     // Check initial maximized state
     appWindow.isMaximized().then(setIsMaximized);
 
@@ -140,6 +144,9 @@ function WindowControls() {
       unlisten.then((fn) => fn());
     };
   }, [appWindow]);
+
+  // In browser mode, don't render window controls
+  if (!appWindow) return null;
 
   const handleMinimize = () => appWindow.minimize();
   const handleMaximize = () => appWindow.toggleMaximize();
@@ -182,7 +189,7 @@ export const MenuBar = memo(function MenuBar({ onSendFeedback }: MenuBarProps) {
     <div className="h-8 bg-cad-surface border-b border-cad-border flex items-center select-none">
       {/* Quick Access Toolbar */}
       <div className="flex items-center gap-0.5 px-2">
-        <img src="/logo.svg" alt="Open 2D Studio" className="w-5 h-5" draggable={false} />
+        <img src="/logo.svg" alt="Open nD Studio" className="w-5 h-5" draggable={false} />
         <div className="w-px h-4 bg-cad-border mx-0.5" />
         {/* Undo / Redo — most used, so placed first */}
         <button
@@ -262,7 +269,7 @@ export const MenuBar = memo(function MenuBar({ onSendFeedback }: MenuBarProps) {
         onDoubleClick={() => getCurrentWindow().toggleMaximize()}
       >
         <span className="text-cad-text-dim text-sm font-medium pointer-events-none">
-          {isModified ? '* ' : ''}{projectName} - Open 2D Studio
+          {isModified ? '* ' : ''}{projectName} - Open nD Studio
         </span>
       </div>
 
