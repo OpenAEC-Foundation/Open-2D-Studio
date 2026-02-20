@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { useAppStore } from '../../state/appStore';
-import type { DrawingType } from '../../types/geometry';
+import type { DrawingType, PlanSubtype } from '../../types/geometry';
+import { PLAN_SUBTYPE_CONFIG } from '../../types/geometry';
 
 // Drawing type display configuration
 const DRAWING_TYPE_CONFIG: Record<DrawingType, { label: string; color: string }> = {
@@ -17,6 +18,7 @@ export function DrawingPropertiesPanel({ showHeader = true }: { showHeader?: boo
     renameDrawing,
     updateDrawingType,
     updateDrawingStorey,
+    updateDrawingPlanSubtype,
     projectStructure,
     boundaryEditState,
     selectBoundary,
@@ -48,6 +50,11 @@ export function DrawingPropertiesPanel({ showHeader = true }: { showHeader?: boo
     if (!activeDrawingId) return;
     updateDrawingStorey(activeDrawingId, storeyId || undefined);
   }, [activeDrawingId, updateDrawingStorey]);
+
+  const handlePlanSubtypeChange = useCallback((subtype: string) => {
+    if (!activeDrawingId) return;
+    updateDrawingPlanSubtype(activeDrawingId, (subtype || undefined) as PlanSubtype | undefined);
+  }, [activeDrawingId, updateDrawingPlanSubtype]);
 
   const handleBoundaryChange = useCallback((
     field: 'x' | 'y' | 'width' | 'height',
@@ -111,30 +118,46 @@ export function DrawingPropertiesPanel({ showHeader = true }: { showHeader?: boo
             </select>
           </div>
 
-          {/* Storey assignment (for plan drawings) */}
+          {/* Plan subtype and storey assignment (for plan drawings) */}
           {(activeDrawing.drawingType || 'standalone') === 'plan' && (
-            <div>
-              <label className="block text-xs text-cad-text-dim mb-1">Storey:</label>
-              {allStoreys.length > 0 ? (
+            <>
+              <div>
+                <label className="block text-xs text-cad-text-dim mb-1">Plan Type:</label>
                 <select
-                  value={activeDrawing.storeyId || ''}
-                  onChange={(e) => handleStoreyChange(e.target.value)}
+                  value={activeDrawing.planSubtype || ''}
+                  onChange={(e) => handlePlanSubtypeChange(e.target.value)}
                   className="w-full px-2 py-1 text-xs bg-cad-input border border-cad-border text-cad-text"
-                  title="Linked building storey"
+                  title="Plan subtype"
                 >
-                  <option value="">-- None --</option>
-                  {allStoreys.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.buildingName} - {s.name} ({s.elevation}mm)
-                    </option>
+                  <option value="">General</option>
+                  {(Object.entries(PLAN_SUBTYPE_CONFIG) as [PlanSubtype, typeof PLAN_SUBTYPE_CONFIG[PlanSubtype]][]).map(([key, cfg]) => (
+                    <option key={key} value={key}>{cfg.label}</option>
                   ))}
                 </select>
-              ) : (
-                <span className="text-xs text-cad-text-dim italic">
-                  No storeys defined. Add storeys in Project Structure.
-                </span>
-              )}
-            </div>
+              </div>
+              <div>
+                <label className="block text-xs text-cad-text-dim mb-1">Storey:</label>
+                {allStoreys.length > 0 ? (
+                  <select
+                    value={activeDrawing.storeyId || ''}
+                    onChange={(e) => handleStoreyChange(e.target.value)}
+                    className="w-full px-2 py-1 text-xs bg-cad-input border border-cad-border text-cad-text"
+                    title="Linked building storey"
+                  >
+                    <option value="">-- None --</option>
+                    {allStoreys.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.buildingName} - {s.name} ({s.elevation}mm)
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="text-xs text-cad-text-dim italic">
+                    No storeys defined. Add storeys in Project Structure.
+                  </span>
+                )}
+              </div>
+            </>
           )}
         </div>
       </div>

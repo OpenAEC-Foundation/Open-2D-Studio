@@ -25,6 +25,8 @@ export interface SelectionState {
   selectionFilter: string | null;  // Active category filter (e.g. 'beam', 'wall'), null = show all
   /** When set, a specific grip point was box-selected (not the whole shape). */
   selectedGrip: SelectedGrip | null;
+  /** Shapes highlighted by Tab pre-selection (connected chain). Click to confirm. */
+  preSelectedShapeIds: string[];
 }
 
 // ============================================================================
@@ -40,6 +42,7 @@ export interface SelectionActions {
   setHoveredShapeId: (id: string | null) => void;
   setSelectionFilter: (filter: string | null) => void;
   setSelectedGrip: (grip: SelectedGrip | null) => void;
+  setPreSelectedShapes: (ids: string[]) => void;
 }
 
 export type SelectionSlice = SelectionState & SelectionActions;
@@ -54,6 +57,7 @@ export const initialSelectionState: SelectionState = {
   hoveredShapeId: null,
   selectionFilter: null,
   selectedGrip: null,
+  preSelectedShapeIds: [],
 };
 
 // ============================================================================
@@ -140,5 +144,10 @@ export const createSelectionSlice = (
   setSelectedGrip: (grip) =>
     set((state) => {
       state.selectedGrip = grip;
+    }),
+
+  setPreSelectedShapes: (ids) =>
+    set((state) => {
+      state.preSelectedShapeIds = ids;
     }),
 });

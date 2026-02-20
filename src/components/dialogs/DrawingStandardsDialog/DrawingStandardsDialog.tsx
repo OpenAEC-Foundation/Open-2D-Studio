@@ -9,8 +9,8 @@
 import { Fragment, useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { X, Save, Upload, Trash2, Pencil, ChevronDown, ChevronRight, Plus, RotateCcw, Eye, EyeOff } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
-import type { GridlineShape, Point } from '../../../types/geometry';
-import { MATERIAL_CATEGORIES } from '../../../types/geometry';
+import type { GridlineShape, Point, PlanSubtype } from '../../../types/geometry';
+import { MATERIAL_CATEGORIES, PLAN_SUBTYPE_CONFIG } from '../../../types/geometry';
 import type { DimensionShape } from '../../../types/dimension';
 import type { MaterialHatchTemplate, MaterialHatchSetting } from '../../../types/hatch';
 import { BUILTIN_PATTERNS } from '../../../types/hatch';
@@ -99,11 +99,21 @@ export function DrawingStandardsDialog({ isOpen, onClose }: DrawingStandardsDial
   const setGridDimensionLineOffset = useAppStore(s => s.setGridDimensionLineOffset);
   const sectionGridlineDimensioning = useAppStore(s => s.sectionGridlineDimensioning);
   const setSectionGridlineDimensioning = useAppStore(s => s.setSectionGridlineDimensioning);
+  const pilePlanAutoNumbering = useAppStore(s => s.pilePlanAutoNumbering);
+  const setPilePlanAutoNumbering = useAppStore(s => s.setPilePlanAutoNumbering);
+  const pilePlanAutoDimensioning = useAppStore(s => s.pilePlanAutoDimensioning);
+  const setPilePlanAutoDimensioning = useAppStore(s => s.setPilePlanAutoDimensioning);
+  const pilePlanAutoDepthLabel = useAppStore(s => s.pilePlanAutoDepthLabel);
+  const setPilePlanAutoDepthLabel = useAppStore(s => s.setPilePlanAutoDepthLabel);
   const materialHatchSettings = useAppStore(s => s.materialHatchSettings);
   const updateMaterialHatchSetting = useAppStore(s => s.updateMaterialHatchSetting);
   const setMaterialHatchSettings = useAppStore(s => s.setMaterialHatchSettings);
   const wallTypes = useAppStore(s => s.wallTypes);
   const slabTypes = useAppStore(s => s.slabTypes);
+
+  // Plan subtype settings
+  const planSubtypeSettings = useAppStore(s => s.planSubtypeSettings);
+  const updatePlanSubtypeSettings = useAppStore(s => s.updatePlanSubtypeSettings);
 
   // IFC category visibility
   const shapes = useAppStore(s => s.shapes);
@@ -154,6 +164,9 @@ export function DrawingStandardsDialog({ isOpen, onClose }: DrawingStandardsDial
   const prevGridlineCountRef = useRef(0);
   const [templates, setTemplates] = useState<MaterialHatchTemplate[]>(() => loadTemplates());
   const [templateName, setTemplateName] = useState('');
+
+  // Active plan subtype tab (null = no subtype selected)
+  const [activeSubtype, setActiveSubtype] = useState<PlanSubtype | null>(null);
 
   // Collapsed state for material category groups (all expanded by default)
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
@@ -1068,6 +1081,238 @@ export function DrawingStandardsDialog({ isOpen, onClose }: DrawingStandardsDial
                 </tbody>
               </table>
             </div>
+          </div>
+
+          <hr className="border-cad-border" />
+
+          {/* ============================================================ */}
+          {/* Plan Subtype Settings */}
+          {/* ============================================================ */}
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold text-cad-text uppercase tracking-wide">Plan Subtype Settings</h3>
+            <p className="text-[10px] text-cad-text-dim">
+              Display options per plan subtype. These settings apply when a drawing is assigned a specific plan subtype.
+            </p>
+
+            {/* Subtype selector tabs */}
+            <div className="flex gap-1">
+              {(['pile-plan', 'structural-plan', 'floor-plan'] as PlanSubtype[]).map((subtype) => {
+                const config = PLAN_SUBTYPE_CONFIG[subtype];
+                const isActive = activeSubtype === subtype;
+                return (
+                  <button
+                    key={subtype}
+                    onClick={() => setActiveSubtype(isActive ? null : subtype)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-t border transition-colors ${
+                      isActive
+                        ? `border-b-0 ${config.color} border-cad-accent/50 font-semibold`
+                        : 'border-cad-border/50 text-cad-text-dim hover:text-cad-text hover:bg-cad-hover/50 opacity-60 hover:opacity-100'
+                    }`}
+                  >
+                    <span className={`text-[9px] font-medium px-1 rounded ${config.color}`}>
+                      {config.abbr}
+                    </span>
+                    {config.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Subtype settings panels */}
+            {activeSubtype === null && (
+              <div className="border border-cad-border rounded p-4 text-center">
+                <p className="text-xs text-cad-text-dim">Select a plan subtype to configure its display settings.</p>
+              </div>
+            )}
+
+            {/* Pile Plan */}
+            {activeSubtype === 'pile-plan' && (
+              <div className="border border-cad-border rounded p-2 space-y-1.5">
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={pilePlanAutoNumbering}
+                    onChange={(e) => setPilePlanAutoNumbering(e.target.checked)}
+                  />
+                  Auto numbering
+                </label>
+                <p className="text-[10px] text-cad-text-dim ml-5">
+                  Automatically number and label piles sequentially when placed on a pile plan drawing.
+                </p>
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={pilePlanAutoDimensioning}
+                    onChange={(e) => setPilePlanAutoDimensioning(e.target.checked)}
+                  />
+                  Auto dimensioning
+                </label>
+                <p className="text-[10px] text-cad-text-dim ml-5">
+                  Automatically create dimension lines at pile positions relative to gridlines.
+                </p>
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={pilePlanAutoDepthLabel}
+                    onChange={(e) => setPilePlanAutoDepthLabel(e.target.checked)}
+                  />
+                  Auto pile depth label
+                </label>
+                <p className="text-[10px] text-cad-text-dim ml-5">
+                  Automatically show pile depth labels next to each pile symbol.
+                </p>
+
+                <hr className="border-cad-border/50 my-1" />
+
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={planSubtypeSettings.pilePlan.showPileTable}
+                    onChange={(e) => updatePlanSubtypeSettings({
+                      pilePlan: { ...planSubtypeSettings.pilePlan, showPileTable: e.target.checked },
+                    })}
+                  />
+                  Show pile table
+                </label>
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={planSubtypeSettings.pilePlan.showPileGridReferences}
+                    onChange={(e) => updatePlanSubtypeSettings({
+                      pilePlan: { ...planSubtypeSettings.pilePlan, showPileGridReferences: e.target.checked },
+                    })}
+                  />
+                  Show pile grid references
+                </label>
+                <div className="flex items-center gap-3">
+                  <label className="text-xs text-cad-text-secondary w-32">Pile label font size</label>
+                  <NumericInput
+                    value={planSubtypeSettings.pilePlan.pileLabelFontSize}
+                    onCommit={(v) => updatePlanSubtypeSettings({
+                      pilePlan: { ...planSubtypeSettings.pilePlan, pileLabelFontSize: v },
+                    })}
+                    min={4}
+                    className="flex-1 h-6 px-1 text-xs bg-cad-bg border border-cad-border text-cad-text rounded"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Structural Plan */}
+            {activeSubtype === 'structural-plan' && (
+              <div className="border border-cad-border rounded p-2 space-y-1.5">
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={planSubtypeSettings.structuralPlan.showBeamCenterlines}
+                    onChange={(e) => updatePlanSubtypeSettings({
+                      structuralPlan: { ...planSubtypeSettings.structuralPlan, showBeamCenterlines: e.target.checked },
+                    })}
+                  />
+                  Show beam centerlines
+                </label>
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={planSubtypeSettings.structuralPlan.showColumnGridMarks}
+                    onChange={(e) => updatePlanSubtypeSettings({
+                      structuralPlan: { ...planSubtypeSettings.structuralPlan, showColumnGridMarks: e.target.checked },
+                    })}
+                  />
+                  Show column grid marks
+                </label>
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={planSubtypeSettings.structuralPlan.showSlabEdges}
+                    onChange={(e) => updatePlanSubtypeSettings({
+                      structuralPlan: { ...planSubtypeSettings.structuralPlan, showSlabEdges: e.target.checked },
+                    })}
+                  />
+                  Show slab edges
+                </label>
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={planSubtypeSettings.structuralPlan.showLoadArrows}
+                    onChange={(e) => updatePlanSubtypeSettings({
+                      structuralPlan: { ...planSubtypeSettings.structuralPlan, showLoadArrows: e.target.checked },
+                    })}
+                  />
+                  Show load arrows
+                </label>
+                <div className="flex items-center gap-3">
+                  <label className="text-xs text-cad-text-secondary w-32">Beam label style</label>
+                  <select
+                    value={planSubtypeSettings.structuralPlan.beamLabelStyle}
+                    onChange={(e) => updatePlanSubtypeSettings({
+                      structuralPlan: { ...planSubtypeSettings.structuralPlan, beamLabelStyle: e.target.value as 'profile-only' | 'profile+material' | 'full' },
+                    })}
+                    className="flex-1 h-6 px-1 text-xs bg-cad-bg border border-cad-border text-cad-text rounded"
+                  >
+                    <option value="profile-only">Profile only</option>
+                    <option value="profile+material">Profile + Material</option>
+                    <option value="full">Full</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {/* Floor Plan */}
+            {activeSubtype === 'floor-plan' && (
+              <div className="border border-cad-border rounded p-2 space-y-1.5">
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={planSubtypeSettings.floorPlan.showRoomLabels}
+                    onChange={(e) => updatePlanSubtypeSettings({
+                      floorPlan: { ...planSubtypeSettings.floorPlan, showRoomLabels: e.target.checked },
+                    })}
+                  />
+                  Show room labels
+                </label>
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={planSubtypeSettings.floorPlan.showDoorSwingArcs}
+                    onChange={(e) => updatePlanSubtypeSettings({
+                      floorPlan: { ...planSubtypeSettings.floorPlan, showDoorSwingArcs: e.target.checked },
+                    })}
+                  />
+                  Show door swing arcs
+                </label>
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={planSubtypeSettings.floorPlan.showWallDimensions}
+                    onChange={(e) => updatePlanSubtypeSettings({
+                      floorPlan: { ...planSubtypeSettings.floorPlan, showWallDimensions: e.target.checked },
+                    })}
+                  />
+                  Show wall dimensions
+                </label>
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={planSubtypeSettings.floorPlan.showFurniture}
+                    onChange={(e) => updatePlanSubtypeSettings({
+                      floorPlan: { ...planSubtypeSettings.floorPlan, showFurniture: e.target.checked },
+                    })}
+                  />
+                  Show furniture
+                </label>
+                <label className="flex items-center gap-2 text-xs text-cad-text-secondary">
+                  <input
+                    type="checkbox"
+                    checked={planSubtypeSettings.floorPlan.showAreaLabels}
+                    onChange={(e) => updatePlanSubtypeSettings({
+                      floorPlan: { ...planSubtypeSettings.floorPlan, showAreaLabels: e.target.checked },
+                    })}
+                  />
+                  Show area labels
+                </label>
+              </div>
+            )}
           </div>
         </div>
 

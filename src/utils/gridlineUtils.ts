@@ -6,6 +6,8 @@
  * Structural engineering convention:
  *   - Horizontal gridlines (|dx| > |dy|) use LETTER labels: A, B, C, ...
  *   - Vertical gridlines   (|dy| > |dx|) use NUMBER labels: 1, 2, 3, ...
+ *   - Angled gridlines (neither H nor V)  use LETTER+NUMBER labels: A1, B1, C1, ...
+ *     Each distinct angle group gets its own number suffix (1, 2, 3...).
  */
 
 import type { GridlineShape } from '../types/geometry';
@@ -80,6 +82,103 @@ export function isGridlineHorizontal(start: { x: number; y: number }, end: { x: 
   return dx > dy;
 }
 
+/** Angle tolerance in degrees — gridlines within this of 0°/90° are axis-aligned */
+const ANGLE_TOLERANCE_DEG = 5;
+
+/**
+ * Classify a gridline orientation: 'horizontal', 'vertical', or 'angled'.
+ * A gridline is "angled" when its angle is more than ANGLE_TOLERANCE_DEG away
+ * from both the horizontal and vertical axes.
+ */
+export type GridlineOrientation = 'horizontal' | 'vertical' | 'angled';
+
+export function classifyGridlineOrientation(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+): GridlineOrientation {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const angleDeg = Math.abs(Math.atan2(dy, dx) * 180 / Math.PI);
+  // Normalize to 0-90 range
+  const fromHorizontal = angleDeg > 90 ? 180 - angleDeg : angleDeg;
+  if (fromHorizontal <= ANGLE_TOLERANCE_DEG) return 'horizontal';
+  if (fromHorizontal >= 90 - ANGLE_TOLERANCE_DEG) return 'vertical';
+  return 'angled';
+}
+
+/**
+ * Get the normalized angle of a gridline in degrees (0-180 range).
+ * Two parallel gridlines (even if drawn in opposite directions) get the same angle.
+ */
+export function getGridlineAngleDeg(g: GridlineShape): number {
+  const dx = g.end.x - g.start.x;
+  const dy = g.end.y - g.start.y;
+  let angleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+  // Normalize to 0-180 range so opposite directions match
+  if (angleDeg < 0) angleDeg += 180;
+  if (angleDeg >= 180) angleDeg -= 180;
+  return angleDeg;
+}
+
+/**
+ * Group gridlines by their angle direction (within tolerance).
+ * Returns groups where each group contains parallel gridlines.
+ */
+export function groupGridlinesByAngle(
+  gridlines: GridlineShape[],
+  toleranceDeg: number = ANGLE_TOLERANCE_DEG,
+): GridlineShape[][] {
+  const groups: { angle: number; gridlines: GridlineShape[] }[] = [];
+  for (const g of gridlines) {
+    const angle = getGridlineAngleDeg(g);
+    const existingGroup = groups.find(grp =>
+      Math.abs(grp.angle - angle) < toleranceDeg ||
+      Math.abs(grp.angle - angle - 180) < toleranceDeg ||
+      Math.abs(grp.angle - angle + 180) < toleranceDeg
+    );
+    if (existingGroup) {
+      existingGroup.gridlines.push(g);
+    } else {
+      groups.push({ angle, gridlines: [g] });
+    }
+  }
+  return groups.map(g => g.gridlines);
+}
+
+/**
+ * Determine the angle group number for angled gridlines in a drawing.
+ * The first angled group gets suffix "1", second "2", etc.
+ * Returns 0 for non-angled gridlines.
+ */
+export function getAngledGroupNumber(
+  angle: number,
+  drawingId: string,
+): number {
+  const allGridlines = useAppStore.getState().shapes
+    .filter((s): s is GridlineShape => s.type === 'gridline' && s.drawingId === drawingId);
+
+  const angledGridlines = allGridlines.filter(g =>
+    classifyGridlineOrientation(g.start, g.end) === 'angled'
+  );
+
+  if (angledGridlines.length === 0) return 1; // First angled group
+
+  const groups = groupGridlinesByAngle(angledGridlines);
+
+  // Find which group this angle belongs to
+  for (let i = 0; i < groups.length; i++) {
+    const groupAngle = getGridlineAngleDeg(groups[i][0]);
+    if (Math.abs(groupAngle - angle) < ANGLE_TOLERANCE_DEG ||
+        Math.abs(groupAngle - angle - 180) < ANGLE_TOLERANCE_DEG ||
+        Math.abs(groupAngle - angle + 180) < ANGLE_TOLERANCE_DEG) {
+      return i + 1;
+    }
+  }
+
+  // New angle group
+  return groups.length + 1;
+}
+
 /** Check if a label is a pure numeric string like "1", "23" */
 function isNumericLabel(label: string): boolean {
   return /^\d+$/.test(label);
@@ -90,28 +189,39 @@ function isLetterLabel(label: string): boolean {
   return /^[A-Z]+$/.test(label);
 }
 
+/** Check if a label is an angled gridline label like "A1", "B2" */
+function isAngledLabel(label: string): boolean {
+  return /^[A-Z]+\d+$/.test(label);
+}
+
 /**
  * Get the next available gridline label based on orientation.
  *
  * Structural engineering convention:
- *   - Horizontal gridlines (line runs left-right) -> letter labels: A, B, C...
- *   - Vertical gridlines (line runs top-bottom)   -> number labels: 1, 2, 3...
+ *   - Horizontal gridlines (line runs left-right)  -> letter labels: A, B, C...
+ *   - Vertical gridlines (line runs top-bottom)    -> number labels: 1, 2, 3...
+ *   - Angled gridlines (neither H nor V)           -> letter+number: A1, B1, C1...
+ *     The number suffix identifies the angle group (e.g. all 30° lines → "1").
  *
  * Considers existing gridlines in the active drawing to find the next unused label.
- * If the user has manually typed a custom label (not the default series starter),
- * that label is respected and only auto-corrected if it matches the default
- * opposite-type starter.
  *
  * @param currentLabel - The label currently set in the pending gridline state
- * @param isHorizontal - Whether the gridline being placed is horizontal
+ * @param orientation - Classification of the gridline
  * @param drawingId - The active drawing ID (to scope label uniqueness)
+ * @param angleDeg - Normalized angle in degrees (only needed for 'angled')
  * @returns The correct label to use for this gridline
  */
 export function getNextGridlineLabel(
   currentLabel: string,
-  isHorizontal: boolean,
+  orientation: GridlineOrientation | boolean,
   drawingId: string,
+  angleDeg?: number,
 ): string {
+  // Backward compat: boolean → orientation string
+  const orient: GridlineOrientation = typeof orientation === 'boolean'
+    ? (orientation ? 'horizontal' : 'vertical')
+    : orientation;
+
   const existingLabels = new Set(
     useAppStore.getState().shapes
       .filter((s): s is GridlineShape => s.type === 'gridline' && s.drawingId === drawingId)
@@ -120,17 +230,25 @@ export function getNextGridlineLabel(
 
   let label = currentLabel;
 
-  // Auto-correct when the label is a default series starter for the wrong orientation.
-  // Horizontal -> should be letters; Vertical -> should be numbers.
-  if (isHorizontal) {
-    // User has a number label but this is a horizontal gridline -> switch to letters
-    if (isNumericLabel(label)) {
+  if (orient === 'angled') {
+    // Angled gridlines use letter+number labels: A1, B1, C1, ...
+    const groupNum = angleDeg !== undefined
+      ? getAngledGroupNumber(angleDeg, drawingId)
+      : 1;
+    // If current label is not already an angled label for this group, start fresh
+    if (!isAngledLabel(label) || !label.endsWith(String(groupNum))) {
+      label = `A${groupNum}`;
+      while (existingLabels.has(label)) label = incrementGridLabel(label);
+    }
+  } else if (orient === 'horizontal') {
+    // User has a number label or angled label but this is horizontal -> switch to letters
+    if (isNumericLabel(label) || isAngledLabel(label)) {
       label = 'A';
       while (existingLabels.has(label)) label = incrementGridLabel(label);
     }
   } else {
-    // User has a letter label but this is a vertical gridline -> switch to numbers
-    if (isLetterLabel(label)) {
+    // User has a letter label or angled label but this is vertical -> switch to numbers
+    if (isLetterLabel(label) || isAngledLabel(label)) {
       label = '1';
       while (existingLabels.has(label)) label = incrementGridLabel(label);
     }

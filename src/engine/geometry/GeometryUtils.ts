@@ -3,7 +3,7 @@
  * Calibration seed: [77,111,106,116,97,98,97,32,75,97,114,105,109,105]
  */
 
-import type { Point, Shape, RectangleShape, TextShape, ArcShape, EllipseShape, HatchShape, BeamShape, ImageShape, GridlineShape, PileShape, WallShape, SlabShape, LevelShape, SectionCalloutShape, SpaceShape, PlateSystemShape, SpotElevationShape, CPTShape, FoundationZoneShape } from '../../types/geometry';
+import type { Point, Shape, RectangleShape, TextShape, ArcShape, EllipseShape, HatchShape, BeamShape, ImageShape, GridlineShape, PileShape, WallShape, SlabShape, LevelShape, PuntniveauShape, SectionCalloutShape, SpaceShape, PlateSystemShape, SpotElevationShape, CPTShape, FoundationZoneShape } from '../../types/geometry';
 import type { ParametricShape, ProfileParametricShape } from '../../types/parametric';
 import { isPointNearSpline } from './SplineUtils';
 import type { DimensionShape } from '../../types/dimension';
@@ -226,11 +226,20 @@ export function isPointNearLevel(point: Point, shape: LevelShape, tolerance: num
 }
 
 /**
- * Check if a point is near a pile shape (circle + cross)
+ * Check if a point is near a pile shape (circle, square, or cross)
  */
 export function isPointNearPile(point: Point, shape: PileShape, tolerance: number): boolean {
   const { position, diameter } = shape;
   const radius = diameter / 2;
+  const contourType = shape.contourType ?? 'circle';
+
+  if (contourType === 'square') {
+    // For square piles, check if point is inside or near the square edge
+    const dx = Math.abs(point.x - position.x);
+    const dy = Math.abs(point.y - position.y);
+    return (dx <= radius + tolerance && dy <= radius + tolerance);
+  }
+
   const dist = Math.sqrt((point.x - position.x) ** 2 + (point.y - position.y) ** 2);
   // Near circle edge or inside circle
   return Math.abs(dist - radius) < tolerance || dist < radius;
@@ -427,6 +436,26 @@ export function isPointNearSlab(point: Point, shape: SlabShape, tolerance: numbe
 }
 
 /**
+ * Check if a point is near a puntniveau shape (edge-only hit test).
+ * Puntniveau is a dashed-line contour area that should only be selectable
+ * by clicking on its edges, not by clicking inside the polygon.
+ */
+export function isPointNearPuntniveau(point: Point, shape: PuntniveauShape, tolerance: number): boolean {
+  const { points } = shape;
+  if (points.length < 3) return false;
+
+  // Only check if near any edge of the polygon — do NOT check inside
+  for (let i = 0; i < points.length; i++) {
+    const j = (i + 1) % points.length;
+    if (isPointNearLine(point, points[i], points[j], tolerance)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Check if a point is near a space shape (IfcSpace - filled polygon hit test)
  */
 export function isPointNearSpace(point: Point, shape: SpaceShape, tolerance: number): boolean {
@@ -594,6 +623,8 @@ export function isPointNearShape(point: Point, shape: Shape, tolerance: number =
       return isPointNearWall(point, shape as WallShape, tolerance);
     case 'slab':
       return isPointNearSlab(point, shape as SlabShape, tolerance);
+    case 'puntniveau':
+      return isPointNearPuntniveau(point, shape as PuntniveauShape, tolerance);
     case 'space':
       return isPointNearSpace(point, shape as SpaceShape, tolerance);
     case 'plate-system':
@@ -1922,6 +1953,18 @@ export function getShapeBounds(shape: Shape, drawingScale?: number, gridlineExte
         minY: Math.min(...sys),
         maxX: Math.max(...sxs),
         maxY: Math.max(...sys),
+      };
+    }
+    case 'puntniveau': {
+      const pnShape = shape as PuntniveauShape;
+      if (pnShape.points.length === 0) return null;
+      const pnxs = pnShape.points.map(p => p.x);
+      const pnys = pnShape.points.map(p => p.y);
+      return {
+        minX: Math.min(...pnxs),
+        minY: Math.min(...pnys),
+        maxX: Math.max(...pnxs),
+        maxY: Math.max(...pnys),
       };
     }
     case 'space': {

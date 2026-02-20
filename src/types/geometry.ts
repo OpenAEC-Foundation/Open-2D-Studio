@@ -43,7 +43,7 @@ export interface ShapeGroup {
 /** @deprecated Use drawingId instead */
 export type BaseShapeWithDraftId = BaseShape & { draftId?: string };
 
-export type ShapeType = 'line' | 'rectangle' | 'circle' | 'arc' | 'polyline' | 'ellipse' | 'spline' | 'text' | 'point' | 'dimension' | 'hatch' | 'beam' | 'image' | 'gridline' | 'level' | 'pile' | 'wall' | 'slab' | 'section-callout' | 'space' | 'plate-system' | 'cpt' | 'foundation-zone' | 'spot-elevation' | 'block-instance';
+export type ShapeType = 'line' | 'rectangle' | 'circle' | 'arc' | 'polyline' | 'ellipse' | 'spline' | 'text' | 'point' | 'dimension' | 'hatch' | 'beam' | 'image' | 'gridline' | 'level' | 'puntniveau' | 'pile' | 'wall' | 'slab' | 'section-callout' | 'space' | 'plate-system' | 'cpt' | 'foundation-zone' | 'spot-elevation' | 'block-instance';
 
 export type HatchPatternType = 'solid' | 'diagonal' | 'crosshatch' | 'horizontal' | 'vertical' | 'dots' | 'custom';
 
@@ -148,8 +148,45 @@ export interface LevelShape extends BaseShape {
   description?: string;                   // Optional text below peil (e.g. "Vloerpeil", "Bovenkant vloer")
 }
 
+// Puntniveau shape - closed polygon contour indicating designed pile tip level zone
+export interface PuntniveauShape extends BaseShape {
+  type: 'puntniveau';
+  /** Closed polygon boundary points defining the puntniveau zone */
+  points: Point[];
+  /** Pile tip level relative to NAP datum (meters, e.g. -12.5) */
+  puntniveauNAP: number;
+  /** Font size for the label (mm) */
+  fontSize: number;
+  /** Optional custom label position (defaults to polygon centroid) */
+  labelPosition?: Point;
+}
+
 // Pile types for bearing capacity analysis
+/** @deprecated Use PileTypeDefinition for the new pile type system */
 export type PileType = 'prefab-concrete' | 'steel-tube' | 'vibro' | 'screw';
+
+/** Pile cross-section shape */
+export type PileShapeType = 'round' | 'square';
+
+/** IFC predefined type mapping for piles */
+export type IfcPilePredefinedType = 'BORED' | 'DRIVEN' | 'JETGROUTING' | 'COHESION' | 'FRICTION' | 'SUPPORT' | 'USERDEFINED';
+
+/** Full pile type definition */
+export interface PileTypeDefinition {
+  id: string;
+  /** Display name */
+  name: string;
+  /** Cross-section shape */
+  shape: PileShapeType;
+  /** Construction method / material type */
+  method: string;
+  /** Default diameter (mm) for round, or side dimension for square */
+  defaultDiameter: number;
+  /** IFC predefined type mapping */
+  ifcPredefinedType: IfcPilePredefinedType;
+  /** Description */
+  description?: string;
+}
 
 // Bearing capacity at a specific depth level
 export interface BearingCapacityLevel {
@@ -162,6 +199,10 @@ export interface PileOption {
   pileType: PileType;
   dimension: string;  // e.g., "180x180", "219"
   bearingCapacityPerLevel: BearingCapacityLevel[];
+  /** Default tip level relative to NAP (m) */
+  puntniveauNAP?: number;
+  /** Default top of pile relative to reference level (mm) */
+  bkPaalPeil?: number;
 }
 
 // Foundation advice derived from a CPT
@@ -178,6 +219,9 @@ export interface PilePlanSettings {
   numberingBandwidth: number;  // default 500mm
 }
 
+// Pile contour type (outer shape) - matches PileSymbolsDialog definitions
+export type PileContourType = 'circle' | 'square' | 'diamond' | 'diamond-circle' | 'double-circle' | 'triangle-circle' | 'octagon';
+
 // Pile shape - foundation pile in plan view
 export interface PileShape extends BaseShape {
   type: 'pile';
@@ -185,13 +229,25 @@ export interface PileShape extends BaseShape {
   diameter: number;             // Pile diameter (drawing units)
   label: string;                // Pile number ("P1", "P2", etc.)
   fontSize: number;             // Label font size (drawing units)
-  showCross: boolean;           // Show cross inside circle
+  showCross: boolean;           // Show cross inside circle (legacy, superseded by fillPattern)
+  /** Contour type: outer shape of the pile symbol (default: 'circle') */
+  contourType?: PileContourType;
+  /** Fill pattern number matching PileSymbolsDialog definitions (default: 6 = empty) */
+  fillPattern?: number;
   pileNumber?: number;          // Auto-numbered sequence
   cutoffLevel?: number;         // Afhakhoogte (m NAP)
   tipLevel?: number;            // Puntniveau (m NAP)
-  pileType?: PileType;          // Foundation pile type
-  pileSymbol?: PileSymbolType;  // Symbol assigned by pile plan
+  pileType?: PileType;          // Foundation pile type (legacy)
+  /** Reference to PileTypeDefinition ID */
+  pileTypeId?: string;
+  pileSymbol?: PileSymbolType;  // Symbol assigned by pile plan (legacy)
   cptId?: string;               // Linked CPT for bearing capacity lookup
+  /** Tip level relative to NAP (m) */
+  puntniveauNAP?: number;
+  /** Whether puntniveauNAP was auto-assigned from a puntniveau area polygon */
+  puntniveauFromArea?: boolean;
+  /** Top of pile relative to reference level (mm) */
+  bkPaalPeil?: number;
 }
 
 // CPT (Cone Penetration Test) location shape
@@ -202,6 +258,12 @@ export interface CPTShape extends BaseShape {
   fontSize: number;             // Label font size (drawing units)
   markerSize: number;           // Triangle marker size (drawing units)
   foundationAdvice?: FoundationAdvice;
+  /** Friction sleeve measurement included */
+  kleefmeting?: boolean;
+  /** Pore water pressure measurement included */
+  waterspanning?: boolean;
+  /** CPT has been executed / completed */
+  uitgevoerd?: boolean;
 }
 
 // Foundation zone shape - auto-generated region linked to a CPT
@@ -681,6 +743,7 @@ export type Shape =
   | ImageShape
   | GridlineShape
   | LevelShape
+  | PuntniveauShape
   | PileShape
   | WallShape
   | SlabShape
@@ -767,6 +830,7 @@ export type ToolType =
   | 'space'
   | 'plate-system'
   | 'spot-elevation'
+  | 'puntniveau'
   | 'label'
   // Image tools
   | 'image'
@@ -821,6 +885,14 @@ export interface DrawingBoundary {
 // Drawing type: standalone (default), plan (IfcBuildingStorey), section (cross-section)
 export type DrawingType = 'standalone' | 'plan' | 'section';
 
+export type PlanSubtype = 'pile-plan' | 'structural-plan' | 'floor-plan';
+
+export const PLAN_SUBTYPE_CONFIG: Record<PlanSubtype, { label: string; abbr: string; color: string; title: string }> = {
+  'pile-plan':       { label: 'Pile Plan',       abbr: 'PP', color: 'bg-violet-500/30 text-violet-300', title: 'Pile plan (foundation layout)' },
+  'structural-plan': { label: 'Structural Plan', abbr: 'SP', color: 'bg-cyan-500/30 text-cyan-300',    title: 'Structural plan (beams, columns, slabs)' },
+  'floor-plan':      { label: 'Floor Plan',      abbr: 'FP', color: 'bg-blue-500/30 text-blue-300',    title: 'Floor plan (architectural layout)' },
+};
+
 // Section reference - bidirectional link between section drawing and plan elements
 export interface SectionReference {
   sourceDrawingId: string;    // Drawing that contains the source element
@@ -835,6 +907,7 @@ export interface Drawing {
   boundary: DrawingBoundary;  // Defines the region/extent visible on sheets
   scale: number;              // View scale (e.g., 0.02 for 1:50, 0.01 for 1:100)
   drawingType: DrawingType;   // Drawing type: standalone, plan, or section
+  planSubtype?: PlanSubtype;  // For plan drawings: pile-plan, structural-plan, or floor-plan
   storeyId?: string;          // For plan drawings: linked IfcBuildingStorey ID from ProjectStructure
   linkedSectionCalloutId?: string; // For section drawings: ID of the section-callout shape that created this
   sectionReferences?: SectionReference[]; // Linked references to gridlines/levels from plan drawings

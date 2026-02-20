@@ -928,7 +928,71 @@ export interface DrawingStandardsPreset {
   materialHatchSettings: MaterialHatchSettings;
   /** Whether to show dimension text between gridlines in section views. Default true. */
   sectionGridlineDimensioning?: boolean;
+  /** Auto-number and label piles sequentially */
+  pilePlanAutoNumbering?: boolean;
+  /** Auto-create dimensions at pile positions */
+  pilePlanAutoDimensioning?: boolean;
+  /** Auto-show pile depth labels */
+  pilePlanAutoDepthLabel?: boolean;
+  /** Per-plan-subtype display settings */
+  planSubtypeSettings?: PlanSubtypeSettings;
+  /** Pile type definitions */
+  pileTypes?: import('./geometry').PileTypeDefinition[];
 }
+
+// ============================================================================
+// Plan Subtype Settings
+// ============================================================================
+
+export interface PilePlanDisplaySettings {
+  showPileTable: boolean;
+  pileLabelFontSize: number;
+  showPileGridReferences: boolean;
+}
+
+export interface StructuralPlanDisplaySettings {
+  showBeamCenterlines: boolean;
+  showColumnGridMarks: boolean;
+  showSlabEdges: boolean;
+  beamLabelStyle: 'profile-only' | 'profile+material' | 'full';
+  showLoadArrows: boolean;
+}
+
+export interface FloorPlanDisplaySettings {
+  showRoomLabels: boolean;
+  showDoorSwingArcs: boolean;
+  showWallDimensions: boolean;
+  showFurniture: boolean;
+  showAreaLabels: boolean;
+}
+
+export interface PlanSubtypeSettings {
+  pilePlan: PilePlanDisplaySettings;
+  structuralPlan: StructuralPlanDisplaySettings;
+  floorPlan: FloorPlanDisplaySettings;
+}
+
+export const DEFAULT_PLAN_SUBTYPE_SETTINGS: PlanSubtypeSettings = {
+  pilePlan: {
+    showPileTable: true,
+    pileLabelFontSize: 8,
+    showPileGridReferences: true,
+  },
+  structuralPlan: {
+    showBeamCenterlines: true,
+    showColumnGridMarks: true,
+    showSlabEdges: true,
+    beamLabelStyle: 'profile-only',
+    showLoadArrows: false,
+  },
+  floorPlan: {
+    showRoomLabels: true,
+    showDoorSwingArcs: true,
+    showWallDimensions: false,
+    showFurniture: true,
+    showAreaLabels: false,
+  },
+};
 
 /**
  * Default material hatch settings with sensible defaults for each material category.

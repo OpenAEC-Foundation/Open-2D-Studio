@@ -10,7 +10,7 @@ import {
 } from '../../../engine/geometry/Modify';
 import { evaluateExpression } from '../../../utils/expressionParser';
 import {
-  isGridlineHorizontal,
+  classifyGridlineOrientation,
   getNextGridlineLabel,
   getNextIncrementedLabel,
 } from '../../../utils/gridlineUtils';
@@ -518,8 +518,17 @@ export function DynamicInput() {
       // Auto-detect orientation and resolve label:
       //   Horizontal (|dx| > |dy|) → letters (A, B, C...)
       //   Vertical   (|dy| > |dx|) → numbers (1, 2, 3...)
-      const horizontal = isGridlineHorizontal(basePoint, endPoint);
-      const label = getNextGridlineLabel(pg.label, horizontal, state.activeDrawingId);
+      //   Angled (neither)         → letter+number (A1, B1, C1...)
+      const orientation = classifyGridlineOrientation(basePoint, endPoint);
+      const angleDeg = orientation === 'angled'
+        ? (() => {
+            let a = Math.atan2(endPoint.y - basePoint.y, endPoint.x - basePoint.x) * 180 / Math.PI;
+            if (a < 0) a += 180;
+            if (a >= 180) a -= 180;
+            return a;
+          })()
+        : undefined;
+      const label = getNextGridlineLabel(pg.label, orientation, state.activeDrawingId, angleDeg);
 
       const gridlineShape = {
         id: crypto.randomUUID(),

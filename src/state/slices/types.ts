@@ -13,6 +13,7 @@ import type {
   ShapeStyle,
   Drawing,
   DrawingType,
+  PlanSubtype,
   DrawingBoundary,
   Sheet,
   SheetViewport,
@@ -41,6 +42,7 @@ export type {
   ShapeStyle,
   Drawing,
   DrawingType,
+  PlanSubtype,
   DrawingBoundary,
   Sheet,
   SheetViewport,
@@ -78,8 +80,9 @@ export type DrawingPreview =
   | { type: 'beam'; start: Point; end: Point; flangeWidth: number; showCenterline: boolean; bulge?: number }
   | { type: 'gridline'; start: Point; end: Point; label: string; bubblePosition: 'start' | 'end' | 'both'; bubbleRadius: number }
   | { type: 'level'; start: Point; end: Point; label: string; labelPosition: 'start' | 'end' | 'both'; bubbleRadius: number }
-  | { type: 'pile'; position: Point; diameter: number; label: string; fontSize: number; showCross: boolean }
-  | { type: 'cpt'; position: Point; name: string; fontSize: number; markerSize: number }
+  | { type: 'puntniveau'; points: Point[]; currentPoint: Point; puntniveauNAP: number }
+  | { type: 'pile'; position: Point; diameter: number; label: string; fontSize: number; showCross: boolean; contourType?: import('../../types/geometry').PileContourType; fillPattern?: number; pileTypeId?: string }
+  | { type: 'cpt'; position: Point; name: string; fontSize: number; markerSize: number; kleefmeting?: boolean; waterspanning?: boolean; uitgevoerd?: boolean }
   | { type: 'wall'; start: Point; end: Point; thickness: number; showCenterline: boolean; wallTypeId?: string; justification?: WallJustification; bulge?: number }
   | { type: 'wall-rectangle'; corner1: Point; corner2: Point; thickness: number; showCenterline: boolean; wallTypeId?: string; justification?: WallJustification }
   | { type: 'beam-rectangle'; corner1: Point; corner2: Point; flangeWidth: number; showCenterline: boolean }
@@ -354,6 +357,17 @@ export const getShapeBounds = (shape: Shape): { minX: number; minY: number; maxX
         minY: Math.min(shape.start.y, shape.end.y) - r,
         maxX: Math.max(shape.start.x, shape.end.x) + r,
         maxY: Math.max(shape.start.y, shape.end.y) + r,
+      };
+    }
+    case 'puntniveau': {
+      if (shape.points.length === 0) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+      const pnXs = shape.points.map(p => p.x);
+      const pnYs = shape.points.map(p => p.y);
+      return {
+        minX: Math.min(...pnXs),
+        minY: Math.min(...pnYs),
+        maxX: Math.max(...pnXs),
+        maxY: Math.max(...pnYs),
       };
     }
     case 'pile': {

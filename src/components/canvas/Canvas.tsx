@@ -15,6 +15,7 @@ import { setRotationGizmoVisible } from '../../engine/renderer/rotationGizmoStat
 import { TitleBlockFieldEditor } from '../editors/TitleBlockFieldEditor/TitleBlockFieldEditor';
 import { parseSpacingPattern, createGridlinesFromPattern } from '../../utils/gridlineUtils';
 import { regenerateGridDimensions } from '../../utils/gridDimensionUtils';
+import { ShortcutHUD } from './ShortcutHUD';
 
 function GridlineLabelInput({ shape, bubbleEnd, viewport, onSave, onCancel, drawingScale }: {
   shape: GridlineShape;
@@ -557,6 +558,7 @@ export function Canvas() {
             parametricShapes: filteredParametricShapes,
             selectedShapeIds: effectiveSelectedIds,
             hoveredShapeId: s.hoveredShapeId,
+            preSelectedShapeIds: s.preSelectedShapeIds,
             viewport: s.viewport,
             drawingScale: activeDrawing?.scale,
             gridVisible: s.gridVisible,
@@ -829,6 +831,9 @@ export function Canvas() {
 
       {/* Plate System Edit Mode Toolbar Overlay */}
       <PlateSystemEditToolbar />
+
+      {/* Keyboard Shortcuts HUD */}
+      <ShortcutHUD />
 
       {/* Origin indicator - CAD convention: X right, Y up */}
       <div className="absolute bottom-4 left-4 pointer-events-none">

@@ -13,9 +13,9 @@ import type {
   ProfileType,
   ParameterValues,
 } from '../../types/parametric';
-import type { BeamMaterial, BeamJustification, GridlineBubblePosition, WallJustification, WallEndCap, WallType, SlabType, ColumnType, BeamType } from '../../types/geometry';
-import type { MaterialHatchSettings, MaterialHatchSetting, DrawingStandardsPreset } from '../../types/hatch';
-import { DEFAULT_MATERIAL_HATCH_SETTINGS } from '../../types/hatch';
+import type { BeamMaterial, BeamJustification, GridlineBubblePosition, WallJustification, WallEndCap, WallType, SlabType, ColumnType, BeamType, PileTypeDefinition } from '../../types/geometry';
+import type { MaterialHatchSettings, MaterialHatchSetting, DrawingStandardsPreset, PlanSubtypeSettings } from '../../types/hatch';
+import { DEFAULT_MATERIAL_HATCH_SETTINGS, DEFAULT_PLAN_SUBTYPE_SETTINGS } from '../../types/hatch';
 import {
   createProfileShape,
   updateParametricParameters,
@@ -51,6 +51,54 @@ export interface ProjectStructure {
    *  e.g., -0.5 means peil=0 is at -0.5m NAP. Default 0. */
   seaLevelDatum: number;
 }
+
+// ============================================================================
+// Default Pile Types (Dutch construction standard pile types)
+// ============================================================================
+
+export const DEFAULT_PILE_TYPES: PileTypeDefinition[] = [
+  // Prefab beton vierkant (square precast concrete) — standard sizes
+  { id: 'prefab-beton-180x180', name: 'Prefab beton 180x180', shape: 'square', method: 'driven', defaultDiameter: 180, ifcPredefinedType: 'DRIVEN', description: 'Vierkante geprefabriceerde betonpaal 180x180, geheid' },
+  { id: 'prefab-beton-220x220', name: 'Prefab beton 220x220', shape: 'square', method: 'driven', defaultDiameter: 220, ifcPredefinedType: 'DRIVEN', description: 'Vierkante geprefabriceerde betonpaal 220x220, geheid' },
+  { id: 'prefab-beton-250x250', name: 'Prefab beton 250x250', shape: 'square', method: 'driven', defaultDiameter: 250, ifcPredefinedType: 'DRIVEN', description: 'Vierkante geprefabriceerde betonpaal 250x250, geheid' },
+  { id: 'prefab-beton-320x320', name: 'Prefab beton 320x320', shape: 'square', method: 'driven', defaultDiameter: 320, ifcPredefinedType: 'DRIVEN', description: 'Vierkante geprefabriceerde betonpaal 320x320, geheid' },
+  { id: 'prefab-beton-400x400', name: 'Prefab beton 400x400', shape: 'square', method: 'driven', defaultDiameter: 400, ifcPredefinedType: 'DRIVEN', description: 'Vierkante geprefabriceerde betonpaal 400x400, geheid' },
+  { id: 'prefab-beton-450x450', name: 'Prefab beton 450x450', shape: 'square', method: 'driven', defaultDiameter: 450, ifcPredefinedType: 'DRIVEN', description: 'Vierkante geprefabriceerde betonpaal 450x450, geheid' },
+  { id: 'prefab-beton-500x500', name: 'Prefab beton 500x500', shape: 'square', method: 'driven', defaultDiameter: 500, ifcPredefinedType: 'DRIVEN', description: 'Vierkante geprefabriceerde betonpaal 500x500, geheid' },
+
+  // Stalen buispaal betongevuld (steel tube pile concrete filled) — standard sizes
+  { id: 'stalen-buispaal-168', name: 'Stalen buispaal \u00d8168', shape: 'round', method: 'driven', defaultDiameter: 168, ifcPredefinedType: 'DRIVEN', description: 'Stalen buispaal betongevuld \u00d8168, geheid' },
+  { id: 'stalen-buispaal-219', name: 'Stalen buispaal \u00d8219', shape: 'round', method: 'driven', defaultDiameter: 219, ifcPredefinedType: 'DRIVEN', description: 'Stalen buispaal betongevuld \u00d8219, geheid' },
+  { id: 'stalen-buispaal-273', name: 'Stalen buispaal \u00d8273', shape: 'round', method: 'driven', defaultDiameter: 273, ifcPredefinedType: 'DRIVEN', description: 'Stalen buispaal betongevuld \u00d8273, geheid' },
+
+  // Vibro
+  { id: 'vibropaal', name: 'Vibropaal', shape: 'round', method: 'Vibro', defaultDiameter: 380, ifcPredefinedType: 'DRIVEN', description: 'Trillend ingebrachte en ter plaatse gestorte betonpaal' },
+
+  // Screw piles
+  { id: 'schroefpaal-cfa', name: 'Schroefpaal (CFA)', shape: 'round', method: 'Schroefpaal', defaultDiameter: 400, ifcPredefinedType: 'BORED', description: 'Continuous Flight Auger schroefpaal' },
+  { id: 'grondverdringende-schroefpaal', name: 'Grondverdringende schroefpaal', shape: 'round', method: 'Schroefpaal', defaultDiameter: 450, ifcPredefinedType: 'DRIVEN', description: 'Grondverdringende schroefpaal (FDP)' },
+  { id: 'atlas-paal', name: 'Atlas paal', shape: 'round', method: 'Schroefpaal', defaultDiameter: 410, ifcPredefinedType: 'DRIVEN', description: 'Atlas grondverdringende schroefpaal' },
+  { id: 'omega-paal', name: 'Omega paal', shape: 'round', method: 'Schroefpaal', defaultDiameter: 410, ifcPredefinedType: 'DRIVEN', description: 'Omega grondverdringende schroefpaal' },
+  { id: 'fundex-paal', name: 'Fundex paal', shape: 'round', method: 'Schroefpaal', defaultDiameter: 380, ifcPredefinedType: 'DRIVEN', description: 'Fundex grondverdringende schroefpaal' },
+
+  // Bored piles
+  { id: 'boorpaal', name: 'Boorpaal', shape: 'round', method: 'Boorpaal', defaultDiameter: 600, ifcPredefinedType: 'BORED', description: 'Geboorde betonpaal in onverbuisde boring' },
+  { id: 'boorpaal-verbuisd', name: 'Boorpaal verbuisd', shape: 'round', method: 'Boorpaal', defaultDiameter: 900, ifcPredefinedType: 'BORED', description: 'Geboorde betonpaal in verbuisde boring' },
+
+  // Special types
+  { id: 'franki-paal', name: 'Franki paal', shape: 'round', method: 'Franki', defaultDiameter: 520, ifcPredefinedType: 'DRIVEN', description: 'Franki paal (in de grond gevormd met verwijde voet)' },
+  { id: 'mv-paal', name: 'MV-paal (Muller Verpress)', shape: 'round', method: 'MV-paal', defaultDiameter: 180, ifcPredefinedType: 'BORED', description: 'Muller Verpress anker-/trekpaal' },
+  { id: 'jet-grouting', name: 'Jet-grouting paal', shape: 'round', method: 'Jet-grouting', defaultDiameter: 800, ifcPredefinedType: 'JETGROUTING', description: 'Jet-grouting kolom/paal' },
+  { id: 'micropaal', name: 'Micropaal', shape: 'round', method: 'Micropaal', defaultDiameter: 200, ifcPredefinedType: 'BORED', description: 'Micropaal (kleine diameter boorpaal)' },
+  { id: 'houten-heipaal', name: 'Houten heipaal', shape: 'round', method: 'Hout', defaultDiameter: 200, ifcPredefinedType: 'DRIVEN', description: 'Houten heipaal (grenen/vuren)' },
+  { id: 'gewapende-grondpaal', name: 'Gewapende grondpaal', shape: 'round', method: 'Grondpaal', defaultDiameter: 150, ifcPredefinedType: 'COHESION', description: 'Gewapende grondpaal (mixed-in-place)' },
+
+  // HSP (High Speed Piling)
+  { id: 'hsp-paal', name: 'HSP paal', shape: 'round', method: 'HSP', defaultDiameter: 150, ifcPredefinedType: 'DRIVEN', description: 'High Speed Piling stalen buispaal' },
+
+  // Vibro-injection
+  { id: 'vibro-injectiepaal', name: 'Vibro-injectiepaal', shape: 'round', method: 'Vibro-injectie', defaultDiameter: 350, ifcPredefinedType: 'DRIVEN', description: 'Vibro-injectiepaal met naverbuizing' },
+];
 
 // ============================================================================
 // State Interface
@@ -116,6 +164,12 @@ export interface ParametricState {
     description?: string;
   } | null;
 
+  /** Puntniveau pending state */
+  pendingPuntniveau: {
+    puntniveauNAP: number;
+    fontSize: number;
+  } | null;
+
   /** Pile dialog state */
   pileDialogOpen: boolean;
   pendingPile: {
@@ -123,6 +177,9 @@ export interface ParametricState {
     diameter: number;
     fontSize: number;
     showCross: boolean;
+    pileTypeId?: string;
+    contourType?: import('../../types/geometry').PileContourType;
+    fillPattern?: number;
   } | null;
 
   /** CPT dialog state */
@@ -131,6 +188,9 @@ export interface ParametricState {
     name: string;
     fontSize: number;
     markerSize: number;
+    kleefmeting?: boolean;
+    waterspanning?: boolean;
+    uitgevoerd?: boolean;
   } | null;
 
   /** Pile plan settings */
@@ -216,11 +276,25 @@ export interface ParametricState {
   /** Whether to show dimension text between gridlines in section views */
   sectionGridlineDimensioning: boolean;
 
+  /** Auto-number and label piles sequentially */
+  pilePlanAutoNumbering: boolean;
+  /** Auto-create dimensions at pile positions */
+  pilePlanAutoDimensioning: boolean;
+  /** Auto-show pile depth labels */
+  pilePlanAutoDepthLabel: boolean;
+
   /** Materials dialog state */
   materialsDialogOpen: boolean;
 
   /** Wall Types dialog state */
   wallTypesDialogOpen: boolean;
+
+  /** Pile Symbols dialog state */
+  pileSymbolsDialogOpen: boolean;
+
+  /** Pile symbol order (determines which symbol is assigned first when placing piles).
+   *  Keyed by contour group: R, RH, RD, RR, RRR, DR, Achthoek */
+  pileSymbolOrder: Record<string, string[]>;
 
   /** Last-used wall type ID — persists across tool switches so the wall tool
    *  defaults to the previously chosen wall type instead of resetting. */
@@ -238,8 +312,14 @@ export interface ParametricState {
   /** Beam types */
   beamTypes: BeamType[];
 
+  /** Pile types (PileTypeDefinition) */
+  pileTypes: PileTypeDefinition[];
+
   /** Material hatch settings (Drawing Standards) - maps material category to hatch settings */
   materialHatchSettings: MaterialHatchSettings;
+
+  /** Per-plan-subtype display settings (Drawing Standards) */
+  planSubtypeSettings: import('../../types/hatch').PlanSubtypeSettings;
 
   /** Drawing Standards presets — named configurations of all Drawing Standards settings */
   drawingStandardsPresets: DrawingStandardsPreset[];
@@ -313,6 +393,10 @@ export interface ParametricActions {
   setPendingLevel: (pending: ParametricState['pendingLevel']) => void;
   clearPendingLevel: () => void;
 
+  // Puntniveau
+  setPendingPuntniveau: (pending: ParametricState['pendingPuntniveau']) => void;
+  clearPendingPuntniveau: () => void;
+
   // Pile dialog
   openPileDialog: () => void;
   closePileDialog: () => void;
@@ -374,6 +458,11 @@ export interface ParametricActions {
   updateBeamType: (id: string, updates: Partial<BeamType>) => void;
   deleteBeamType: (id: string) => void;
 
+  // Pile types
+  addPileType: (pileType: PileTypeDefinition) => void;
+  updatePileType: (id: string, updates: Partial<PileTypeDefinition>) => void;
+  removePileType: (id: string) => void;
+
   // Drawing Standards
   openDrawingStandardsDialog: () => void;
   closeDrawingStandardsDialog: () => void;
@@ -381,10 +470,16 @@ export interface ParametricActions {
   setGridDimensionLineOffset: (value: number) => void;
   setAutoGridDimension: (value: boolean) => void;
   setSectionGridlineDimensioning: (value: boolean) => void;
+  setPilePlanAutoNumbering: (value: boolean) => void;
+  setPilePlanAutoDimensioning: (value: boolean) => void;
+  setPilePlanAutoDepthLabel: (value: boolean) => void;
 
   // Material Hatch Settings (Drawing Standards)
   updateMaterialHatchSetting: (material: string, setting: Partial<MaterialHatchSetting>) => void;
   setMaterialHatchSettings: (settings: MaterialHatchSettings) => void;
+
+  // Plan Subtype Settings (Drawing Standards)
+  updatePlanSubtypeSettings: (settings: Partial<PlanSubtypeSettings>) => void;
 
   // Drawing Standards Presets
   saveDrawingStandards: (name: string) => string;
@@ -399,6 +494,11 @@ export interface ParametricActions {
   // Wall Types dialog
   openWallTypesDialog: () => void;
   closeWallTypesDialog: () => void;
+
+  // Pile Symbols dialog
+  openPileSymbolsDialog: () => void;
+  closePileSymbolsDialog: () => void;
+  setPileSymbolOrder: (groupKey: string, order: string[]) => void;
 
   // Project Structure dialog
   openProjectStructureDialog: () => void;
@@ -447,6 +547,7 @@ export const initialParametricState: ParametricState = {
   gridlineDialogOpen: false,
   pendingGridline: null,
   pendingLevel: null,
+  pendingPuntniveau: null,
   pileDialogOpen: false,
   pendingPile: null,
   cptDialogOpen: false,
@@ -467,8 +568,21 @@ export const initialParametricState: ParametricState = {
   gridDimensionLineOffset: 300,
   autoGridDimension: true,
   sectionGridlineDimensioning: true,
+  pilePlanAutoNumbering: true,
+  pilePlanAutoDimensioning: true,
+  pilePlanAutoDepthLabel: true,
   materialsDialogOpen: false,
   wallTypesDialogOpen: false,
+  pileSymbolsDialogOpen: false,
+  pileSymbolOrder: {
+    R: ['R1','R2','R3','R4','R5','R6','R7','R8','R9','R10','R11','R12','R13','R14','R15','R16','R17'],
+    RH: ['RH1','RH1-2','RH2','RH2-2','RH3','RH3-2','RH4','RH4-2','RH5','RH5-2','RH6','RH6-2','RH7','RH7-2','RH8','RH8-2','RH9','RH9-2','RH10','RH10-2'],
+    RD: ['RD1','RD3','RD5','RD6','RD8','RD10','RD17','RD18','RD19'],
+    RR: ['RR1','RR3','RR5','RR6','RR8','RR10','RR17','RR18','RR19'],
+    RRR: ['RRR1','RRR2','RRR3','RRR4','RRR5','RRR6'],
+    DR: ['DR6'],
+    Achthoek: ['Achthoek_1','Achthoek_5'],
+  },
   lastUsedWallTypeId: null,
   wallTypes: [
     // Beton (Concrete) -- INB-Template standard structural wall types
@@ -523,7 +637,9 @@ export const initialParametricState: ParametricState = {
     { id: 'beam-balk-200x400', name: 'Balk 200x400 C28/35', material: 'concrete', profileType: 'rectangular', width: 200, height: 400 },
     { id: 'beam-balk-300x500', name: 'Balk 300x500 C35/45', material: 'concrete', profileType: 'rectangular', width: 300, height: 500 },
   ],
+  pileTypes: [...DEFAULT_PILE_TYPES],
   materialHatchSettings: { ...DEFAULT_MATERIAL_HATCH_SETTINGS },
+  planSubtypeSettings: { ...DEFAULT_PLAN_SUBTYPE_SETTINGS },
   drawingStandardsPresets: [
     {
       id: 'default-nen-en',
@@ -533,6 +649,9 @@ export const initialParametricState: ParametricState = {
       gridDimensionLineOffset: 300,
       materialHatchSettings: { ...DEFAULT_MATERIAL_HATCH_SETTINGS },
       sectionGridlineDimensioning: true,
+      pilePlanAutoNumbering: true,
+      pilePlanAutoDimensioning: true,
+      pilePlanAutoDepthLabel: true,
     },
     {
       id: 'inb-template',
@@ -540,6 +659,9 @@ export const initialParametricState: ParametricState = {
       gridlineExtension: 1000,
       gridDimensionLineOffset: 300,
       sectionGridlineDimensioning: true,
+      pilePlanAutoNumbering: true,
+      pilePlanAutoDimensioning: true,
+      pilePlanAutoDepthLabel: true,
       materialHatchSettings: {
         // NEN47-5: Gewapend beton TPG - solid gray fill
         concrete: { hatchType: 'solid', hatchAngle: 0, hatchSpacing: 50, hatchColor: '#C0C0C0', hatchPatternId: 'nen47-gewapend-beton' },
@@ -874,6 +996,20 @@ export const createParametricSlice = (
     }),
 
   // ============================================================================
+  // Puntniveau
+  // ============================================================================
+
+  setPendingPuntniveau: (pending) =>
+    set((state) => {
+      state.pendingPuntniveau = pending;
+    }),
+
+  clearPendingPuntniveau: () =>
+    set((state) => {
+      state.pendingPuntniveau = null;
+    }),
+
+  // ============================================================================
   // Pile Dialog
   // ============================================================================
 
@@ -1148,6 +1284,28 @@ export const createParametricSlice = (
     }),
 
   // ============================================================================
+  // Pile Types
+  // ============================================================================
+
+  addPileType: (pileType) =>
+    set((state) => {
+      state.pileTypes.push(pileType);
+    }),
+
+  updatePileType: (id, updates) =>
+    set((state) => {
+      const index = state.pileTypes.findIndex(p => p.id === id);
+      if (index !== -1) {
+        Object.assign(state.pileTypes[index], updates);
+      }
+    }),
+
+  removePileType: (id) =>
+    set((state) => {
+      state.pileTypes = state.pileTypes.filter(p => p.id !== id);
+    }),
+
+  // ============================================================================
   // Drawing Standards Dialog
   // ============================================================================
 
@@ -1196,6 +1354,33 @@ export const createParametricSlice = (
       }
     }),
 
+  setPilePlanAutoNumbering: (value) =>
+    set((state) => {
+      state.pilePlanAutoNumbering = value;
+      const preset = state.drawingStandardsPresets.find(p => p.id === state.activeDrawingStandardsId);
+      if (preset) {
+        preset.pilePlanAutoNumbering = value;
+      }
+    }),
+
+  setPilePlanAutoDimensioning: (value) =>
+    set((state) => {
+      state.pilePlanAutoDimensioning = value;
+      const preset = state.drawingStandardsPresets.find(p => p.id === state.activeDrawingStandardsId);
+      if (preset) {
+        preset.pilePlanAutoDimensioning = value;
+      }
+    }),
+
+  setPilePlanAutoDepthLabel: (value) =>
+    set((state) => {
+      state.pilePlanAutoDepthLabel = value;
+      const preset = state.drawingStandardsPresets.find(p => p.id === state.activeDrawingStandardsId);
+      if (preset) {
+        preset.pilePlanAutoDepthLabel = value;
+      }
+    }),
+
   // ============================================================================
   // Materials Dialog
   // ============================================================================
@@ -1222,6 +1407,25 @@ export const createParametricSlice = (
   closeWallTypesDialog: () =>
     set((state) => {
       state.wallTypesDialogOpen = false;
+    }),
+
+  // ============================================================================
+  // Pile Symbols Dialog
+  // ============================================================================
+
+  openPileSymbolsDialog: () =>
+    set((state) => {
+      state.pileSymbolsDialogOpen = true;
+    }),
+
+  closePileSymbolsDialog: () =>
+    set((state) => {
+      state.pileSymbolsDialogOpen = false;
+    }),
+
+  setPileSymbolOrder: (groupKey, order) =>
+    set((state) => {
+      state.pileSymbolOrder[groupKey] = order;
     }),
 
   // ============================================================================
@@ -1252,6 +1456,23 @@ export const createParametricSlice = (
       }
     }),
 
+  updatePlanSubtypeSettings: (settings) =>
+    set((state) => {
+      if (settings.pilePlan) {
+        state.planSubtypeSettings.pilePlan = { ...state.planSubtypeSettings.pilePlan, ...settings.pilePlan };
+      }
+      if (settings.structuralPlan) {
+        state.planSubtypeSettings.structuralPlan = { ...state.planSubtypeSettings.structuralPlan, ...settings.structuralPlan };
+      }
+      if (settings.floorPlan) {
+        state.planSubtypeSettings.floorPlan = { ...state.planSubtypeSettings.floorPlan, ...settings.floorPlan };
+      }
+      const preset = state.drawingStandardsPresets.find(p => p.id === state.activeDrawingStandardsId);
+      if (preset) {
+        preset.planSubtypeSettings = { ...state.planSubtypeSettings };
+      }
+    }),
+
   // ============================================================================
   // Drawing Standards Presets
   // ============================================================================
@@ -1267,6 +1488,11 @@ export const createParametricSlice = (
         gridDimensionLineOffset: state.gridDimensionLineOffset,
         materialHatchSettings: { ...state.materialHatchSettings },
         sectionGridlineDimensioning: state.sectionGridlineDimensioning,
+        pilePlanAutoNumbering: state.pilePlanAutoNumbering,
+        pilePlanAutoDimensioning: state.pilePlanAutoDimensioning,
+        pilePlanAutoDepthLabel: state.pilePlanAutoDepthLabel,
+        planSubtypeSettings: { ...state.planSubtypeSettings },
+        pileTypes: [...state.pileTypes],
       });
       state.activeDrawingStandardsId = id;
     });
@@ -1282,6 +1508,13 @@ export const createParametricSlice = (
       state.gridDimensionLineOffset = preset.gridDimensionLineOffset ?? 300;
       state.materialHatchSettings = { ...preset.materialHatchSettings };
       state.sectionGridlineDimensioning = preset.sectionGridlineDimensioning ?? true;
+      state.pilePlanAutoNumbering = preset.pilePlanAutoNumbering ?? true;
+      state.pilePlanAutoDimensioning = preset.pilePlanAutoDimensioning ?? true;
+      state.pilePlanAutoDepthLabel = preset.pilePlanAutoDepthLabel ?? true;
+      state.planSubtypeSettings = preset.planSubtypeSettings ?? { ...DEFAULT_PLAN_SUBTYPE_SETTINGS };
+      if (preset.pileTypes) {
+        state.pileTypes = [...preset.pileTypes];
+      }
     }),
 
   deleteDrawingStandards: (id) =>
@@ -1298,6 +1531,13 @@ export const createParametricSlice = (
           state.gridDimensionLineOffset = defaultPreset.gridDimensionLineOffset ?? 300;
           state.materialHatchSettings = { ...defaultPreset.materialHatchSettings };
           state.sectionGridlineDimensioning = defaultPreset.sectionGridlineDimensioning ?? true;
+          state.pilePlanAutoNumbering = defaultPreset.pilePlanAutoNumbering ?? true;
+          state.pilePlanAutoDimensioning = defaultPreset.pilePlanAutoDimensioning ?? true;
+          state.pilePlanAutoDepthLabel = defaultPreset.pilePlanAutoDepthLabel ?? true;
+          state.planSubtypeSettings = defaultPreset.planSubtypeSettings ?? { ...DEFAULT_PLAN_SUBTYPE_SETTINGS };
+          if (defaultPreset.pileTypes) {
+            state.pileTypes = [...defaultPreset.pileTypes];
+          }
         }
       }
     }),

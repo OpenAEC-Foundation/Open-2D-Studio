@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useAppStore } from '../../state/appStore';
 import { getShapeBounds } from '../../engine/geometry/GeometryUtils';
+import { findConnectedShapes } from '../../engine/geometry/ConnectedShapeDetection';
 import { getNextSectionLabel } from '../drawing/useSectionCalloutDrawing';
 import type { Point, Shape } from '../../types/geometry';
 
@@ -141,6 +142,7 @@ const TWO_KEY_SHORTCUTS: Record<string, string> = {
   'be': 'beam',     // Structural beam
   'gl': 'gridline', // Structural grid line
   'pi': 'pile',     // Foundation pile
+  'pn': 'puntniveau', // Puntniveau zone
   'ct': 'cpt',      // CPT (Cone Penetration Test) marker
   'wa': 'wall',     // Structural wall
   'al': 'align',    // Align tool
@@ -202,8 +204,8 @@ export function useKeyboardShortcuts() {
     openBeamDialog,
     setPendingGridline,
     setPendingLevel,
-    openPileDialog,
     setPendingPile,
+    setPendingPuntniveau,
     setPendingCPT,
     setPendingWall,
     lastUsedWallTypeId,
@@ -362,15 +364,22 @@ export function useKeyboardShortcuts() {
                 setActiveTool('level');
               }
             } else if (tool === 'pile') {
-              // Pile opens a dialog
+              // Pile starts placement with defaults (like CPT)
               if (editorMode === 'drawing') {
-                openPileDialog();
+                setPendingPile({ label: '', diameter: 600, fontSize: 200, showCross: true, contourType: 'circle', fillPattern: 6 });
+                setActiveTool('pile');
+              }
+            } else if (tool === 'puntniveau') {
+              // Puntniveau starts polygon drawing with defaults
+              if (editorMode === 'drawing') {
+                setPendingPuntniveau({ puntniveauNAP: -12.5, fontSize: 300 });
+                setActiveTool('puntniveau');
               }
             } else if (tool === 'cpt') {
               // CPT starts placement with defaults
               if (editorMode === 'drawing') {
                 setPendingCPT({
-                  name: 'CPT-01',
+                  name: '01',
                   fontSize: 150,
                   markerSize: 300,
                 });
@@ -442,7 +451,7 @@ export function useKeyboardShortcuts() {
                       arc: 'arc', polyline: 'polyline', ellipse: 'ellipse',
                       spline: 'spline', text: 'text', dimension: 'dimension',
                       hatch: 'hatch', gridline: 'gridline', level: 'level', wall: 'wall',
-                      slab: 'slab', beam: 'beam', pile: 'pile', cpt: 'cpt', space: 'space',
+                      slab: 'slab', beam: 'beam', pile: 'pile', puntniveau: 'puntniveau', cpt: 'cpt', space: 'space',
                       'plate-system': 'plate-system', 'section-callout': 'section-callout',
                       'spot-elevation': 'spot-elevation',
                     };
@@ -499,11 +508,20 @@ export function useKeyboardShortcuts() {
                         diameter: pl.diameter || 300,
                         fontSize: pl.fontSize || 150,
                         showCross: pl.showCross ?? true,
+                        pileTypeId: pl.pileTypeId,
+                        contourType: pl.contourType,
+                        fillPattern: pl.fillPattern,
+                      });
+                    } else if (mappedTool === 'puntniveau') {
+                      const pnv = selShape as any;
+                      setPendingPuntniveau({
+                        puntniveauNAP: pnv.puntniveauNAP ?? -12.5,
+                        fontSize: pnv.fontSize || 300,
                       });
                     } else if (mappedTool === 'cpt') {
                       const cp = selShape as any;
                       setPendingCPT({
-                        name: cp.name || 'CPT-01',
+                        name: cp.name || '01',
                         fontSize: cp.fontSize || 150,
                         markerSize: cp.markerSize || 300,
                       });
@@ -639,11 +657,19 @@ export function useKeyboardShortcuts() {
           deselectAll();
           return;
         }
+        // Clear pre-selection if active
+        {
+          const s = useAppStore.getState();
+          if (s.preSelectedShapeIds.length > 0) {
+            s.setPreSelectedShapes([]);
+            return;
+          }
+        }
         setActiveTool('select');
         return;
       }
 
-      // TAB (no modifiers): toggle plate system edit mode
+      // TAB (no modifiers): pre-select connected shapes OR toggle plate system edit mode
       if (key === 'tab' && !ctrl && !shift) {
         // If already in plate system edit mode, exit it
         if (plateSystemEditMode) {
@@ -658,6 +684,22 @@ export function useKeyboardShortcuts() {
             }
           }
           return;
+        }
+        // If hovering over a wall/line/beam in select mode, pre-select connected chain
+        if (activeTool === 'select') {
+          const s = useAppStore.getState();
+          if (s.hoveredShapeId) {
+            const hoveredShape = s.shapes.find(sh => sh.id === s.hoveredShapeId);
+            if (hoveredShape && ['wall', 'line', 'beam'].includes(hoveredShape.type)) {
+              const drawingShapes = s.shapes.filter(sh => sh.drawingId === s.activeDrawingId);
+              const connected = findConnectedShapes(s.hoveredShapeId, drawingShapes);
+              if (connected.length > 0) {
+                s.setPreSelectedShapes(connected);
+                e.preventDefault();
+                return;
+              }
+            }
+          }
         }
         // If a plate system is selected (or a child beam of one), enter edit mode
         if (activeTool === 'select' && selectedShapeIds.length > 0) {
@@ -956,6 +998,7 @@ export function useKeyboardShortcuts() {
     documentOrder,
     openBeamDialog,
     setPendingPile,
+    setPendingPuntniveau,
     setPendingSectionCallout,
     setPendingSpace,
     setFindReplaceDialogOpen,

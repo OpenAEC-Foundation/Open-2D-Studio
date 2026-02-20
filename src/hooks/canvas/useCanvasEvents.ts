@@ -36,6 +36,7 @@ import { useCPTDrawing } from '../drawing/useCPTDrawing';
 import { useWallDrawing } from '../drawing/useWallDrawing';
 import { useSlabDrawing } from '../drawing/useSlabDrawing';
 import { useLevelDrawing } from '../drawing/useLevelDrawing';
+import { usePuntniveauDrawing } from '../drawing/usePuntniveauDrawing';
 import { useLeaderDrawing } from '../drawing/useLeaderDrawing';
 import { useSectionCalloutDrawing } from '../drawing/useSectionCalloutDrawing';
 import { useSpaceDrawing } from '../drawing/useSpaceDrawing';
@@ -64,6 +65,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
   const wallDrawing = useWallDrawing();
   const slabDrawing = useSlabDrawing();
   const levelDrawing = useLevelDrawing();
+  const puntniveauDrawing = usePuntniveauDrawing();
   const leaderDrawing = useLeaderDrawing();
   const sectionCalloutDrawing = useSectionCalloutDrawing();
   const spaceDrawing = useSpaceDrawing();
@@ -96,6 +98,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
     pendingWall,
     pendingSlab,
     pendingLevel,
+    pendingPuntniveau,
     pendingSectionCallout,
     pendingSpace,
     pendingPlateSystem,
@@ -468,6 +471,15 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
         }
       }
 
+      // Handle puntniveau drawing (multi-click polygon)
+      if (activeTool === 'puntniveau' && pendingPuntniveau) {
+        deselectAll();
+        if (puntniveauDrawing.handlePuntniveauClick(snappedPos, e.shiftKey)) {
+          snapDetection.clearTracking();
+          return;
+        }
+      }
+
       // Handle plate system drawing (multi-click polygon)
       if (activeTool === 'plate-system' && pendingPlateSystem) {
         deselectAll();
@@ -793,6 +805,17 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
             break;
           }
 
+          // If pre-selected shapes exist, confirm them as selection on click
+          {
+            const s = useAppStore.getState();
+            if (s.preSelectedShapeIds.length > 0) {
+              boundaryEditing.deselectBoundary();
+              s.selectShapes(s.preSelectedShapeIds);
+              s.setPreSelectedShapes([]);
+              break;
+            }
+          }
+
           if (shapeId) {
             boundaryEditing.deselectBoundary();
             // Ctrl or Shift for additive/toggle selection
@@ -1112,6 +1135,15 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
         return;
       }
 
+      // Puntniveau drawing preview (snap detection always runs so user can snap before first click)
+      if (activeTool === 'puntniveau' && pendingPuntniveau && editorMode === 'drawing') {
+        const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
+        const basePoint = puntniveauDrawing.getPuntniveauBasePoint();
+        const snapResult = snapDetection.snapPoint(worldPos, basePoint ?? undefined);
+        puntniveauDrawing.updatePuntniveauPreview(snapResult.point, e.shiftKey);
+        return;
+      }
+
       // Plate system drawing preview (snap detection always runs so user can snap before first click)
       if (activeTool === 'plate-system' && pendingPlateSystem && editorMode === 'drawing') {
         const worldPos = screenToWorld(screenPos.x, screenPos.y, viewport);
@@ -1213,7 +1245,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
         setHoveredShapeId(null);
       }
     },
-    [panZoom, annotationEditing, viewportEditing, editorMode, viewport, boundaryEditing, gripEditing, boxSelection, shapeDrawing, snapDetection, activeTool, dimensionMode, pickLinesMode, findShapeAtPoint, setHoveredShapeId, canvasRef, modifyTools, beamDrawing, gridlineDrawing, levelDrawing, pileDrawing, cptDrawing, wallDrawing, leaderDrawing, sectionCalloutDrawing, plateSystemDrawing, pendingBeam, pendingGridline, pendingLevel, pendingPile, pendingCPT, pendingWall, pendingSectionCallout, pendingPlateSystem, sourceSnapAngle, setCursor2D, modifyOrtho]
+    [panZoom, annotationEditing, viewportEditing, editorMode, viewport, boundaryEditing, gripEditing, boxSelection, shapeDrawing, snapDetection, activeTool, dimensionMode, pickLinesMode, findShapeAtPoint, setHoveredShapeId, canvasRef, modifyTools, beamDrawing, gridlineDrawing, levelDrawing, puntniveauDrawing, pileDrawing, cptDrawing, wallDrawing, leaderDrawing, sectionCalloutDrawing, plateSystemDrawing, pendingBeam, pendingGridline, pendingLevel, pendingPuntniveau, pendingPile, pendingCPT, pendingWall, pendingSectionCallout, pendingPlateSystem, sourceSnapAngle, setCursor2D, modifyOrtho]
   );
 
   /**
@@ -1354,6 +1386,13 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
         return;
       }
 
+      // Cancel puntniveau drawing
+      if (pendingPuntniveau) {
+        puntniveauDrawing.cancelPuntniveauDrawing();
+        setActiveTool('select');
+        return;
+      }
+
       if (pendingPile) {
         pileDrawing.cancelPileDrawing();
         setActiveTool('select');
@@ -1381,6 +1420,20 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
         } else {
           // Cancel: not enough points
           slabDrawing.cancelSlabDrawing();
+          setActiveTool('select');
+        }
+        return;
+      }
+
+      // Finish or cancel puntniveau drawing on right-click
+      if (pendingPuntniveau) {
+        if (puntniveauDrawing.pointCount >= 3) {
+          // Finish: create the puntniveau with current points
+          puntniveauDrawing.finishPuntniveauDrawing();
+          snapDetection.clearTracking();
+        } else {
+          // Cancel: not enough points
+          puntniveauDrawing.cancelPuntniveauDrawing();
           setActiveTool('select');
         }
         return;
@@ -1517,7 +1570,7 @@ export function useCanvasEvents(canvasRef: React.RefObject<HTMLCanvasElement>) {
     },
     [editorMode, annotationEditing, shapeDrawing, activeTool, setActiveTool, snapDetection, modifyTools, setPrintDialogOpen,
      panZoom, viewport, findShapeAtPoint, parametricShapes, selectedShapeIds, explodeParametricShapes, addShapes,
-     pendingSection, clearPendingSection, setSectionPlacementPreview, pendingBeam, beamDrawing, pendingGridline, gridlineDrawing, pendingLevel, levelDrawing, pendingPile, pileDrawing, pendingCPT, cptDrawing, pendingWall, wallDrawing, pendingSectionCallout, sectionCalloutDrawing, pendingSpace, spaceDrawing, pendingPlateSystem, plateSystemDrawing, leaderDrawing]
+     pendingSection, clearPendingSection, setSectionPlacementPreview, pendingBeam, beamDrawing, pendingGridline, gridlineDrawing, pendingLevel, levelDrawing, pendingPuntniveau, puntniveauDrawing, pendingPile, pileDrawing, pendingCPT, cptDrawing, pendingWall, wallDrawing, pendingSectionCallout, sectionCalloutDrawing, pendingSpace, spaceDrawing, pendingPlateSystem, plateSystemDrawing, leaderDrawing]
   );
 
   /**

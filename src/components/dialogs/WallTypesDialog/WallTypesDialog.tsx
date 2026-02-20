@@ -17,7 +17,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { X, Plus, Trash2, ChevronDown, ChevronRight, Search } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
-import type { ColumnShapeType, BeamTypeProfileType, MaterialCategory } from '../../../types/geometry';
+import type { ColumnShapeType, BeamTypeProfileType, MaterialCategory, PileShapeType, IfcPilePredefinedType } from '../../../types/geometry';
 import { MATERIAL_CATEGORIES, getMaterialCategoryInfo } from '../../../types/geometry';
 import { PROFILE_PRESETS, getAvailableStandards, getCategoriesForStandard } from '../../../services/parametric/profileLibrary';
 import type { ProfilePreset } from '../../../types/parametric';
@@ -27,7 +27,7 @@ interface WallTypesDialogProps {
   onClose: () => void;
 }
 
-type IfcTypesTab = 'wall' | 'slab' | 'column' | 'beam' | 'profiles';
+type IfcTypesTab = 'wall' | 'slab' | 'column' | 'beam' | 'pile' | 'profiles';
 
 /**
  * NumericInput - Local-state numeric input that only commits on blur or Enter.
@@ -77,6 +77,7 @@ export function WallTypesDialog({ isOpen, onClose }: WallTypesDialogProps) {
     slabTypes, addSlabType, updateSlabType, deleteSlabType,
     columnTypes, addColumnType, updateColumnType, deleteColumnType,
     beamTypes, addBeamType, updateBeamType, deleteBeamType,
+    pileTypes, addPileType, updatePileType, removePileType,
   } = useAppStore();
 
   // Active tab
@@ -123,6 +124,15 @@ export function WallTypesDialog({ isOpen, onClose }: WallTypesDialogProps) {
   const [newBeamProfileType, setNewBeamProfileType] = useState<BeamTypeProfileType>('i-beam');
   const [newBeamWidth, setNewBeamWidth] = useState(200);
   const [newBeamHeight, setNewBeamHeight] = useState(200);
+
+  // Pile tab state
+  const [selectedPileTypeId, setSelectedPileTypeId] = useState<string | null>(null);
+  const [showPileAddForm, setShowPileAddForm] = useState(false);
+  const [newPileName, setNewPileName] = useState('');
+  const [newPileShape, setNewPileShape] = useState<PileShapeType>('round');
+  const [newPileMethod, setNewPileMethod] = useState('driven');
+  const [newPileDiameter, setNewPileDiameter] = useState(300);
+  const [newPileIfcType, setNewPileIfcType] = useState<IfcPilePredefinedType>('DRIVEN');
 
   // Profiles tab state
   const [profileSearchQuery, setProfileSearchQuery] = useState('');
@@ -451,6 +461,16 @@ export function WallTypesDialog({ isOpen, onClose }: WallTypesDialogProps) {
             onClick={() => setActiveTab('beam')}
           >
             Beam Types
+          </button>
+          <button
+            className={`px-4 py-1.5 text-xs font-medium transition-colors ${
+              activeTab === 'pile'
+                ? 'text-cad-accent border-b-2 border-cad-accent bg-cad-surface'
+                : 'text-cad-text-dim hover:text-cad-text hover:bg-cad-hover'
+            }`}
+            onClick={() => setActiveTab('pile')}
+          >
+            Pile Types
           </button>
           <button
             className={`px-4 py-1.5 text-xs font-medium transition-colors ${
@@ -1228,6 +1248,184 @@ export function WallTypesDialog({ isOpen, onClose }: WallTypesDialogProps) {
                 )}
               </div>
             </>
+          )}
+
+          {/* ======== PILE TYPES TAB ======== */}
+          {activeTab === 'pile' && (
+            <div className="flex flex-col flex-1 min-h-0">
+              {/* Toolbar */}
+              <div className="flex items-center gap-2 px-3 py-2 border-b border-cad-border">
+                <button
+                  onClick={() => setShowPileAddForm(!showPileAddForm)}
+                  className="flex items-center gap-1 px-2 h-6 text-[10px] bg-cad-bg border border-cad-border text-cad-text hover:bg-cad-hover rounded"
+                >
+                  <Plus size={12} /> Add Pile Type
+                </button>
+                {selectedPileTypeId && (
+                  <button
+                    onClick={() => {
+                      removePileType(selectedPileTypeId);
+                      setSelectedPileTypeId(null);
+                    }}
+                    className="flex items-center gap-1 px-2 h-6 text-[10px] bg-cad-bg border border-cad-border text-red-400 hover:bg-red-900/20 rounded"
+                  >
+                    <Trash2 size={12} /> Delete
+                  </button>
+                )}
+              </div>
+
+              {/* Add form */}
+              {showPileAddForm && (
+                <div className="flex items-center gap-2 px-3 py-2 border-b border-cad-border bg-cad-surface">
+                  <input
+                    type="text"
+                    value={newPileName}
+                    onChange={(e) => setNewPileName(e.target.value)}
+                    placeholder="Name"
+                    className="flex-1 px-2 h-6 text-[10px] bg-cad-bg border border-cad-border text-cad-text rounded"
+                  />
+                  <select
+                    value={newPileShape}
+                    onChange={(e) => setNewPileShape(e.target.value as PileShapeType)}
+                    className="px-1 h-6 text-[10px] bg-cad-bg border border-cad-border text-cad-text rounded"
+                  >
+                    <option value="round">Round</option>
+                    <option value="square">Square</option>
+                  </select>
+                  <input
+                    type="text"
+                    value={newPileMethod}
+                    onChange={(e) => setNewPileMethod(e.target.value)}
+                    placeholder="Method"
+                    className="w-20 px-2 h-6 text-[10px] bg-cad-bg border border-cad-border text-cad-text rounded"
+                  />
+                  <NumericInput
+                    value={newPileDiameter}
+                    onCommit={setNewPileDiameter}
+                    min={50}
+                    placeholder="Ø mm"
+                    className="w-16 px-2 h-6 text-[10px] bg-cad-bg border border-cad-border text-cad-text rounded"
+                  />
+                  <select
+                    value={newPileIfcType}
+                    onChange={(e) => setNewPileIfcType(e.target.value as IfcPilePredefinedType)}
+                    className="px-1 h-6 text-[10px] bg-cad-bg border border-cad-border text-cad-text rounded"
+                  >
+                    <option value="DRIVEN">DRIVEN</option>
+                    <option value="BORED">BORED</option>
+                    <option value="JETGROUTING">JETGROUTING</option>
+                    <option value="COHESION">COHESION</option>
+                    <option value="FRICTION">FRICTION</option>
+                    <option value="SUPPORT">SUPPORT</option>
+                    <option value="USERDEFINED">USERDEFINED</option>
+                  </select>
+                  <button
+                    onClick={() => {
+                      if (newPileName.trim()) {
+                        addPileType({
+                          id: `custom-${Date.now()}`,
+                          name: newPileName.trim(),
+                          shape: newPileShape,
+                          method: newPileMethod,
+                          defaultDiameter: newPileDiameter,
+                          ifcPredefinedType: newPileIfcType,
+                        });
+                        setNewPileName('');
+                        setShowPileAddForm(false);
+                      }
+                    }}
+                    className="px-2 h-6 text-[10px] bg-cad-accent text-white hover:bg-cad-accent/80 rounded"
+                  >
+                    Add
+                  </button>
+                </div>
+              )}
+
+              {/* Pile types table */}
+              <div className="flex-1 overflow-auto">
+                <table className="w-full text-[10px]">
+                  <thead className="sticky top-0 bg-cad-surface">
+                    <tr className="border-b border-cad-border text-cad-text-dim">
+                      <th className="text-left px-3 py-1.5 font-medium">Name</th>
+                      <th className="text-left px-2 py-1.5 font-medium w-20">Shape</th>
+                      <th className="text-left px-2 py-1.5 font-medium w-24">Method</th>
+                      <th className="text-left px-2 py-1.5 font-medium w-20">Diameter</th>
+                      <th className="text-left px-2 py-1.5 font-medium w-28">IFC Type</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pileTypes.map((pt) => (
+                      <tr
+                        key={pt.id}
+                        className={`border-b border-cad-border/50 cursor-pointer hover:bg-cad-hover ${
+                          selectedPileTypeId === pt.id ? 'bg-cad-accent/20' : ''
+                        }`}
+                        onClick={() => setSelectedPileTypeId(pt.id === selectedPileTypeId ? null : pt.id)}
+                      >
+                        <td className="px-3 py-1">
+                          <input
+                            type="text"
+                            value={pt.name}
+                            onChange={(e) => updatePileType(pt.id, { name: e.target.value })}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-full bg-transparent text-cad-text border-none outline-none focus:bg-cad-bg focus:border-cad-border focus:border px-1 rounded"
+                          />
+                        </td>
+                        <td className="px-2 py-1">
+                          <select
+                            value={pt.shape}
+                            onChange={(e) => updatePileType(pt.id, { shape: e.target.value as PileShapeType })}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-full bg-transparent text-cad-text border-none outline-none focus:bg-cad-bg rounded"
+                          >
+                            <option value="round">Round</option>
+                            <option value="square">Square</option>
+                          </select>
+                        </td>
+                        <td className="px-2 py-1">
+                          <input
+                            type="text"
+                            value={pt.method}
+                            onChange={(e) => updatePileType(pt.id, { method: e.target.value })}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-full bg-transparent text-cad-text border-none outline-none focus:bg-cad-bg focus:border-cad-border focus:border px-1 rounded"
+                          />
+                        </td>
+                        <td className="px-2 py-1">
+                          <NumericInput
+                            value={pt.defaultDiameter}
+                            onCommit={(v) => updatePileType(pt.id, { defaultDiameter: v })}
+                            min={50}
+                            className="w-full bg-transparent text-cad-text border-none outline-none focus:bg-cad-bg focus:border-cad-border focus:border px-1 rounded"
+                          />
+                        </td>
+                        <td className="px-2 py-1">
+                          <select
+                            value={pt.ifcPredefinedType}
+                            onChange={(e) => updatePileType(pt.id, { ifcPredefinedType: e.target.value as IfcPilePredefinedType })}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-full bg-transparent text-cad-text border-none outline-none focus:bg-cad-bg rounded"
+                          >
+                            <option value="DRIVEN">DRIVEN</option>
+                            <option value="BORED">BORED</option>
+                            <option value="JETGROUTING">JETGROUTING</option>
+                            <option value="COHESION">COHESION</option>
+                            <option value="FRICTION">FRICTION</option>
+                            <option value="SUPPORT">SUPPORT</option>
+                            <option value="USERDEFINED">USERDEFINED</option>
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {pileTypes.length === 0 && (
+                  <div className="flex items-center justify-center py-8 text-xs text-cad-text-dim">
+                    No pile types defined. Click "Add Pile Type" to create one.
+                  </div>
+                )}
+              </div>
+            </div>
           )}
 
           {/* ======== PROFILES TAB ======== */}

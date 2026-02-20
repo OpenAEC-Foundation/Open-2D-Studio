@@ -14,6 +14,7 @@ import type { DimensionShape } from '../types/dimension';
 import { DIM_ASSOCIATE_STYLE } from '../constants/cadDefaults';
 import { calculateDimensionValue, formatDimAssociateValue } from '../engine/geometry/DimensionUtils';
 import { useAppStore } from '../state/appStore';
+import { classifyGridlineOrientation, groupGridlinesByAngle, getGridlineAngleDeg } from './gridlineUtils';
 
 /**
  * Helper: create a DimensionShape for grid dimensioning using DimAssociate style.
@@ -42,6 +43,41 @@ function makeDim(
     points: [p1, p2],
     dimensionLineOffset: offset,
     linearDirection: direction,
+    value: formattedValue,
+    valueOverridden: false,
+    dimensionStyle: { ...DIM_ASSOCIATE_STYLE },
+    isGridDimension: true,
+    dimensionStyleName: 'DimAssociate',
+    linkedGridlineIds,
+  };
+}
+
+/**
+ * Helper: create an aligned DimensionShape for angled grid dimensioning.
+ * Aligned dimensions measure the true distance between points and the
+ * dimension line runs perpendicular to the gridline direction.
+ */
+function makeAlignedDim(
+  p1: Point,
+  p2: Point,
+  offset: number,
+  drawingId: string,
+  layerId: string,
+  linkedGridlineIds?: [string, string],
+): DimensionShape {
+  const value = calculateDimensionValue([p1, p2], 'aligned');
+  const formattedValue = formatDimAssociateValue(value);
+  return {
+    id: crypto.randomUUID(),
+    type: 'dimension',
+    layerId,
+    drawingId,
+    style: { strokeColor: '#000000', strokeWidth: 2.5, lineStyle: 'solid' as const },
+    visible: true,
+    locked: false,
+    dimensionType: 'aligned',
+    points: [p1, p2],
+    dimensionLineOffset: offset,
     value: formattedValue,
     valueOverridden: false,
     dimensionStyle: { ...DIM_ASSOCIATE_STYLE },
@@ -151,9 +187,17 @@ export function regenerateGridDimensions(options: GridDimensionOptions = DEFAULT
   );
   if (gridlines.length < 2) return;
 
-  const isVert = (g: GridlineShape) => Math.abs(g.end.y - g.start.y) > Math.abs(g.end.x - g.start.x);
-  const verticals = gridlines.filter(isVert);
-  const horizontals = gridlines.filter(g => !isVert(g));
+  // Classify gridlines into axis-aligned (vertical/horizontal) and angled groups
+  const verticals: GridlineShape[] = [];
+  const horizontals: GridlineShape[] = [];
+  const angledGridlines: GridlineShape[] = [];
+
+  for (const g of gridlines) {
+    const orient = classifyGridlineOrientation(g.start, g.end);
+    if (orient === 'vertical') verticals.push(g);
+    else if (orient === 'horizontal') horizontals.push(g);
+    else angledGridlines.push(g);
+  }
 
   // Calculate scale-adjusted offsets (matches renderer scaleFactor = LINE_DASH_REFERENCE_SCALE / drawingScale)
   const drawingScale = state.drawings.find(d => d.id === activeDrawingId)?.scale || 0.02;
@@ -266,6 +310,77 @@ export function regenerateGridDimensions(options: GridDimensionOptions = DEFAULT
         newDims.push(makeDim(
           { x: refX, y: y1 }, { x: refX, y: y2 },
           spanOffset, 'vertical',
+          activeDrawingId, activeLayerId,
+          [sorted[i].id, sorted[i + 1].id]
+        ));
+      }
+    }
+  }
+
+  // Angled gridline groups → aligned dimensions perpendicular to their direction.
+  // Each angle group gets its own independent dimension set.
+  if (angledGridlines.length >= 2) {
+    const angleGroups = groupGridlinesByAngle(angledGridlines);
+
+    for (const group of angleGroups) {
+      if (group.length < 2) continue;
+
+      // All gridlines in this group are roughly parallel.
+      // Sort by perpendicular distance from an arbitrary reference line through the first gridline.
+      const refAngle = getGridlineAngleDeg(group[0]) * Math.PI / 180;
+      // Perpendicular unit vector (used as sort axis)
+      const perpX = -Math.sin(refAngle);
+      const perpY = Math.cos(refAngle);
+
+      const sorted = [...group].sort((a, b) => {
+        const midA = { x: (a.start.x + a.end.x) / 2, y: (a.start.y + a.end.y) / 2 };
+        const midB = { x: (b.start.x + b.end.x) / 2, y: (b.start.y + b.end.y) / 2 };
+        return (midA.x * perpX + midA.y * perpY) - (midB.x * perpX + midB.y * perpY);
+      });
+
+      // Use midpoints of each gridline as measurement points
+      const midpoints = sorted.map(g => ({
+        x: (g.start.x + g.end.x) / 2,
+        y: (g.start.y + g.end.y) / 2,
+      }));
+
+      // Project midpoints onto the perpendicular axis to get measurement points
+      // that lie along a line perpendicular to the gridline direction
+      const lineDir = { x: Math.cos(refAngle), y: Math.sin(refAngle) };
+
+      // Place dimension line at the "start" end of gridlines (bubble inner edge)
+      const bubbleEdges = sorted.map(g => getBubbleInnerEdge(g, 'start', scaledExt));
+
+      // Find the most extreme point along the gridline direction to place the dimension line
+      const projections = bubbleEdges.map(pt => pt.x * lineDir.x + pt.y * lineDir.y);
+      const minProj = Math.min(...projections);
+
+      // Compute dimension measurement points: project each midpoint onto the perpendicular axis,
+      // placed at the reference distance along the gridline direction
+      const dimPoints: Point[] = midpoints.map(mp => {
+        const perpDist = mp.x * perpX + mp.y * perpY;
+        return {
+          x: lineDir.x * minProj + perpX * perpDist - lineDir.x * rowOffset,
+          y: lineDir.y * minProj + perpY * perpDist - lineDir.y * rowOffset,
+        };
+      });
+
+      // Total dimension
+      if (includeTotal && sorted.length >= 2) {
+        newDims.push(makeAlignedDim(
+          dimPoints[0], dimPoints[dimPoints.length - 1],
+          0,
+          activeDrawingId, activeLayerId,
+          [sorted[0].id, sorted[sorted.length - 1].id]
+        ));
+      }
+
+      // Span dimensions
+      const spanOffset = includeTotal ? -rowOffset : 0;
+      for (let i = 0; i < sorted.length - 1; i++) {
+        newDims.push(makeAlignedDim(
+          dimPoints[i], dimPoints[i + 1],
+          spanOffset,
           activeDrawingId, activeLayerId,
           [sorted[i].id, sorted[i + 1].id]
         ));

@@ -26,14 +26,11 @@ import {
   Check,
   Palette,
   Search,
-  ArrowUpToLine,
-  ArrowUp,
-  ArrowDown,
-  ArrowDownToLine,
   ImageIcon,
   Box,
   Orbit,
   Footprints,
+  Shapes,
   Layers,
   Eye,
   EyeOff,
@@ -87,6 +84,7 @@ import {
   LevelIcon,
   SectionDetailIcon,
   PileIcon,
+  PuntniveauIcon,
   CPTIcon,
   WallIcon,
   SlabIcon,
@@ -99,7 +97,7 @@ import {
 import { useFileOperations } from '../../../hooks/file/useFileOperations';
 import { SelectionFilterBar } from './SelectionFilterBar';
 import { QuickAccessBar } from './QuickAccessBar';
-import type { Shape, BeamShape } from '../../../types/geometry';
+import type { Shape, BeamShape, PileShape, PileType } from '../../../types/geometry';
 import type { ProjectStructure } from '../../../state/slices/parametricSlice';
 import { triggerBonsaiSync, saveBonsaiSyncSettings, generateBlenderWatcherScript } from '../../../services/bonsaiSync';
 import { ALL_IFC_CATEGORIES, IFC_CATEGORY_LABELS, getIfcCategory } from '../../../utils/ifcCategoryUtils';
@@ -211,7 +209,7 @@ function useTooltip(delay = 400) {
   return { show, ref, onEnter, onLeave };
 }
 
-type RibbonTab = 'home' | 'modify' | 'structural' | 'view' | 'tools' | 'selection' | string;
+type RibbonTab = 'home' | 'modify' | 'structural' | 'view' | 'tools' | string;
 
 interface RibbonButtonProps {
   icon: React.ReactNode;
@@ -569,6 +567,86 @@ function ShapeModeSelector({ mode, onChange }: ShapeModeSelectorProps) {
   );
 }
 
+// Pile type labels for the ribbon table
+const PILE_TYPE_LABELS: Record<PileType, string> = {
+  'prefab-concrete': 'Prefab',
+  'steel-tube': 'Steel',
+  'vibro': 'Vibro',
+  'screw': 'Screw',
+};
+
+/** Compact pile schedule table for the Pile Plan ribbon tab */
+function PilePlanRibbonTable() {
+  const shapes = useAppStore(s => s.shapes);
+  const activeDrawingId = useAppStore(s => s.activeDrawingId);
+  const selectShapes = useAppStore(s => s.selectShapes);
+  const selectedShapeIds = useAppStore(s => s.selectedShapeIds);
+
+  const piles = useMemo(() =>
+    shapes.filter((s): s is PileShape => s.type === 'pile' && s.drawingId === activeDrawingId),
+  [shapes, activeDrawingId]);
+
+  const selectedSet = useMemo(() => new Set(selectedShapeIds), [selectedShapeIds]);
+
+  // Summary by type
+  const summary = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of piles) {
+      const key = p.pileType ? PILE_TYPE_LABELS[p.pileType] || p.pileType : '?';
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return Array.from(counts.entries()).map(([t, c]) => `${c}\u00d7${t}`).join(' ');
+  }, [piles]);
+
+  if (piles.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full px-4">
+        <span className="text-[10px] text-cad-text-dim">No piles</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col" style={{ height: 66, minWidth: 200, maxWidth: 420 }}>
+      <div className="text-[10px] text-cad-text-dim px-1 py-0.5 flex-shrink-0">
+        {piles.length} pile{piles.length !== 1 ? 's' : ''} {summary && `(${summary})`}
+      </div>
+      <div className="flex-1 overflow-auto" style={{ fontSize: 10 }}>
+        <table className="w-full border-collapse">
+          <thead>
+            <tr className="text-cad-text-dim sticky top-0 bg-cad-surface">
+              <th className="text-left px-1 font-medium">Label</th>
+              <th className="text-right px-1 font-medium">X</th>
+              <th className="text-right px-1 font-medium">Y</th>
+              <th className="text-right px-1 font-medium">&Oslash;</th>
+              <th className="text-right px-1 font-medium">NAP</th>
+              <th className="text-right px-1 font-medium">Bk.</th>
+              <th className="text-left px-1 font-medium">Type</th>
+            </tr>
+          </thead>
+          <tbody>
+            {piles.map((p) => (
+              <tr
+                key={p.id}
+                onClick={() => selectShapes([p.id])}
+                className={`cursor-default ${selectedSet.has(p.id) ? 'bg-cad-accent/20' : 'hover:bg-cad-border/30'}`}
+              >
+                <td className="px-1 text-cad-text">{p.label || '\u2014'}</td>
+                <td className="px-1 text-cad-text text-right tabular-nums">{p.position.x.toFixed(0)}</td>
+                <td className="px-1 text-cad-text text-right tabular-nums">{p.position.y.toFixed(0)}</td>
+                <td className="px-1 text-cad-text text-right tabular-nums">{p.diameter.toFixed(0)}</td>
+                <td className="px-1 text-cad-text text-right tabular-nums">{p.puntniveauNAP != null ? p.puntniveauNAP.toFixed(1) : '\u2014'}</td>
+                <td className="px-1 text-cad-text text-right tabular-nums">{p.bkPaalPeil != null ? p.bkPaalPeil.toFixed(0) : '\u2014'}</td>
+                <td className="px-1 text-cad-text-dim">{p.pileType ? PILE_TYPE_LABELS[p.pileType] || p.pileType : '\u2014'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 interface RibbonProps {
   onOpenBackstage: () => void;
 }
@@ -610,7 +688,9 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
     openBeamDialog,
     setPendingGridline,
     setPendingLevel,
-    openPileDialog,
+    setPendingPuntniveau,
+    setPendingPile,
+    openPileSymbolsDialog,
     setPendingCPT,
     pendingWall,
     setPendingWall,
@@ -623,12 +703,6 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
     setPendingSectionCallout,
     setPatternManagerOpen,
     setTextStyleManagerOpen,
-
-    // Draw order
-    bringToFront,
-    bringForward,
-    sendBackward,
-    sendToBack,
 
     // Theme
     uiTheme,
@@ -692,7 +766,7 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
 
   const isSheetMode = editorMode !== 'drawing';
 
-  const { handleExportIFC } = useFileOperations();
+  const { handleExportIFC, handleExportToFolder } = useFileOperations();
 
   // Bonsai Sync handlers
   const handleBonsaiSyncToggle = useCallback(() => {
@@ -779,14 +853,6 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
     return () => document.removeEventListener('mousedown', handler);
   }, [ifcFilterOpen]);
 
-  // Auto-switch to/from the contextual "Selection" tab
-  useEffect(() => {
-    if (selectedShapeIds.length > 0 && activeTab !== 'selection') {
-      setActiveTab('selection');
-    } else if (selectedShapeIds.length === 0 && activeTab === 'selection') {
-      setActiveTab('home');
-    }
-  }, [selectedShapeIds.length]);
 
   // Count shapes per IFC category (for filter dropdown badge)
   const ifcCategoryCounts = useMemo(() => {
@@ -818,6 +884,7 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
     { id: 'home', label: 'Home' },
     { id: 'modify', label: 'Modify' },
     { id: 'structural', label: 'AEC' },
+    { id: 'pile-plan', label: 'Pile Plan' },
     { id: 'view', label: 'View' },
     { id: 'tools', label: 'Tools' },
     { id: '3d', label: '3D' },
@@ -886,14 +953,6 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
             {tab.label}
           </button>
         ))}
-        {selectedShapeIds.length > 0 && (
-          <button
-            className={`ribbon-tab contextual ${activeTab === 'selection' ? 'active' : ''}`}
-            onClick={() => setActiveTab('selection')}
-          >
-            Selection
-          </button>
-        )}
       </div>
 
       {/* Ribbon Content */}
@@ -1411,7 +1470,18 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
               <RibbonButton
                 icon={<PileIcon size={24} />}
                 label="IfcPile"
-                onClick={openPileDialog}
+                onClick={() => {
+                  setPendingPile({
+                    label: '',
+                    diameter: 600,
+                    fontSize: 200,
+                    showCross: true,
+                    contourType: 'circle',
+                    fillPattern: 6,
+                  });
+                  switchToDrawingTool('pile');
+                }}
+                active={activeTool === 'pile'}
                 disabled={isSheetMode}
                 tooltip="Place IfcPile (IfcDeepFoundation)"
                 shortcut="PI"
@@ -1421,7 +1491,7 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 label="CPT"
                 onClick={() => {
                   setPendingCPT({
-                    name: 'CPT-01',
+                    name: '01',
                     fontSize: 150,
                     markerSize: 300,
                   });
@@ -1820,6 +1890,12 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                 tooltip="Export current model as IFC4 STEP file"
               />
               <RibbonButton
+                icon={<FolderOpen size={24} />}
+                label="Export Map"
+                onClick={handleExportToFolder}
+                tooltip="Export alle formaten (SVG, DXF, IFC, JSON) naar een lokale map"
+              />
+              <RibbonButton
                 icon={<span className="text-[11px] font-mono font-bold leading-none">IFC</span>}
                 label="IFC Model"
                 onClick={() => setIfcPanelOpen(!ifcPanelOpen)}
@@ -1939,38 +2015,67 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
           </div>
         </div>
 
-        {/* Selection Tab (contextual — visible only when shapes are selected) */}
-        <div className={`ribbon-content ${activeTab === 'selection' ? 'active' : ''}`}>
-          <div className="ribbon-groups">
-            <RibbonGroup label="Draw Order">
-              <RibbonButtonStack>
-                <RibbonSmallButton
-                  icon={<ArrowUpToLine size={14} />}
-                  label="Bring Front"
-                  onClick={bringToFront}
-                  disabled={isSheetMode || selectedShapeIds.length === 0}
-                />
-                <RibbonSmallButton
-                  icon={<ArrowUp size={14} />}
-                  label="Bring Fwd"
-                  onClick={bringForward}
-                  disabled={isSheetMode || selectedShapeIds.length === 0}
-                />
-              </RibbonButtonStack>
-              <RibbonButtonStack>
-                <RibbonSmallButton
-                  icon={<ArrowDown size={14} />}
-                  label="Send Bwd"
-                  onClick={sendBackward}
-                  disabled={isSheetMode || selectedShapeIds.length === 0}
-                />
-                <RibbonSmallButton
-                  icon={<ArrowDownToLine size={14} />}
-                  label="Send Back"
-                  onClick={sendToBack}
-                  disabled={isSheetMode || selectedShapeIds.length === 0}
-                />
-              </RibbonButtonStack>
+        {/* Pile Plan Tab */}
+        <div className={`ribbon-content ${activeTab === 'pile-plan' ? 'active' : ''}`}>
+          <div className="ribbon-groups" style={{ alignItems: 'stretch' }}>
+            <RibbonGroup label="Place">
+              <RibbonButton
+                icon={<PileIcon size={24} />}
+                label="IfcPile"
+                onClick={() => {
+                  setPendingPile({
+                    label: '',
+                    diameter: 600,
+                    fontSize: 200,
+                    showCross: true,
+                    contourType: 'circle',
+                    fillPattern: 6,
+                  });
+                  switchToDrawingTool('pile');
+                }}
+                active={activeTool === 'pile'}
+                disabled={isSheetMode}
+                tooltip="Place IfcPile (IfcDeepFoundation)"
+                shortcut="PI"
+              />
+              <RibbonButton
+                icon={<CPTIcon size={24} />}
+                label="CPT"
+                onClick={() => {
+                  setPendingCPT({
+                    name: '01',
+                    fontSize: 150,
+                    markerSize: 300,
+                  });
+                  switchToDrawingTool('cpt');
+                }}
+                active={activeTool === 'cpt'}
+                disabled={isSheetMode}
+                tooltip="Place CPT (Cone Penetration Test) marker"
+                shortcut="CT"
+              />
+              <RibbonButton
+                icon={<PuntniveauIcon size={24} />}
+                label="Puntniveau"
+                onClick={() => {
+                  setPendingPuntniveau({
+                    puntniveauNAP: -12.5,
+                    fontSize: 300,
+                  });
+                  switchToDrawingTool('puntniveau');
+                }}
+                active={activeTool === 'puntniveau'}
+                disabled={isSheetMode}
+                tooltip="Place puntniveau zone (pile tip level contour)"
+                shortcut="PN"
+              />
+              <RibbonButton
+                icon={<Shapes size={24} />}
+                label="Pile Symbols"
+                onClick={() => openPileSymbolsDialog()}
+                disabled={isSheetMode}
+                tooltip="Configure pile symbols and order"
+              />
             </RibbonGroup>
           </div>
         </div>

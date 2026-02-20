@@ -21,7 +21,7 @@ export function usePileDrawing() {
    * Create a pile shape at a given position
    */
   const createPile = useCallback(
-    (position: Point, label: string, diameter: number, fontSize: number, showCross: boolean) => {
+    (position: Point, label: string, diameter: number, fontSize: number, showCross: boolean, extra?: { contourType?: PileShape['contourType']; fillPattern?: number; pileTypeId?: string }) => {
       const pileShape: PileShape = {
         id: generateId(),
         type: 'pile',
@@ -35,6 +35,9 @@ export function usePileDrawing() {
         label,
         fontSize,
         showCross,
+        ...(extra?.contourType != null && { contourType: extra.contourType }),
+        ...(extra?.fillPattern != null && { fillPattern: extra.fillPattern }),
+        ...(extra?.pileTypeId != null && { pileTypeId: extra.pileTypeId }),
       };
       addShape(pileShape);
       return pileShape.id;
@@ -55,6 +58,11 @@ export function usePileDrawing() {
         pendingPile.diameter,
         pendingPile.fontSize,
         pendingPile.showCross,
+        {
+          contourType: pendingPile.contourType,
+          fillPattern: pendingPile.fillPattern,
+          pileTypeId: pendingPile.pileTypeId,
+        },
       );
 
       // Keep pendingPile active so user can place multiple piles
@@ -77,6 +85,9 @@ export function usePileDrawing() {
         label: pendingPile.label,
         fontSize: pendingPile.fontSize,
         showCross: pendingPile.showCross,
+        contourType: pendingPile.contourType,
+        fillPattern: pendingPile.fillPattern,
+        pileTypeId: pendingPile.pileTypeId,
       });
     },
     [pendingPile, setDrawingPreview]

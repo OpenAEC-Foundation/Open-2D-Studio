@@ -21,7 +21,7 @@ export function useCPTDrawing() {
    * Create a CPT shape at a given position
    */
   const createCPT = useCallback(
-    (position: Point, name: string, fontSize: number, markerSize: number) => {
+    (position: Point, name: string, fontSize: number, markerSize: number, opts?: { kleefmeting?: boolean; waterspanning?: boolean; uitgevoerd?: boolean }) => {
       const cptShape: CPTShape = {
         id: generateId(),
         type: 'cpt',
@@ -34,6 +34,9 @@ export function useCPTDrawing() {
         name,
         fontSize,
         markerSize,
+        kleefmeting: opts?.kleefmeting,
+        waterspanning: opts?.waterspanning,
+        uitgevoerd: opts?.uitgevoerd,
       };
       addShape(cptShape);
       return cptShape.id;
@@ -53,6 +56,7 @@ export function useCPTDrawing() {
         pendingCPT.name,
         pendingCPT.fontSize,
         pendingCPT.markerSize,
+        { kleefmeting: pendingCPT.kleefmeting, waterspanning: pendingCPT.waterspanning, uitgevoerd: pendingCPT.uitgevoerd },
       );
 
       // Auto-increment the CPT name for next placement

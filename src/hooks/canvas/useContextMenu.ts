@@ -33,6 +33,7 @@ const TOOL_DISPLAY_NAMES: Record<ToolType, string> = {
   'gridline': 'Grid Line',
   'level': 'Level',
   'pile': 'Pile',
+  'puntniveau': 'Puntniveau',
   'cpt': 'CPT',
   'wall': 'Wall',
   'slab': 'Slab',

@@ -113,7 +113,8 @@ async function performSync(): Promise<void> {
       state.wallTypes,
       state.slabTypes,
       state.projectStructure,
-      state.drawings
+      state.drawings,
+      state.pileTypes
     );
 
     // Write to the sync path

@@ -873,6 +873,16 @@ function getShapeSegments(shape: Shape): { start: Point; end: Point }[] {
       }
       return slabSegs;
     }
+    case 'puntniveau': {
+      // Puntniveau polygon edges for intersection detection
+      const pnvSegs: { start: Point; end: Point }[] = [];
+      const pnvPts = shape.points;
+      for (let i = 0; i < pnvPts.length; i++) {
+        const j = (i + 1) % pnvPts.length;
+        pnvSegs.push({ start: pnvPts[i], end: pnvPts[j] });
+      }
+      return pnvSegs;
+    }
     case 'space': {
       // Space contour edges for intersection detection
       const spaceSegs: { start: Point; end: Point }[] = [];
@@ -1574,6 +1584,49 @@ export function getShapeSnapPoints(
             sourceShapeId: shape.id,
           });
         }
+      }
+      break;
+    }
+
+    case 'puntniveau': {
+      const pnvSnapPts = shape.points;
+      if (pnvSnapPts.length < 3) break;
+
+      if (activeSnaps.includes('endpoint')) {
+        for (let i = 0; i < pnvSnapPts.length; i++) {
+          snapPoints.push({
+            point: pnvSnapPts[i],
+            type: 'endpoint',
+            sourceShapeId: shape.id,
+            pointIndex: i,
+          });
+        }
+      }
+
+      if (activeSnaps.includes('midpoint')) {
+        for (let i = 0; i < pnvSnapPts.length; i++) {
+          const j = (i + 1) % pnvSnapPts.length;
+          snapPoints.push({
+            point: {
+              x: (pnvSnapPts[i].x + pnvSnapPts[j].x) / 2,
+              y: (pnvSnapPts[i].y + pnvSnapPts[j].y) / 2,
+            },
+            type: 'midpoint',
+            sourceShapeId: shape.id,
+          });
+        }
+      }
+
+      if (activeSnaps.includes('center')) {
+        let cx = 0, cy = 0;
+        for (const p of pnvSnapPts) { cx += p.x; cy += p.y; }
+        cx /= pnvSnapPts.length;
+        cy /= pnvSnapPts.length;
+        snapPoints.push({
+          point: { x: cx, y: cy },
+          type: 'center',
+          sourceShapeId: shape.id,
+        });
       }
       break;
     }

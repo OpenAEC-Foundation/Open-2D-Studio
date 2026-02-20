@@ -9,7 +9,7 @@
 
 import { useCallback, useRef } from 'react';
 import { useAppStore } from '../../state/appStore';
-import type { Point, Shape, EllipseShape, TextShape, BeamShape, LineShape, ImageShape, GridlineShape, LevelShape, PileShape, WallShape, SectionCalloutShape, PlateSystemShape } from '../../types/geometry';
+import type { Point, Shape, EllipseShape, TextShape, BeamShape, LineShape, ImageShape, GridlineShape, LevelShape, PileShape, WallShape, SectionCalloutShape, PlateSystemShape, PuntniveauShape } from '../../types/geometry';
 import type { DimensionShape } from '../../types/dimension';
 import type { ParametricShape } from '../../types/parametric';
 import { updateParametricPosition } from '../../services/parametric/parametricService';
@@ -380,6 +380,11 @@ function getGripPoints(shape: Shape, drawingScale?: number, zoom?: number): Poin
     case 'slab':
       // Slab handles: all polygon vertices
       return [...shape.points];
+    case 'puntniveau': {
+      // Puntniveau handles: all polygon vertices (same as slab)
+      const pnv = shape as PuntniveauShape;
+      return pnv.points.map(p => ({ x: p.x, y: p.y }));
+    }
     case 'plate-system': {
       // Plate system handles: contour polygon vertices + edge midpoints (or arc midpoints)
       const psShape = shape as PlateSystemShape;
@@ -645,6 +650,7 @@ function getShapeReferencePoint(shape: Shape): Point {
     case 'wall': return (shape as WallShape).start;
     case 'section-callout': return (shape as SectionCalloutShape).start;
     case 'slab': return shape.points[0] || { x: 0, y: 0 };
+    case 'puntniveau': return (shape as PuntniveauShape).points[0] || { x: 0, y: 0 };
     case 'plate-system': return (shape as PlateSystemShape).contourPoints[0] || { x: 0, y: 0 };
     case 'image': return shape.position;
     case 'dimension': return (shape as DimensionShape).points[0] || { x: 0, y: 0 };
@@ -778,6 +784,11 @@ function computeBodyMoveUpdates(shape: Shape, newPos: Point): Partial<Shape> | n
         points: shape.points.map(p => ({ x: p.x + dx, y: p.y + dy })),
       } as Partial<Shape>;
 
+    case 'puntniveau':
+      return {
+        points: (shape as PuntniveauShape).points.map(p => ({ x: p.x + dx, y: p.y + dy })),
+      } as Partial<Shape>;
+
     case 'plate-system':
       return {
         contourPoints: (shape as PlateSystemShape).contourPoints.map(p => ({ x: p.x + dx, y: p.y + dy })),
@@ -846,6 +857,8 @@ function computeRotationUpdates(shape: Shape, center: Point, angleRad: number): 
     }
     case 'slab':
       return { points: shape.points.map(rotPt) } as Partial<Shape>;
+    case 'puntniveau':
+      return { points: (shape as PuntniveauShape).points.map(rotPt) } as Partial<Shape>;
     case 'plate-system':
       return { contourPoints: (shape as PlateSystemShape).contourPoints.map(rotPt) } as Partial<Shape>;
     case 'polyline':
@@ -1404,6 +1417,16 @@ function computeGripUpdates(shape: Shape, gripIndex: number, newPos: Point, edge
       return { points: newPoints } as Partial<Shape>;
     }
 
+    case 'puntniveau': {
+      // Puntniveau grips are polygon vertex indices — move the individual vertex
+      const pnv = shape as PuntniveauShape;
+      if (gripIndex < 0 || gripIndex >= pnv.points.length) return null;
+      const newPnvPoints = pnv.points.map((p, i) =>
+        i === gripIndex ? { x: newPos.x, y: newPos.y } : p
+      );
+      return { points: newPnvPoints } as Partial<Shape>;
+    }
+
     case 'plate-system': {
       // Plate system grips: first N are contour vertices, next N are edge midpoints (or arc midpoints)
       const psShape = shape as PlateSystemShape;
@@ -1882,8 +1905,8 @@ export function useGripEditing() {
 
       const tolerance = 10 / viewport.zoom;
 
-      // Check rotation gizmo handle and ring (takes priority)
-      if (showRotationGizmo && shape.type !== 'text') {
+      // Check rotation gizmo handle and ring (takes priority — skip pile/cpt, no rotation)
+      if (showRotationGizmo && shape.type !== 'text' && shape.type !== 'pile' && shape.type !== 'cpt') {
         // Calculate centroid and ring radius — must match the renderer
         let cx = 0, cy = 0;
         for (const pt of grips) { cx += pt.x; cy += pt.y; }
@@ -2760,8 +2783,8 @@ export function useGripEditing() {
       if (!shape) { setGripHover(null); setRotationGizmoHovered(false); return null; }
       const grips = getGripPoints(shape, drawingScale, viewport.zoom);
 
-      // Check rotation gizmo hover (handle + ring)
-      if (showRotationGizmo && shape.type !== 'text' && grips.length > 0) {
+      // Check rotation gizmo hover (handle + ring — skip pile/cpt, no rotation)
+      if (showRotationGizmo && shape.type !== 'text' && shape.type !== 'pile' && shape.type !== 'cpt' && grips.length > 0) {
         let cx = 0, cy = 0;
         for (const pt of grips) { cx += pt.x; cy += pt.y; }
         cx /= grips.length;

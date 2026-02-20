@@ -687,6 +687,18 @@ export function CPTIcon({ size = 24, className }: IconProps) {
   );
 }
 
+/** Puntniveau Icon - Pile tip level zone (dashed polygon contour) */
+export function PuntniveauIcon({ size = 24, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      {/* Dashed polygon representing the puntniveau zone */}
+      <polygon points="4,8 12,4 20,8 18,18 6,18" fill="none" strokeDasharray="3 2" />
+      {/* NAP label */}
+      <text x="12" y="14" textAnchor="middle" fontSize="4.5" fill="currentColor" stroke="none" fontWeight="bold">Pnv</text>
+    </svg>
+  );
+}
+
 /** Grid Line Icon - Structural grid */
 export function GridLineIcon({ size = 24, className }: IconProps) {
   return (

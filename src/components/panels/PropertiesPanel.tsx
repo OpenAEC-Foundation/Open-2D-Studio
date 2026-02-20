@@ -2,7 +2,7 @@ import { memo, useState, useRef, useEffect, useMemo } from 'react';
 import { useAppStore } from '../../state/appStore';
 import { formatLength, parseLength } from '../../units';
 import type { UnitSettings } from '../../units/types';
-import type { LineStyle, Shape, TextAlignment, TextVerticalAlignment, BeamShape, BeamMaterial, BeamJustification, BeamViewMode, LeaderArrowType, LeaderAttachment, LeaderConfig, TextCase, GridlineShape, GridlineBubblePosition, LevelShape, WallShape, WallJustification, WallEndCap, SlabShape, SlabMaterial, SectionCalloutShape, SpaceShape, PlateSystemShape } from '../../types/geometry';
+import type { LineStyle, Shape, TextAlignment, TextVerticalAlignment, BeamShape, BeamMaterial, BeamJustification, BeamViewMode, LeaderArrowType, LeaderAttachment, LeaderConfig, TextCase, GridlineShape, GridlineBubblePosition, LevelShape, PuntniveauShape, WallShape, WallJustification, WallEndCap, SlabShape, SlabMaterial, SectionCalloutShape, SpaceShape, PlateSystemShape, CPTShape, PileShape, PileTypeDefinition } from '../../types/geometry';
 import type { ParametricShape, ProfileParametricShape, ProfileType, ParameterValues } from '../../types/parametric';
 import type { DimensionShape, DimensionArrowType, DimensionTextPlacement } from '../../types/dimension';
 import { PROFILE_TEMPLATES } from '../../services/parametric/profileTemplates';
@@ -15,6 +15,8 @@ import { DrawingPropertiesPanel } from './DrawingPropertiesPanel';
 import { PatternPickerPanel } from '../editors/PatternManager/PatternPickerPanel';
 import { parseSpacingPattern, createGridlinesFromPattern } from '../../utils/gridlineUtils';
 import { regenerateGridDimensions } from '../../utils/gridDimensionUtils';
+import { ALL_PILE_SYMBOLS, renderPileSymbol } from '../dialogs/PileSymbolsDialog/PileSymbolsDialog';
+import type { PileContourType } from '../../types/geometry';
 
 const RAD2DEG = 180 / Math.PI;
 const DEG2RAD = Math.PI / 180;
@@ -183,9 +185,10 @@ function RegionTypeSelector({ currentTypeId, onApplyType, onManageTypes }: {
   );
 }
 
-function NumberField({ label, value, onChange, min, max, readOnly, unitSettings }: {
+function NumberField({ label, value, onChange, min, max, readOnly, disabled, unitSettings, inputClassName }: {
   label: string; value: number; onChange: (v: number) => void;
-  step?: number; min?: number; max?: number; readOnly?: boolean; unitSettings?: UnitSettings;
+  step?: number; min?: number; max?: number; readOnly?: boolean; disabled?: boolean; unitSettings?: UnitSettings;
+  inputClassName?: string;
 }) {
   const formatValue = (v: number) => unitSettings
     ? formatLength(v, { ...unitSettings, showUnitSuffix: false })
@@ -199,6 +202,7 @@ function NumberField({ label, value, onChange, min, max, readOnly, unitSettings 
   }, [value]);
 
   const commitValue = () => {
+    if (disabled) return;
     let parsed: number;
     if (unitSettings) {
       parsed = parseLength(localValue, unitSettings);
@@ -214,15 +218,17 @@ function NumberField({ label, value, onChange, min, max, readOnly, unitSettings 
     setLocalValue(formatValue(min !== undefined && !isNaN(parsed) ? Math.max(min, parsed) : (!isNaN(parsed) ? parsed : value)));
   };
 
+  const disabledClasses = disabled ? ' text-cad-text-dim opacity-50 cursor-not-allowed' : '';
+
   return (
     <div className="mb-2">
       <label className={labelClass}>{label}</label>
-      <input type="text" readOnly={readOnly}
+      <input type="text" readOnly={readOnly || disabled} disabled={disabled}
         value={localValue}
         onChange={(e) => setLocalValue(e.target.value)}
         onBlur={commitValue}
         onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-        className={inputClass} />
+        className={`${inputClass}${inputClassName ? ` ${inputClassName}` : ''}${disabledClasses}`} />
     </div>
   );
 }
@@ -1691,6 +1697,48 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
       );
     }
 
+    case 'puntniveau': {
+      const pnv = shape as PuntniveauShape;
+      // Calculate area using shoelace formula
+      let pnvArea = 0;
+      for (let i = 0; i < pnv.points.length; i++) {
+        const j = (i + 1) % pnv.points.length;
+        pnvArea += pnv.points[i].x * pnv.points[j].y;
+        pnvArea -= pnv.points[j].x * pnv.points[i].y;
+      }
+      pnvArea = Math.abs(pnvArea) / 2;
+
+      return (
+        <>
+          <PropertyGroup label="Identity">
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="text-xs font-semibold text-cad-accent mb-1">Puntniveau Zone</div>
+              <div className="text-xs text-cad-text-dim">IFC Type: IfcAnnotation</div>
+            </div>
+          </PropertyGroup>
+
+          <PropertyGroup label="Puntniveau">
+            <NumberField label="Puntniveau t.o.v. NAP (m)" value={pnv.puntniveauNAP} onChange={(v) => update({ puntniveauNAP: v })} step={0.5} />
+          </PropertyGroup>
+
+          <PropertyGroup label="Geometry">
+            <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                <div className="text-cad-text-dim">Points:</div>
+                <div className="text-cad-text">{pnv.points.length}</div>
+                <div className="text-cad-text-dim">Area:</div>
+                <div className="text-cad-text">{(pnvArea / 1e6).toFixed(2)} m&sup2;</div>
+              </div>
+            </div>
+          </PropertyGroup>
+
+          <PropertyGroup label="Display">
+            <NumberField label="Font Size (mm)" value={pnv.fontSize} onChange={(v) => update({ fontSize: v })} step={25} min={50} />
+          </PropertyGroup>
+        </>
+      );
+    }
+
     case 'wall': {
       const w = shape as WallShape;
       const dx = w.end.x - w.start.x;
@@ -2003,6 +2051,35 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
 
     case 'plate-system':
       return <PlateSystemShapeProperties shape={shape as PlateSystemShape} updateShape={updateShape} />;
+
+    case 'pile': {
+      const pile = shape as PileShape;
+      return (
+        <PileShapeProperties pile={pile} update={update} />
+      );
+    }
+
+    case 'cpt': {
+      const cpt = shape as CPTShape;
+      return (
+        <>
+          <PropertyGroup label="Identity">
+            <TextField label="Name" value={cpt.name || ''} onChange={(v) => update({ name: v })} placeholder="01, 02..." />
+          </PropertyGroup>
+          <PropertyGroup label="Options">
+            <CheckboxField label="Kleefmeting" value={cpt.kleefmeting ?? false} onChange={(v) => update({ kleefmeting: v })} />
+            <CheckboxField label="Waterspanning" value={cpt.waterspanning ?? false} onChange={(v) => update({ waterspanning: v })} />
+            <CheckboxField label="Uitgevoerd" value={cpt.uitgevoerd ?? false} onChange={(v) => update({ uitgevoerd: v })} />
+          </PropertyGroup>
+          <PropertyGroup label="Display">
+            <NumberField label="Marker Size (mm)" value={cpt.markerSize} onChange={(v) => update({ markerSize: v })} step={50} min={100} />
+            <NumberField label="Font Size (mm)" value={cpt.fontSize} onChange={(v) => update({ fontSize: v })} step={25} min={50} />
+            <NumberField label="Position X" value={cpt.position.x} onChange={(v) => update({ position: { ...cpt.position, x: v } })} step={1} />
+            <NumberField label="Position Y" value={cpt.position.y} onChange={(v) => update({ position: { ...cpt.position, y: v } })} step={1} />
+          </PropertyGroup>
+        </>
+      );
+    }
 
     default:
       return (
@@ -2510,18 +2587,203 @@ function LevelToolProperties() {
   );
 }
 
+/** Puntniveau tool properties - edits pendingPuntniveau state */
+function PuntniveauToolProperties() {
+  const pendingPuntniveau = useAppStore(s => s.pendingPuntniveau);
+  const setPendingPuntniveau = useAppStore(s => s.setPendingPuntniveau);
+
+  if (!pendingPuntniveau) return null;
+
+  return (
+    <div className="p-3 border-b border-cad-border">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs font-semibold text-cad-accent uppercase tracking-wide">Puntniveau Tool</span>
+      </div>
+
+      <PropertyGroup label="Properties">
+        <NumberField
+          label="Puntniveau t.o.v. NAP (m)"
+          value={pendingPuntniveau.puntniveauNAP}
+          onChange={(v) => setPendingPuntniveau({ ...pendingPuntniveau, puntniveauNAP: v })}
+          step={0.5}
+        />
+      </PropertyGroup>
+
+      <PropertyGroup label="Display">
+        <NumberField
+          label="Font Size (mm)"
+          value={pendingPuntniveau.fontSize}
+          onChange={(v) => setPendingPuntniveau({ ...pendingPuntniveau, fontSize: v })}
+          step={25}
+          min={50}
+        />
+      </PropertyGroup>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Pile Symbol Picker – compact grid of SVG pile symbol thumbnails
+// ---------------------------------------------------------------------------
+
+const PILE_SYMBOL_THUMB = 32; // thumbnail size in px
+
+/** A set of representative symbols shown in the picker (first from each contour group). */
+const PICKER_SYMBOLS = (() => {
+  // Pick a curated set: first few from each contour group to keep it compact
+  const ids = ['R6', 'R1', 'R2', 'R3', 'R4', 'R5', 'R7', 'R8',
+    'RH6', 'RH1', 'RH4',
+    'RD6', 'RD1',
+    'RR6', 'RR1',
+    'RRR6', 'RRR1',
+    'DR6',
+    'Achthoek_1',
+  ];
+  const map = new Map(ALL_PILE_SYMBOLS.map(s => [s.id, s]));
+  return ids.map(id => map.get(id)).filter(Boolean) as typeof ALL_PILE_SYMBOLS;
+})();
+
+function PileSymbolPicker({
+  contourType,
+  fillPattern,
+  onChange,
+}: {
+  contourType: PileContourType | undefined;
+  fillPattern: number | undefined;
+  onChange: (contourType: PileContourType, fillPattern: number) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const ct = contourType ?? 'circle';
+  const fp = fillPattern ?? 6;
+
+  // Find the currently active symbol
+  const activeSymbol = ALL_PILE_SYMBOLS.find(s => s.contour === ct && s.fillPattern === fp);
+
+  // Symbols to display: either the curated set or the full list
+  const displaySymbols = expanded ? ALL_PILE_SYMBOLS : PICKER_SYMBOLS;
+
+  return (
+    <div className="mb-2">
+      <div className="flex items-center justify-between mb-1">
+        <label className={labelClass}>Symbol</label>
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="text-[9px] text-cad-accent hover:underline"
+        >
+          {expanded ? 'Minder' : `Alle (${ALL_PILE_SYMBOLS.length})`}
+        </button>
+      </div>
+      <div
+        className={`grid gap-0.5 ${expanded ? 'max-h-48 overflow-y-auto' : ''}`}
+        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${PILE_SYMBOL_THUMB + 8}px, 1fr))` }}
+      >
+        {displaySymbols.map(sym => {
+          const isActive = sym.contour === ct && sym.fillPattern === fp;
+          const clipId = `pp-clip-${sym.id}`;
+          return (
+            <button
+              key={sym.id}
+              type="button"
+              onClick={() => onChange(sym.contour as PileContourType, sym.fillPattern)}
+              className={`flex items-center justify-center p-0.5 rounded border transition-colors
+                ${isActive
+                  ? 'border-cad-accent bg-cad-accent/20 ring-1 ring-cad-accent'
+                  : 'border-cad-border hover:bg-cad-bg-hover hover:border-cad-text-dim'}
+              `}
+              title={sym.label}
+            >
+              <svg
+                width={PILE_SYMBOL_THUMB}
+                height={PILE_SYMBOL_THUMB}
+                viewBox={`0 0 ${PILE_SYMBOL_THUMB} ${PILE_SYMBOL_THUMB}`}
+                className="bg-white rounded-sm"
+              >
+                {renderPileSymbol(sym.contour, sym.fillPattern, PILE_SYMBOL_THUMB, clipId)}
+              </svg>
+            </button>
+          );
+        })}
+      </div>
+      {activeSymbol && (
+        <div className="text-[9px] text-cad-text-dim mt-1 px-0.5">
+          {activeSymbol.label}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Pile tool properties - edits pendingPile state */
 function PileToolProperties() {
   const pendingPile = useAppStore(s => s.pendingPile);
   const setPendingPile = useAppStore(s => s.setPendingPile);
+  const pileTypes = useAppStore(s => s.pileTypes);
 
   if (!pendingPile) return null;
+
+  const selectedPileType = pendingPile.pileTypeId
+    ? pileTypes.find(pt => pt.id === pendingPile.pileTypeId)
+    : undefined;
+
+  // Group pile types by method for the dropdown
+  const methodGroups = new Map<string, PileTypeDefinition[]>();
+  for (const pt of pileTypes) {
+    const list = methodGroups.get(pt.method) || [];
+    list.push(pt);
+    methodGroups.set(pt.method, list);
+  }
 
   return (
     <div className="p-3 border-b border-cad-border">
       <div className="flex items-center gap-2 mb-3">
         <span className="text-xs font-semibold text-cad-accent uppercase tracking-wide">Pile Tool</span>
       </div>
+
+      <PropertyGroup label="Pile Type">
+        <div className="mb-2">
+          <label className={labelClass}>Type</label>
+          <select
+            value={pendingPile.pileTypeId || ''}
+            onChange={(e) => {
+              const typeId = e.target.value || undefined;
+              const pt = typeId ? pileTypes.find(p => p.id === typeId) : undefined;
+              setPendingPile({
+                ...pendingPile,
+                pileTypeId: typeId,
+                diameter: pt ? pt.defaultDiameter : pendingPile.diameter,
+                contourType: pt ? (pt.shape === 'round' ? 'circle' : 'square') : pendingPile.contourType,
+              });
+            }}
+            className={inputClass}
+          >
+            <option value="">(Custom)</option>
+            {[...methodGroups.entries()].map(([method, types]) => (
+              <optgroup key={method} label={method}>
+                {types.map(pt => (
+                  <option key={pt.id} value={pt.id}>
+                    {pt.name} ({pt.shape === 'round' ? '\u00D8' : '\u25A1'}{pt.defaultDiameter}mm)
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+        {selectedPileType && (
+          <div className="text-[10px] text-cad-text-dim mb-2 px-1">
+            {selectedPileType.shape === 'round' ? 'Rond' : 'Vierkant'} | {selectedPileType.method} | IFC: {selectedPileType.ifcPredefinedType}
+            {selectedPileType.description && <div className="mt-0.5">{selectedPileType.description}</div>}
+          </div>
+        )}
+      </PropertyGroup>
+
+      <PropertyGroup label="Symbol">
+        <PileSymbolPicker
+          contourType={pendingPile.contourType}
+          fillPattern={pendingPile.fillPattern}
+          onChange={(ct, fp) => setPendingPile({ ...pendingPile, contourType: ct, fillPattern: fp })}
+        />
+      </PropertyGroup>
 
       <PropertyGroup label="Properties">
         <TextField
@@ -2536,6 +2798,7 @@ function PileToolProperties() {
           onChange={(v) => setPendingPile({ ...pendingPile, diameter: v })}
           step={50}
           min={100}
+          disabled={!!pendingPile.pileTypeId}
         />
         <NumberField
           label="Font Size (mm)"
@@ -2572,7 +2835,7 @@ function CPTToolProperties() {
           label="Name"
           value={pendingCPT.name}
           onChange={(v) => setPendingCPT({ ...pendingCPT, name: v })}
-          placeholder="CPT-01, CPT-02..."
+          placeholder="01, 02..."
         />
         <NumberField
           label="Marker Size (mm)"
@@ -2588,6 +2851,9 @@ function CPTToolProperties() {
           step={25}
           min={50}
         />
+        <CheckboxField label="Kleefmeting" value={pendingCPT.kleefmeting ?? false} onChange={(v) => setPendingCPT({ ...pendingCPT, kleefmeting: v })} />
+        <CheckboxField label="Waterspanning" value={pendingCPT.waterspanning ?? false} onChange={(v) => setPendingCPT({ ...pendingCPT, waterspanning: v })} />
+        <CheckboxField label="Uitgevoerd" value={pendingCPT.uitgevoerd ?? false} onChange={(v) => setPendingCPT({ ...pendingCPT, uitgevoerd: v })} />
       </PropertyGroup>
     </div>
   );
@@ -2730,6 +2996,8 @@ function ActiveToolProperties({ activeTool }: { activeTool: string }) {
       return <GridlineToolProperties />;
     case 'level':
       return <LevelToolProperties />;
+    case 'puntniveau':
+      return <PuntniveauToolProperties />;
     case 'pile':
       return <PileToolProperties />;
     case 'cpt':
@@ -2747,6 +3015,83 @@ function ActiveToolProperties({ activeTool }: { activeTool: string }) {
     default:
       return null;
   }
+}
+
+/** Pile shape properties - shown when a pile shape is selected */
+function PileShapeProperties({ pile, update }: { pile: PileShape; update: (updates: Record<string, unknown>) => void }) {
+  const pileTypes = useAppStore(s => s.pileTypes);
+
+  const selectedPileType = pile.pileTypeId
+    ? pileTypes.find(pt => pt.id === pile.pileTypeId)
+    : undefined;
+
+  // Group pile types by method for the dropdown
+  const methodGroups = new Map<string, PileTypeDefinition[]>();
+  for (const pt of pileTypes) {
+    const list = methodGroups.get(pt.method) || [];
+    list.push(pt);
+    methodGroups.set(pt.method, list);
+  }
+
+  return (
+    <>
+      <PropertyGroup label="Pile Type">
+        <div className="mb-2">
+          <label className={labelClass}>Type</label>
+          <select
+            value={pile.pileTypeId || ''}
+            onChange={(e) => {
+              const typeId = e.target.value || undefined;
+              const pt = typeId ? pileTypes.find(p => p.id === typeId) : undefined;
+              const updates: Record<string, unknown> = { pileTypeId: typeId };
+              if (pt) {
+                updates.diameter = pt.defaultDiameter;
+                updates.contourType = pt.shape === 'round' ? 'circle' : 'square';
+              }
+              update(updates);
+            }}
+            className={inputClass}
+          >
+            <option value="">(Custom)</option>
+            {[...methodGroups.entries()].map(([method, types]) => (
+              <optgroup key={method} label={method}>
+                {types.map(pt => (
+                  <option key={pt.id} value={pt.id}>
+                    {pt.name} ({pt.shape === 'round' ? '\u00D8' : '\u25A1'}{pt.defaultDiameter}mm)
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+        {selectedPileType && (
+          <div className="text-[10px] text-cad-text-dim mb-2 px-1">
+            {selectedPileType.shape === 'round' ? 'Rond' : 'Vierkant'} | {selectedPileType.method} | IFC: {selectedPileType.ifcPredefinedType}
+            {selectedPileType.description && <div className="mt-0.5">{selectedPileType.description}</div>}
+          </div>
+        )}
+      </PropertyGroup>
+      <PropertyGroup label="Symbol">
+        <PileSymbolPicker
+          contourType={pile.contourType}
+          fillPattern={pile.fillPattern}
+          onChange={(ct, fp) => update({ contourType: ct, fillPattern: fp })}
+        />
+      </PropertyGroup>
+      <PropertyGroup label="Identity">
+        <TextField label="Label" value={pile.label || ''} onChange={(v) => update({ label: v })} />
+      </PropertyGroup>
+      <PropertyGroup label="Dimensions">
+        <NumberField label="Diameter (mm)" value={pile.diameter} onChange={(v) => update({ diameter: v })} step={50} min={100} disabled={!!pile.pileTypeId} />
+        <NumberField label="Puntniveau t.o.v. NAP (m)" value={pile.puntniveauNAP ?? 0} onChange={(v) => update({ puntniveauNAP: v, puntniveauFromArea: false })} step={0.5} disabled={!!pile.puntniveauFromArea} />
+        <NumberField label="Bk. Paal t.o.v. peil (mm)" value={pile.bkPaalPeil ?? 0} onChange={(v) => update({ bkPaalPeil: v })} step={50} />
+      </PropertyGroup>
+      <PropertyGroup label="Display">
+        <NumberField label="Font Size (mm)" value={pile.fontSize} onChange={(v) => update({ fontSize: v })} step={25} min={50} />
+        <CheckboxField label="Show Cross" value={pile.showCross} onChange={(v) => update({ showCross: v })} />
+      </PropertyGroup>
+    </>
+  );
 }
 
 /** Plate System shape properties - shown when a PlateSystem shape is selected */
@@ -3412,7 +3757,7 @@ export const PropertiesPanel = memo(function PropertiesPanel() {
 
   // Determine if a structural/drawing tool with pending state is active
   const isToolWithProperties = [
-    'line', 'wall', 'beam', 'slab', 'plate-system', 'gridline', 'level', 'pile', 'section-callout', 'hatch', 'array',
+    'line', 'wall', 'beam', 'slab', 'plate-system', 'gridline', 'level', 'pile', 'cpt', 'section-callout', 'hatch', 'array',
   ].includes(activeTool);
 
   if (!hasSelection) {
@@ -3453,8 +3798,8 @@ export const PropertiesPanel = memo(function PropertiesPanel() {
     <div className="flex-1 overflow-auto">
       {isToolWithProperties && <ActiveToolProperties activeTool={activeTool} />}
       <div>
-        {/* Hide Style section for walls and gridlines */}
-        {!(selectedShapes.length > 0 && selectedShapes.every(s => s.type === 'wall' || s.type === 'gridline')) && <PropertyGroup label="Style">
+        {/* Hide Style section for walls, gridlines, and piles */}
+        {!(selectedShapes.length > 0 && selectedShapes.every(s => s.type === 'wall' || s.type === 'gridline' || s.type === 'pile')) && <PropertyGroup label="Style">
           <ColorPalette label="Color" value={displayStyle.strokeColor} onChange={handleColorChange} />
 
           <LineweightInput value={displayStyle.strokeWidth} onChange={handleWidthChange} />

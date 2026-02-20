@@ -21,6 +21,7 @@ import type {
   PointShape,
   GridlineShape,
   LevelShape,
+  PuntniveauShape,
   SlabShape,
   SectionCalloutShape,
   SpaceShape,
@@ -140,6 +141,13 @@ export function isGridlineShape(shape: Shape): shape is GridlineShape {
  */
 export function isLevelShape(shape: Shape): shape is LevelShape {
   return shape.type === 'level';
+}
+
+/**
+ * Check if a shape is a puntniveau (pile tip level)
+ */
+export function isPuntniveauShape(shape: Shape): shape is PuntniveauShape {
+  return shape.type === 'puntniveau';
 }
 
 /**

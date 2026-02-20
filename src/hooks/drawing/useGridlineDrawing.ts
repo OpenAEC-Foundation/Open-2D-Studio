@@ -13,8 +13,9 @@ import type { Point, GridlineShape, GridlineBubblePosition } from '../../types/g
 import { snapToAngle } from '../../engine/geometry/GeometryUtils';
 import { regenerateGridDimensions } from '../../utils/gridDimensionUtils';
 import {
-  isGridlineHorizontal,
+  classifyGridlineOrientation,
   getNextGridlineLabel,
+  getGridlineAngleDeg,
   incrementGridLabel,
 } from '../../utils/gridlineUtils';
 
@@ -95,8 +96,17 @@ export function useGridlineDrawing() {
           // Auto-detect orientation and resolve label:
           //   Horizontal (|dx| > |dy|) → letters (A, B, C...)
           //   Vertical   (|dy| > |dx|) → numbers (1, 2, 3...)
-          const horizontal = isGridlineHorizontal(startPoint, finalPos);
-          const label = getNextGridlineLabel(pendingGridline.label, horizontal, activeDrawingId);
+          //   Angled (neither)         → letter+number (A1, B1, C1...)
+          const orientation = classifyGridlineOrientation(startPoint, finalPos);
+          const angleDeg = orientation === 'angled'
+            ? (() => {
+                let a = Math.atan2(finalPos.y - startPoint.y, finalPos.x - startPoint.x) * 180 / Math.PI;
+                if (a < 0) a += 180;
+                if (a >= 180) a -= 180;
+                return a;
+              })()
+            : undefined;
+          const label = getNextGridlineLabel(pendingGridline.label, orientation, activeDrawingId, angleDeg);
 
           const newGridlineId = createGridline(
             startPoint,

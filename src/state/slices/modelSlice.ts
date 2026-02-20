@@ -8,6 +8,7 @@ import type {
   Layer,
   Drawing,
   DrawingType,
+  PlanSubtype,
   DrawingBoundary,
   Sheet,
   SheetViewport,
@@ -257,6 +258,7 @@ export interface ModelActions {
   addDrawing: (name?: string, drawingType?: DrawingType) => void;
   addDrawingSilent: (name?: string, drawingType?: DrawingType) => string;
   updateDrawingType: (id: string, drawingType: DrawingType) => void;
+  updateDrawingPlanSubtype: (id: string, planSubtype: PlanSubtype | undefined) => void;
   updateDrawingStorey: (id: string, storeyId: string | undefined) => void;
   deleteDrawing: (id: string) => void;
   renameDrawing: (id: string, name: string) => void;
@@ -1498,8 +1500,9 @@ export const createModelSlice = (
       if (drawing) {
         drawing.drawingType = drawingType;
         if (drawingType !== 'plan') {
-          // Clear storeyId if switching away from plan type
+          // Clear storeyId and planSubtype if switching away from plan type
           delete drawing.storeyId;
+          delete drawing.planSubtype;
         } else if (!drawing.storeyId) {
           // Auto-assign the first available storey when switching to plan type
           for (const building of state.projectStructure?.buildings ?? []) {
@@ -1509,6 +1512,16 @@ export const createModelSlice = (
             }
           }
         }
+        drawing.modifiedAt = new Date().toISOString();
+        state.isModified = true;
+      }
+    }),
+
+  updateDrawingPlanSubtype: (id, planSubtype) =>
+    set((state) => {
+      const drawing = state.drawings.find((d) => d.id === id);
+      if (drawing && drawing.drawingType === 'plan') {
+        drawing.planSubtype = planSubtype;
         drawing.modifiedAt = new Date().toISOString();
         state.isModified = true;
       }

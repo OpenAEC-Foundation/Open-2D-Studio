@@ -87,6 +87,12 @@ export function DrawingsTab() {
   // Check if we can place drawings (only in sheet mode)
   const canPlace = editorMode === 'sheet';
 
+  // Get the badge config for a drawing based on its type
+  const getBadgeConfig = (drawing: typeof drawings[0]) => {
+    const drawingType = drawing.drawingType || 'standalone';
+    return DRAWING_TYPE_CONFIG[drawingType];
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
@@ -126,7 +132,7 @@ export function DrawingsTab() {
         <div className="space-y-1">
           {drawings.map((drawing) => {
             const drawingType = drawing.drawingType || 'standalone';
-            const typeCfg = DRAWING_TYPE_CONFIG[drawingType];
+            const badgeCfg = getBadgeConfig(drawing);
             const isActive = drawing.id === activeDrawingId && editorMode === 'drawing';
 
             return (
@@ -178,10 +184,10 @@ export function DrawingsTab() {
                     <>
                       {/* Drawing type badge */}
                       <span
-                        className={`text-[9px] font-medium px-1 rounded shrink-0 ${typeCfg.color}`}
-                        title={typeCfg.title}
+                        className={`text-[9px] font-medium px-1 rounded shrink-0 ${badgeCfg.color}`}
+                        title={badgeCfg.title}
                       >
-                        {typeCfg.abbr}
+                        {badgeCfg.abbr}
                       </span>
 
                       {/* Drawing name */}

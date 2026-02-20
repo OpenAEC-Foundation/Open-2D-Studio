@@ -32,6 +32,7 @@ interface RenderOptions {
   parametricShapes?: ParametricShape[];
   selectedShapeIds: string[];
   hoveredShapeId?: string | null;
+  preSelectedShapeIds?: string[];
   viewport: Viewport;
   drawingScale?: number;
   gridVisible: boolean;
@@ -159,6 +160,7 @@ export class CADRenderer {
       parametricShapes: options.parametricShapes,
       selectedShapeIds: options.selectedShapeIds,
       hoveredShapeId: options.hoveredShapeId,
+      preSelectedShapeIds: options.preSelectedShapeIds,
       viewport: options.viewport,
       drawingScale: options.drawingScale,
       gridVisible: options.gridVisible,

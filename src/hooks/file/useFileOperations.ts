@@ -9,6 +9,7 @@ import {
   writeProjectFile,
   exportToSVG,
   exportToDXF,
+  exportToFolder,
   showError,
   showInfo,
   showConfirm,
@@ -317,7 +318,8 @@ export function useFileOperations() {
           s.wallTypes,
           s.slabTypes,
           s.projectStructure,
-          s.drawings
+          s.drawings,
+          s.pileTypes
         );
         content = result.content;
       } else if (extension === 'dxf') {
@@ -368,7 +370,8 @@ export function useFileOperations() {
         s.wallTypes,
         s.slabTypes,
         s.projectStructure,
-        s.drawings
+        s.drawings,
+        s.pileTypes
       );
       const content = result.content;
 
@@ -559,6 +562,43 @@ export function useFileOperations() {
     setPrintDialogOpen(true);
   }, [setPrintDialogOpen]);
 
+  const handleExportToFolder = useCallback(async () => {
+    const s = useAppStore.getState();
+    if (s.shapes.length === 0) {
+      await showInfo('Nothing to export. Draw some shapes first.');
+      return;
+    }
+
+    try {
+      const name = s.projectName || 'project';
+      const files: { name: string; content: string }[] = [];
+
+      // SVG
+      files.push({ name: `${name}.svg`, content: exportToSVG(s.shapes) });
+
+      // DXF
+      files.push({ name: `${name}.dxf`, content: exportToDXF(s.shapes, s.unitSettings) });
+
+      // IFC (parametric)
+      const ifcResult = generateIFC(s.shapes, s.wallTypes, s.slabTypes, s.projectStructure, s.drawings, s.pileTypes);
+      files.push({ name: `${name}.ifc`, content: ifcResult.content });
+
+      // JSON
+      files.push({ name: `${name}.json`, content: JSON.stringify({ shapes: s.shapes, layers: s.layers }, null, 2) });
+
+      const result = await exportToFolder(name, files);
+      if (!result) return; // cancelled
+
+      await showInfo(
+        `Geëxporteerd naar: ${result.folder}\n\n` +
+        result.files.map(f => `  ✓ ${f}`).join('\n')
+      );
+      logger.info(`Exported ${result.files.length} files to folder: ${result.folder}`, 'File');
+    } catch (err) {
+      await showError(`Export naar map mislukt: ${err}`);
+    }
+  }, []);
+
   const handleExit = useCallback(async () => {
     if (isTauriEnvironment()) {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -568,5 +608,5 @@ export function useFileOperations() {
     }
   }, []);
 
-  return { handleNew, handleOpen, handleOpenPath, handleSave, handleSaveAs, handleExport, handleExportSVG, handleExportDXF, handleExportIFC, handleExportJSON, handleImportDXF, handleImportDXFAsUnderlay, handlePrint, handleExit };
+  return { handleNew, handleOpen, handleOpenPath, handleSave, handleSaveAs, handleExport, handleExportSVG, handleExportDXF, handleExportIFC, handleExportJSON, handleExportToFolder, handleImportDXF, handleImportDXFAsUnderlay, handlePrint, handleExit };
 }

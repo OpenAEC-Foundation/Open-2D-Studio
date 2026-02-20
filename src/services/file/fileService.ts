@@ -43,12 +43,22 @@ declare global {
         accept: Record<string, string[]>;
       }>;
     }) => Promise<FileSystemFileHandle>;
+    showDirectoryPicker?: (options?: {
+      id?: string;
+      mode?: 'read' | 'readwrite';
+      startIn?: 'desktop' | 'documents' | 'downloads' | 'music' | 'pictures' | 'videos';
+    }) => Promise<FileSystemDirectoryHandle>;
   }
 }
 
 /** Whether the browser supports the File System Access API. */
 function hasFileSystemAccess(): boolean {
   return typeof window.showSaveFilePicker === 'function';
+}
+
+/** Whether the browser supports directory picking. */
+function hasDirectoryAccess(): boolean {
+  return typeof window.showDirectoryPicker === 'function';
 }
 
 /** Cached file handle for re-saving (Ctrl+S) without a new dialog. */
@@ -1915,4 +1925,74 @@ export function parseDXFAsUnderlay(
   };
 
   return underlay;
+}
+
+// ============================================================================
+// Export to Folder (File System Access API — directory picker)
+// ============================================================================
+
+export interface ExportToFolderResult {
+  folder: string;
+  files: string[];
+}
+
+/**
+ * Let the user pick a local folder, then write multiple export files into it.
+ * Uses the File System Access API (showDirectoryPicker) in Chromium browsers,
+ * or the Tauri filesystem API in the desktop app.
+ *
+ * Returns the list of written filenames, or null if the user cancelled.
+ */
+export async function exportToFolder(
+  _projectName: string,
+  files: { name: string; content: string }[],
+): Promise<ExportToFolderResult | null> {
+  if (isTauri) {
+    // Tauri: use native dialog to pick a directory, then write files
+    const { open: openDialog } = await import('@tauri-apps/plugin-dialog');
+    const folder = await openDialog({ directory: true, title: 'Kies een map om te exporteren' });
+    if (!folder) return null;
+
+    const { writeTextFile } = await import('@tauri-apps/plugin-fs');
+    const written: string[] = [];
+    for (const file of files) {
+      const fullPath = `${folder}/${file.name}`;
+      await writeTextFile(fullPath, file.content);
+      written.push(file.name);
+    }
+    return { folder: folder as string, files: written };
+  }
+
+  // Browser: use File System Access API (directory picker)
+  if (!hasDirectoryAccess()) {
+    // Fallback: download each file individually
+    for (const file of files) {
+      browserDownload(file.content, file.name);
+    }
+    return { folder: 'Downloads', files: files.map(f => f.name) };
+  }
+
+  try {
+    const dirHandle = await window.showDirectoryPicker!({
+      id: 'export-folder',
+      mode: 'readwrite',
+      startIn: 'documents',
+    });
+
+    const written: string[] = [];
+    for (const file of files) {
+      const fileHandle = await dirHandle.getFileHandle(file.name, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(file.content);
+      await writable.close();
+      written.push(file.name);
+    }
+    return { folder: dirHandle.name, files: written };
+  } catch (err: unknown) {
+    // User cancelled the picker
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      return null;
+    }
+    throw err;
+  }
 }

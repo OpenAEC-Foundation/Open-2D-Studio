@@ -128,7 +128,8 @@ export const createIfcSlice = (
       state.wallTypes,
       state.slabTypes,
       state.projectStructure,
-      state.drawings
+      state.drawings,
+      state.pileTypes
     );
     set((s) => {
       s.ifcContent = result.content;

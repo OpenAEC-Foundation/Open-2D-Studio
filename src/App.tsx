@@ -27,7 +27,6 @@ import { NewSheetDialog } from './components/dialogs/NewSheetDialog';
 import { SectionDialog } from './components/dialogs/SectionDialog';
 import { BeamDialog } from './components/dialogs/BeamDialog';
 import { GridlineDialog } from './components/dialogs/GridlineDialog';
-import { PileDialog } from './components/dialogs/PileDialog';
 import { WallDialog } from './components/dialogs/WallDialog';
 import { PlateSystemDialog } from './components/dialogs/PlateSystemDialog/PlateSystemDialog';
 import { DrawingStandardsDialog } from './components/dialogs/DrawingStandardsDialog';
@@ -35,6 +34,7 @@ import { MaterialsDialog } from './components/dialogs/MaterialsDialog';
 import { WallTypesDialog } from './components/dialogs/WallTypesDialog';
 import { FindReplaceDialog } from './components/dialogs/FindReplaceDialog';
 import { ProjectStructureDialog } from './components/dialogs/ProjectStructureDialog';
+import { PileSymbolsDialog } from './components/dialogs/PileSymbolsDialog';
 
 // Editor components
 import { PatternManagerDialog } from './components/editors/PatternManager';
@@ -44,6 +44,10 @@ import { TerminalPanel } from './components/editors/TerminalPanel';
 import { IfcPanel } from './components/panels/IfcPanel';
 import { IfcDashboard } from './components/panels/IfcDashboard';
 import { useIfcAutoRegenerate } from './hooks/useIfcAutoRegenerate';
+import { useSpaceAutoUpdate } from './hooks/useSpaceAutoUpdate';
+import { usePileAutoNumbering } from './hooks/usePileAutoNumbering';
+import { usePileAutoDimensioning } from './hooks/usePileAutoDimensioning';
+import { usePileAutoPuntniveau } from './hooks/usePileAutoPuntniveau';
 import { useKeyboardShortcuts } from './hooks/keyboard/useKeyboardShortcuts';
 import { useGlobalKeyboard } from './hooks/keyboard/useGlobalKeyboard';
 import { useAppStore } from './state/appStore';
@@ -69,6 +73,18 @@ function App() {
 
   // IFC auto-regeneration (watches shapes and regenerates with 500ms debounce)
   useIfcAutoRegenerate();
+
+  // Space auto-update (recalculates space contours when walls change)
+  useSpaceAutoUpdate();
+
+  // Pile auto-numbering (renumbers piles top-left to bottom-right when piles change)
+  usePileAutoNumbering();
+
+  // Pile auto-dimensioning (creates dimension lines between piles when enabled)
+  usePileAutoDimensioning();
+
+  // Pile auto-puntniveau (assigns puntniveauNAP to piles inside puntniveau polygons)
+  usePileAutoPuntniveau();
 
   // Apply theme on mount
   const uiTheme = useAppStore(s => s.uiTheme);
@@ -340,9 +356,9 @@ function App() {
     gridlineDialogOpen,
     closeGridlineDialog,
     setPendingGridline,
-    pileDialogOpen,
-    closePileDialog,
     setPendingPile,
+    pileSymbolsDialogOpen,
+    closePileSymbolsDialog,
     wallDialogOpen,
     closeWallDialog,
     setPendingWall,
@@ -623,15 +639,10 @@ function App() {
         }}
       />
 
-      {/* Pile Dialog - for placing foundation piles */}
-      <PileDialog
-        isOpen={pileDialogOpen}
-        onClose={closePileDialog}
-        onDraw={(label, diameter, fontSize, showCross) => {
-          setPendingPile({ label, diameter, fontSize, showCross });
-          setActiveTool('pile');
-          closePileDialog();
-        }}
+{/* Pile Symbols Dialog - configure pile symbol order */}
+      <PileSymbolsDialog
+        isOpen={pileSymbolsDialogOpen}
+        onClose={closePileSymbolsDialog}
       />
 
       {/* Wall Dialog - for drawing structural walls */}

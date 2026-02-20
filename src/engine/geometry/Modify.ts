@@ -2,7 +2,7 @@
  * Modify geometry utilities - pure functions for transform operations
  */
 
-import type { Point, Shape, LineShape, ArcShape, GridlineShape, LevelShape, PileShape, WallShape, BeamShape, SlabShape, SpaceShape, PlateSystemShape } from '../../types/geometry';
+import type { Point, Shape, LineShape, ArcShape, GridlineShape, LevelShape, PuntniveauShape, PileShape, CPTShape, WallShape, BeamShape, SlabShape, SpaceShape, PlateSystemShape } from '../../types/geometry';
 import { generateId } from '../../state/slices/types';
 import { formatPeilLabel, calculatePeilFromY } from '../../hooks/drawing/useLevelDrawing';
 import { bulgeToArc } from './GeometryUtils';
@@ -87,6 +87,9 @@ export function transformShape(shape: Shape, transform: PointTransform, newId?: 
     }
     case 'pile':
       (cloned as PileShape).position = transform((cloned as PileShape).position);
+      break;
+    case 'cpt':
+      (cloned as CPTShape).position = transform((cloned as CPTShape).position);
       break;
     case 'wall':
       (cloned as WallShape).start = transform((cloned as WallShape).start);
@@ -193,6 +196,9 @@ export function transformShape(shape: Shape, transform: PointTransform, newId?: 
       break;
     case 'slab':
       (cloned as SlabShape).points = (cloned as SlabShape).points.map(transform);
+      break;
+    case 'puntniveau':
+      (cloned as PuntniveauShape).points = (cloned as PuntniveauShape).points.map(transform);
       break;
     case 'space':
       (cloned as SpaceShape).contourPoints = (cloned as SpaceShape).contourPoints.map(transform);

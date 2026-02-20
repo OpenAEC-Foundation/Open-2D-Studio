@@ -10,41 +10,7 @@
 import type { Shape, Layer } from '../../types/geometry';
 import type { CustomHatchPattern } from '../../types/hatch';
 import { isSvgHatchPattern } from '../../types/hatch';
-
-// ============================================================================
-// IFC GUID Generation
-// ============================================================================
-
-/** Encode 128-bit UUID into 22-char IFC base64 GUID string */
-function generateIfcGuid(): string {
-  const base64 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$';
-  const uuid = crypto.randomUUID();
-  const hex = uuid.replace(/-/g, '');
-  const bytes: number[] = [];
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes.push(parseInt(hex.substring(i, i + 2), 16));
-  }
-
-  let result = '';
-  function encode(offset: number, len: number, nChars: number) {
-    let val = 0;
-    for (let i = 0; i < len; i++) val = val * 256 + bytes[offset + i];
-    const r: string[] = [];
-    for (let i = 0; i < nChars; i++) {
-      r.unshift(base64[val % 64]);
-      val = Math.floor(val / 64);
-    }
-    result += r.join('');
-  }
-
-  encode(0, 1, 2);
-  encode(1, 3, 4);
-  encode(4, 3, 4);
-  encode(7, 3, 4);
-  encode(10, 3, 4);
-  encode(13, 3, 4);
-  return result;
-}
+import { generateIfcGuid } from '../ifc/guidHelpers';
 
 // ============================================================================
 // IFC STEP Builder

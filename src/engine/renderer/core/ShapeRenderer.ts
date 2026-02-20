@@ -3,7 +3,7 @@
  */
 
 import type { Shape, DrawingPreview, CurrentStyle, Viewport } from '../types';
-import type { HatchShape, HatchPatternType, BeamShape, ImageShape, GridlineShape, LevelShape, PileShape, WallShape, SlabShape, WallType, SectionCalloutShape, SpaceShape, PlateSystemShape, SpotElevationShape, CPTShape, FoundationZoneShape } from '../../../types/geometry';
+import type { HatchShape, HatchPatternType, BeamShape, ImageShape, GridlineShape, LevelShape, PuntniveauShape, PileShape, WallShape, SlabShape, WallType, SectionCalloutShape, SpaceShape, PlateSystemShape, SpotElevationShape, CPTShape, FoundationZoneShape } from '../../../types/geometry';
 import type { CustomHatchPattern, LineFamily, SvgHatchPattern, MaterialHatchSettings } from '../../../types/hatch';
 import { BUILTIN_PATTERNS, isSvgHatchPattern, DEFAULT_MATERIAL_HATCH_SETTINGS } from '../../../types/hatch';
 import { BaseRenderer } from './BaseRenderer';
@@ -293,6 +293,9 @@ export class ShapeRenderer extends BaseRenderer {
       case 'level':
         this.drawLevel(shape as LevelShape, invertColors);
         break;
+      case 'puntniveau':
+        this.drawPuntniveau(shape as PuntniveauShape, invertColors);
+        break;
       case 'pile':
         this.drawPile(shape as PileShape, invertColors);
         break;
@@ -412,6 +415,9 @@ export class ShapeRenderer extends BaseRenderer {
         break;
       case 'level':
         this.drawLevel(shape as LevelShape, invertColors);
+        break;
+      case 'puntniveau':
+        this.drawPuntniveau(shape as PuntniveauShape, invertColors);
         break;
       case 'pile':
         this.drawPile(shape as PileShape, invertColors);
@@ -857,6 +863,23 @@ export class ShapeRenderer extends BaseRenderer {
         break;
       }
 
+      case 'puntniveau': {
+        // Puntniveau is polygon-based -- thicker green stroke around polygon
+        const pnShape = shape as PuntniveauShape;
+        if (pnShape.points.length >= 3) {
+          ctx.strokeStyle = COLORS.selectionFill;
+          ctx.lineWidth = this.getLineWidth(shape.style.strokeWidth) * 4;
+          ctx.beginPath();
+          ctx.moveTo(pnShape.points[0].x, pnShape.points[0].y);
+          for (let i = 1; i < pnShape.points.length; i++) {
+            ctx.lineTo(pnShape.points[i].x, pnShape.points[i].y);
+          }
+          ctx.closePath();
+          ctx.stroke();
+        }
+        break;
+      }
+
       case 'section-callout': {
         // Section callouts are line-like -- thicker green stroke
         const sectionShape = shape as SectionCalloutShape;
@@ -1269,36 +1292,83 @@ export class ShapeRenderer extends BaseRenderer {
         break;
       }
 
-      case 'pile': {
-        // Draw pile preview: circle + cross + label at cursor
-        const { position: pilePos, diameter: pileDiam, label: pileLabel, fontSize: pileFontSize, showCross: pileShowCross } = preview;
-        const pileRadius = pileDiam / 2;
+      case 'puntniveau': {
+        // Draw puntniveau preview: dashed polygon outline + label at centroid
+        const pnPts = preview.points;
+        const pnCurrent = preview.currentPoint;
+        const allPnPts = [...pnPts, pnCurrent];
 
-        // Draw circle
-        ctx.beginPath();
-        ctx.arc(pilePos.x, pilePos.y, pileRadius, 0, Math.PI * 2);
-        ctx.stroke();
-
-        // Draw cross
-        if (pileShowCross) {
-          ctx.beginPath();
-          ctx.moveTo(pilePos.x - pileRadius * 0.707, pilePos.y - pileRadius * 0.707);
-          ctx.lineTo(pilePos.x + pileRadius * 0.707, pilePos.y + pileRadius * 0.707);
-          ctx.moveTo(pilePos.x + pileRadius * 0.707, pilePos.y - pileRadius * 0.707);
-          ctx.lineTo(pilePos.x - pileRadius * 0.707, pilePos.y + pileRadius * 0.707);
-          ctx.stroke();
-        }
-
-        // Draw label below
-        if (pileLabel) {
+        if (allPnPts.length >= 2) {
           ctx.save();
-          ctx.fillStyle = strokeColor;
-          ctx.font = `${pileFontSize}px ${CAD_DEFAULT_FONT}`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'top';
-          ctx.fillText(pileLabel, pilePos.x, pilePos.y + pileRadius + pileFontSize * 0.3);
+          ctx.setLineDash(this.getLineDash('dashed'));
+          ctx.beginPath();
+          ctx.moveTo(allPnPts[0].x, allPnPts[0].y);
+          for (let pi = 1; pi < allPnPts.length; pi++) {
+            ctx.lineTo(allPnPts[pi].x, allPnPts[pi].y);
+          }
+          ctx.lineTo(allPnPts[0].x, allPnPts[0].y);
+          ctx.closePath();
+          ctx.stroke();
           ctx.restore();
         }
+
+        // Boxed label at centroid (matches final puntniveau rendering)
+        if (allPnPts.length >= 3) {
+          const pnNAP = preview.puntniveauNAP;
+          let pnCx = 0, pnCy = 0;
+          for (const p of allPnPts) { pnCx += p.x; pnCy += p.y; }
+          pnCx /= allPnPts.length;
+          pnCy /= allPnPts.length;
+
+          const pnScaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+          const pnFontSize = 300 * pnScaleFactor;
+          const pnNapFormatted = this.formatDutchNumber(pnNAP);
+          const pnLabel = `PUNTNIVEAU: ${pnNapFormatted} m N.A.P.`;
+
+          ctx.save();
+          ctx.font = `bold ${pnFontSize}px ${CAD_DEFAULT_FONT}`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+
+          // Measure text for background box
+          const pnTextMetrics = ctx.measureText(pnLabel);
+          const pnTextW = pnTextMetrics.width;
+          const pnTextH = pnFontSize;
+          const pnPadH = pnFontSize * 0.5;
+          const pnPadV = pnFontSize * 0.35;
+          const pnBoxW = pnTextW + pnPadH * 2;
+          const pnBoxH = pnTextH + pnPadV * 2;
+          const pnBoxX = pnCx - pnBoxW / 2;
+          const pnBoxY = pnCy - pnBoxH / 2;
+
+          // Background
+          ctx.fillStyle = '#1a1a2e';
+          ctx.fillRect(pnBoxX, pnBoxY, pnBoxW, pnBoxH);
+
+          // Solid border
+          ctx.strokeStyle = strokeColor;
+          ctx.lineWidth = this.getLineWidth(0.5);
+          ctx.setLineDash([]);
+          ctx.strokeRect(pnBoxX, pnBoxY, pnBoxW, pnBoxH);
+
+          // Text
+          ctx.fillStyle = strokeColor;
+          ctx.fillText(pnLabel, pnCx, pnCy);
+          ctx.restore();
+        }
+        break;
+      }
+
+      case 'pile': {
+        // Draw pile preview using contourType + fillPattern symbol system
+        const { position: pilePos, diameter: pileDiam, label: pileLabel, fontSize: pileFontSize, contourType: pileContour = 'circle', fillPattern: pileFill = 6 } = preview;
+        const pileRadius = pileDiam / 2;
+
+        this.drawPilePreviewSymbol(
+          pilePos.x, pilePos.y, pileRadius,
+          pileContour, pileFill,
+          pileLabel, pileFontSize,
+        );
         break;
       }
 
@@ -3597,8 +3667,8 @@ export class ShapeRenderer extends BaseRenderer {
       }
     }
 
-    // Draw rotation gizmo handle if enabled (skip text — text has its own rotation grip)
-    if (getRotationGizmoVisible() && shape.type !== 'text') {
+    // Draw rotation gizmo handle if enabled (skip text, pile, cpt — these don't support rotation)
+    if (getRotationGizmoVisible() && shape.type !== 'text' && shape.type !== 'pile' && shape.type !== 'cpt') {
       this.drawRotationGizmo(shape, points, zoom);
     }
   }
@@ -4007,6 +4077,9 @@ export class ShapeRenderer extends BaseRenderer {
           shape.end,
           { x: (shape.start.x + shape.end.x) / 2, y: (shape.start.y + shape.end.y) / 2 },
         ];
+      case 'puntniveau':
+        // Puntniveau handles: all polygon vertices
+        return [...(shape as PuntniveauShape).points];
       case 'pile':
         // Pile handle: center position
         return [shape.position];
@@ -4863,35 +4936,141 @@ export class ShapeRenderer extends BaseRenderer {
   }
 
   /**
-   * Draw a pile shape (foundation pile: circle + cross + label)
+   * Format a number using Dutch locale (comma as decimal separator).
+   * Removes trailing zeros after the comma for clean display.
+   * Examples: -18.5 -> "-18,5", 12.0 -> "12", -3.25 -> "-3,25"
+   */
+  private formatDutchNumber(value: number): string {
+    // Format with up to 2 decimal places, then replace dot with comma
+    const formatted = value.toFixed(2);
+    // Remove trailing zeros after decimal point, and the dot itself if no decimals remain
+    const cleaned = formatted.replace(/\.?0+$/, '');
+    return cleaned.replace('.', ',');
+  }
+
+  /**
+   * Draw a puntniveau shape (pile tip level zone: closed dashed polygon with elevation label)
+   */
+  private drawPuntniveau(shape: PuntniveauShape, invertColors: boolean = false): void {
+    const ctx = this.ctx;
+    const { points, puntniveauNAP } = shape;
+
+    if (points.length < 3) return;
+
+    // Scale text so it appears at constant paper size across drawing scales
+    const scaleFactor = LINE_DASH_REFERENCE_SCALE / this.drawingScale;
+    const fontSize = shape.fontSize * scaleFactor;
+
+    let strokeColor = shape.style.strokeColor;
+    if (invertColors && strokeColor === '#ffffff') {
+      strokeColor = '#000000';
+    }
+
+    // Draw closed polygon outline with dashed line, 0.50mm stroke width
+    ctx.save();
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = this.getLineWidth(shape.style.strokeWidth);
+    ctx.setLineDash(this.getLineDash('dashed'));
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(points[i].x, points[i].y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+
+    // --- Puntniveau Label (boxed text annotation) ---
+    const napFormatted = this.formatDutchNumber(puntniveauNAP);
+    const label = `PUNTNIVEAU: ${napFormatted} m N.A.P.`;
+
+    // Label position: use custom labelPosition if set, otherwise centroid
+    let cx: number, cy: number;
+    if (shape.labelPosition) {
+      cx = shape.labelPosition.x;
+      cy = shape.labelPosition.y;
+    } else {
+      cx = 0; cy = 0;
+      for (const p of points) { cx += p.x; cy += p.y; }
+      cx /= points.length;
+      cy /= points.length;
+    }
+
+    ctx.save();
+    ctx.font = `bold ${fontSize}px ${CAD_DEFAULT_FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Measure text for the background box
+    const textMetrics = ctx.measureText(label);
+    const textWidth = textMetrics.width;
+    const textHeight = fontSize;
+    const paddingH = fontSize * 0.5;  // Horizontal padding
+    const paddingV = fontSize * 0.35; // Vertical padding
+    const boxWidth = textWidth + paddingH * 2;
+    const boxHeight = textHeight + paddingV * 2;
+    const boxX = cx - boxWidth / 2;
+    const boxY = cy - boxHeight / 2;
+    const borderWidth = this.getLineWidth(shape.style.strokeWidth) * 0.8;
+
+    // Draw white/light background rectangle (opaque, so label is readable)
+    ctx.fillStyle = invertColors ? '#ffffff' : '#1a1a2e';
+    ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
+
+    // Draw solid border around the label box
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = borderWidth;
+    ctx.setLineDash([]); // Solid border (not dashed like the contour)
+    ctx.strokeRect(boxX, boxY, boxWidth, boxHeight);
+
+    // Draw the label text
+    ctx.fillStyle = strokeColor;
+    ctx.fillText(label, cx, cy);
+    ctx.restore();
+  }
+
+  /**
+   * Draw a pile shape using contourType + fillPattern from PileSymbolsDialog.
+   * Replaces the legacy circle+cross and drawPileSymbol approaches.
    */
   private drawPile(shape: PileShape, invertColors: boolean = false): void {
     const ctx = this.ctx;
-    const { position, diameter, label, fontSize, showCross, pileSymbol } = shape;
+    const { position, diameter, label, fontSize } = shape;
     const radius = diameter / 2;
+    const cx = position.x;
+    const cy = position.y;
+    const contourType = shape.contourType ?? 'circle';
+    const fillPattern = shape.fillPattern ?? 6; // 6 = empty
 
-    // Draw based on pile symbol type (if assigned from pile plan) or default
-    if (pileSymbol && pileSymbol !== 'open-circle') {
-      this.drawPileSymbol(position.x, position.y, radius, pileSymbol, shape.style.strokeColor);
+    // Draw fill pattern — drawn first so contour is on top
+    this.drawPileFillPattern(cx, cy, radius, fillPattern, contourType);
+
+    if (contourType === 'square') {
+      // Square pile: the square IS the main shape — no inner circle
+      ctx.beginPath();
+      ctx.rect(cx - radius, cy - radius, radius * 2, radius * 2);
+      ctx.stroke();
     } else {
-      // Default: draw circle
+      // Draw inner circle (always present for circle-based contours)
       ctx.beginPath();
-      ctx.arc(position.x, position.y, radius, 0, Math.PI * 2);
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.stroke();
+
+      // Draw outer contour (if not just circle)
+      this.drawPileContour(cx, cy, radius, contourType);
     }
 
-    // Draw cross (X) inside circle (only for default mode without pile symbol)
-    if (showCross && !pileSymbol) {
-      const crossR = radius * 0.707; // cos(45°)
-      ctx.beginPath();
-      ctx.moveTo(position.x - crossR, position.y - crossR);
-      ctx.lineTo(position.x + crossR, position.y + crossR);
-      ctx.moveTo(position.x + crossR, position.y - crossR);
-      ctx.lineTo(position.x - crossR, position.y + crossR);
-      ctx.stroke();
-    }
+    // Draw crosshair lines LAST — extending BEYOND the contour (like Revit reference)
+    const outerExtent = contourType === 'circle' ? radius : contourType === 'square' ? radius : radius * 1.3;
+    const crossExt = outerExtent * 1.25; // 25% beyond the outer contour edge
+    ctx.beginPath();
+    ctx.moveTo(cx - crossExt, cy);
+    ctx.lineTo(cx + crossExt, cy);
+    ctx.moveTo(cx, cy - crossExt);
+    ctx.lineTo(cx, cy + crossExt);
+    ctx.stroke();
 
-    // Draw label below pile
+    // Draw label at top-right of pile
     if (label) {
       let textColor = shape.style.strokeColor;
       if (invertColors && textColor === '#ffffff') {
@@ -4900,107 +5079,335 @@ export class ShapeRenderer extends BaseRenderer {
       ctx.save();
       ctx.fillStyle = textColor;
       ctx.font = `${fontSize}px ${CAD_DEFAULT_FONT}`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      ctx.fillText(label, position.x, position.y + radius + fontSize * 0.3);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(label, cx + radius + fontSize * 0.2, cy - radius);
       ctx.restore();
     }
   }
 
   /**
-   * Draw a pile plan symbol at a given position
+   * Draw a pile preview symbol at given position (used during placement).
+   * Mirrors drawPile logic but takes explicit parameters.
    */
-  private drawPileSymbol(cx: number, cy: number, radius: number, symbolType: string, color: string): void {
+  private drawPilePreviewSymbol(
+    cx: number, cy: number, radius: number,
+    contourType: string, fillPattern: number,
+    label: string, fontSize: number,
+  ): void {
     const ctx = this.ctx;
-    switch (symbolType) {
-      case 'filled-circle':
-        ctx.save();
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.restore();
+
+    // Fill pattern (drawn first so contour is on top)
+    this.drawPileFillPattern(cx, cy, radius, fillPattern, contourType);
+
+    if (contourType === 'square') {
+      // Square pile: the square IS the main shape — no inner circle
+      ctx.beginPath();
+      ctx.rect(cx - radius, cy - radius, radius * 2, radius * 2);
+      ctx.stroke();
+    } else {
+      // Inner circle
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Outer contour
+      this.drawPileContour(cx, cy, radius, contourType);
+    }
+
+    // Crosshair lines — extending BEYOND the contour
+    const outerExtent = contourType === 'circle' ? radius : contourType === 'square' ? radius : radius * 1.3;
+    const crossExt = outerExtent * 1.25;
+    ctx.beginPath();
+    ctx.moveTo(cx - crossExt, cy);
+    ctx.lineTo(cx + crossExt, cy);
+    ctx.moveTo(cx, cy - crossExt);
+    ctx.lineTo(cx, cy + crossExt);
+    ctx.stroke();
+
+    // Label
+    if (label) {
+      ctx.save();
+      ctx.fillStyle = ctx.strokeStyle as string;
+      ctx.font = `${fontSize}px ${CAD_DEFAULT_FONT}`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(label, cx + radius + fontSize * 0.2, cy - radius);
+      ctx.restore();
+    }
+  }
+
+  /**
+   * Draw the outer contour shape for a pile symbol.
+   * The inner circle is always drawn by the caller; this adds additional geometry.
+   */
+  private drawPileContour(cx: number, cy: number, radius: number, contourType: string): void {
+    const ctx = this.ctx;
+    switch (contourType) {
+      case 'circle':
+        // Outer contour IS the inner circle (already drawn by caller)
         break;
-      case 'open-circle':
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.stroke();
+
+      case 'square':
+        // Square pile is drawn directly by drawPile/drawPilePreviewSymbol as the main shape
+        // (no outer contour needed — the square IS the pile)
         break;
-      case 'cross': {
-        const r = radius * 0.707;
-        ctx.beginPath();
-        ctx.moveTo(cx - r, cy - r);
-        ctx.lineTo(cx + r, cy + r);
-        ctx.moveTo(cx + r, cy - r);
-        ctx.lineTo(cx - r, cy + r);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.stroke();
-        break;
-      }
-      case 'triangle': {
-        const h = radius * 1.5;
-        ctx.beginPath();
-        ctx.moveTo(cx, cy - h * 0.6);
-        ctx.lineTo(cx - h * 0.5, cy + h * 0.4);
-        ctx.lineTo(cx + h * 0.5, cy + h * 0.4);
-        ctx.closePath();
-        ctx.stroke();
-        break;
-      }
+
       case 'diamond': {
+        const d = radius * 1.3;
         ctx.beginPath();
-        ctx.moveTo(cx, cy - radius);
-        ctx.lineTo(cx + radius, cy);
-        ctx.lineTo(cx, cy + radius);
-        ctx.lineTo(cx - radius, cy);
+        ctx.moveTo(cx, cy - d);
+        ctx.lineTo(cx + d, cy);
+        ctx.lineTo(cx, cy + d);
+        ctx.lineTo(cx - d, cy);
         ctx.closePath();
         ctx.stroke();
         break;
       }
-      case 'square': {
-        const half = radius * 0.8;
+
+      case 'diamond-circle': {
+        // Diamond around the circle
+        const d = radius * 1.3;
         ctx.beginPath();
-        ctx.rect(cx - half, cy - half, half * 2, half * 2);
+        ctx.moveTo(cx, cy - d);
+        ctx.lineTo(cx + d, cy);
+        ctx.lineTo(cx, cy + d);
+        ctx.lineTo(cx - d, cy);
+        ctx.closePath();
         ctx.stroke();
         break;
       }
-      case 'plus': {
+
+      case 'double-circle': {
+        // Outer circle larger than inner
+        const outerR = radius * 1.3;
         ctx.beginPath();
-        ctx.moveTo(cx - radius, cy);
-        ctx.lineTo(cx + radius, cy);
-        ctx.moveTo(cx, cy - radius);
-        ctx.lineTo(cx, cy + radius);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.arc(cx, cy, outerR, 0, Math.PI * 2);
         ctx.stroke();
         break;
       }
-      case 'star': {
-        const outer = radius;
-        const inner = radius * 0.4;
+
+      case 'triangle-circle': {
+        // Equilateral triangle around the circle
+        const tSize = radius * 1.3;
+        const topY = cy - tSize * 0.7;
+        const botY = cy + tSize * 0.9;
+        const halfBase = tSize * 0.95;
         ctx.beginPath();
-        for (let i = 0; i < 5; i++) {
-          const outerAngle = (Math.PI / 2) + (i * 2 * Math.PI / 5);
-          const innerAngle = outerAngle + Math.PI / 5;
-          if (i === 0) {
-            ctx.moveTo(cx + outer * Math.cos(outerAngle), cy - outer * Math.sin(outerAngle));
-          } else {
-            ctx.lineTo(cx + outer * Math.cos(outerAngle), cy - outer * Math.sin(outerAngle));
-          }
-          ctx.lineTo(cx + inner * Math.cos(innerAngle), cy - inner * Math.sin(innerAngle));
+        ctx.moveTo(cx - halfBase, topY);
+        ctx.lineTo(cx + halfBase, topY);
+        ctx.lineTo(cx, botY);
+        ctx.closePath();
+        ctx.stroke();
+        break;
+      }
+
+      case 'octagon': {
+        const octR = radius * 1.2;
+        ctx.beginPath();
+        for (let i = 0; i < 8; i++) {
+          const angle = (Math.PI * 2 * i) / 8 - Math.PI / 8;
+          const px = cx + octR * Math.cos(angle);
+          const py = cy + octR * Math.sin(angle);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
         }
         ctx.closePath();
         ctx.stroke();
         break;
       }
+
       default:
+        break;
+    }
+  }
+
+  /**
+   * Draw a fill pattern inside the pile circle.
+   * Uses pie-slice arcs and clip regions matching PileSymbolsDialog conventions.
+   * Pattern numbers match the FILL_PATTERN_LABELS from PileSymbolsDialog.
+   */
+  private drawPileFillPattern(cx: number, cy: number, R: number, pattern: number, contourType: string = 'circle'): void {
+    const ctx = this.ctx;
+    const fillColor = ctx.strokeStyle as string;
+    const isSquare = contourType === 'square';
+
+    // Helper: apply the clip region (square or circle depending on contourType)
+    const applyClip = () => {
+      ctx.beginPath();
+      if (isSquare) {
+        ctx.rect(cx - R, cy - R, R * 2, R * 2);
+      } else {
+        ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      }
+      ctx.clip();
+    };
+
+    // Helper: create a pie-slice path from startAngle to endAngle (degrees, 0=right, CW)
+    const pieSlicePath = (startDeg: number, endDeg: number) => {
+      const toRad = (d: number) => (d * Math.PI) / 180;
+      const x1 = cx + R * Math.cos(toRad(startDeg));
+      const y1 = cy + R * Math.sin(toRad(startDeg));
+      const x2 = cx + R * Math.cos(toRad(endDeg));
+      const y2 = cy + R * Math.sin(toRad(endDeg));
+      const sweep = endDeg - startDeg;
+      const largeArc = Math.abs(sweep) > 180;
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(x1, y1);
+      ctx.arc(cx, cy, R, toRad(startDeg), toRad(endDeg), false);
+      ctx.lineTo(cx, cy);
+    };
+
+    // Helper: fill a set of pie slices clipped to contour shape
+    const fillSlices = (slices: [number, number][]) => {
+      ctx.save();
+      applyClip();
+      // Fill slices
+      ctx.fillStyle = fillColor;
+      ctx.beginPath();
+      for (const [start, end] of slices) {
+        pieSlicePath(start, end);
+      }
+      ctx.fill();
+      ctx.restore();
+    };
+
+    // Helper: fill a polygon clipped to contour shape
+    const fillPolygonClipped = (points: [number, number][]) => {
+      ctx.save();
+      applyClip();
+      ctx.fillStyle = fillColor;
+      ctx.beginPath();
+      for (let i = 0; i < points.length; i++) {
+        if (i === 0) ctx.moveTo(points[i][0], points[i][1]);
+        else ctx.lineTo(points[i][0], points[i][1]);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    };
+
+    // Helper: fill a rect clipped to contour shape
+    const fillRectClipped = (rx: number, ry: number, rw: number, rh: number) => {
+      ctx.save();
+      applyClip();
+      ctx.fillStyle = fillColor;
+      ctx.fillRect(rx, ry, rw, rh);
+      ctx.restore();
+    };
+
+    switch (pattern) {
+      case 1:
+        // Top-left quadrant (180° to 270°)
+        fillSlices([[180, 270]]);
+        break;
+
+      case 2:
+        // Top half (180° to 360°)
+        fillSlices([[180, 360]]);
+        break;
+
+      case 3:
+        // Checkerboard: top-left + bottom-right quadrants
+        fillSlices([[180, 270], [0, 90]]);
+        break;
+
+      case 4:
+        // Fully filled
+        ctx.save();
+        ctx.fillStyle = fillColor;
         ctx.beginPath();
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.stroke();
+        if (isSquare) {
+          ctx.rect(cx - R, cy - R, R * 2, R * 2);
+        } else {
+          ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        }
+        ctx.fill();
+        ctx.restore();
+        break;
+
+      case 5:
+        // Three quadrants (not bottom-right = not 0-90)
+        fillSlices([[90, 360]]);
+        break;
+
+      case 6:
+        // Empty - no fill
+        break;
+
+      case 7:
+        // Left half (90° to 270°)
+        fillSlices([[90, 270]]);
+        break;
+
+      case 8: {
+        // Vertical center strip
+        const stripW = R * 0.6;
+        fillRectClipped(cx - stripW / 2, cy - R, stripW, R * 2);
+        break;
+      }
+
+      case 9:
+        // Bottom-right quadrant (0° to 90°)
+        fillSlices([[0, 90]]);
+        break;
+
+      case 10: {
+        // Two vertical strips with gap
+        const stripW = R * 0.3;
+        const gap = R * 0.15;
+        fillRectClipped(cx - gap - stripW, cy - R, stripW, R * 2);
+        fillRectClipped(cx + gap, cy - R, stripW, R * 2);
+        break;
+      }
+
+      case 11:
+        // Top-left wedge/triangle
+        fillPolygonClipped([[cx, cy], [cx - R, cy], [cx, cy - R]]);
+        break;
+
+      case 12:
+        // Bowtie: left + right triangles pointing to center
+        fillPolygonClipped([[cx - R, cy - R], [cx, cy], [cx - R, cy + R]]);
+        fillPolygonClipped([[cx + R, cy - R], [cx, cy], [cx + R, cy + R]]);
+        break;
+
+      case 13:
+        // Top small wedge
+        fillPolygonClipped([[cx, cy], [cx - R * 0.5, cy - R], [cx + R * 0.5, cy - R]]);
+        break;
+
+      case 14:
+        // Right half (270° to 450° = 270° to 90° going CW)
+        fillSlices([[270, 450]]);
+        break;
+
+      case 15:
+        // Bottom half (0° to 180°)
+        fillSlices([[0, 180]]);
+        break;
+
+      case 16:
+        // Bottom-left wedge
+        fillPolygonClipped([[cx, cy], [cx - R, cy], [cx, cy + R]]);
+        break;
+
+      case 17:
+        // Right half (same as 14)
+        fillSlices([[270, 450]]);
+        break;
+
+      case 18:
+        // Top-right quadrant (270° to 360°)
+        fillSlices([[270, 360]]);
+        break;
+
+      case 19:
+        // Bottom-left quadrant (90° to 180°)
+        fillSlices([[90, 180]]);
+        break;
+
+      default:
         break;
     }
   }
@@ -5022,36 +5429,56 @@ export class ShapeRenderer extends BaseRenderer {
     ctx.closePath();
     ctx.stroke();
 
-    // Fill with semi-transparent orange
-    ctx.save();
-    ctx.fillStyle = 'rgba(255, 165, 0, 0.3)';
-    ctx.fill();
-    ctx.restore();
+    // Fill with black only when uitgevoerd (executed)
+    if (shape.uitgevoerd) {
+      ctx.save();
+      ctx.fillStyle = '#000000';
+      ctx.fill();
+      ctx.restore();
+    }
 
-    // Draw "CPT" text inside the triangle
-    const innerFontSize = ms * 0.25;
-    ctx.save();
     let textColor = shape.style.strokeColor;
     if (invertColors && textColor === '#ffffff') {
       textColor = '#000000';
     }
-    ctx.fillStyle = textColor;
-    ctx.font = `bold ${innerFontSize}px ${CAD_DEFAULT_FONT}`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('CPT', position.x, position.y);
-    ctx.restore();
 
     // Draw name below marker
+    const labelFontSize = fontSize * sf;
+    let labelY = position.y + ms * 0.6 + labelFontSize * 0.3;
     if (name) {
-      const labelFontSize = fontSize * sf;
       ctx.save();
       ctx.fillStyle = textColor;
       ctx.font = `${labelFontSize}px ${CAD_DEFAULT_FONT}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      ctx.fillText(name, position.x, position.y + ms * 0.6 + labelFontSize * 0.3);
+      ctx.fillText(name, position.x, labelY);
       ctx.restore();
+      labelY += labelFontSize * 1.2;
+    }
+
+    // Draw horizontal line under triangle tip if kleefmeting
+    // Line is below the tip with a small gap, same width as the top base of the triangle
+    if (shape.kleefmeting) {
+      const lineGap = ms * 0.08;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(position.x - ms * 0.5, position.y + ms * 0.6 + lineGap);
+      ctx.lineTo(position.x + ms * 0.5, position.y + ms * 0.6 + lineGap);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Draw waterspanning "W" tag below name if present
+    if (shape.waterspanning) {
+      const tagFontSize = labelFontSize * 0.75;
+      ctx.save();
+      ctx.font = `${tagFontSize}px ${CAD_DEFAULT_FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = invertColors ? '#555555' : '#aaaaaa';
+      ctx.fillText('W', position.x, labelY);
+      ctx.restore();
+      labelY += tagFontSize * 1.2;
     }
   }
 

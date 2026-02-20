@@ -25,6 +25,7 @@ export interface DrawingRenderOptions {
   parametricShapes?: ParametricShape[];
   selectedShapeIds: string[];
   hoveredShapeId?: string | null;
+  preSelectedShapeIds?: string[];
   viewport: Viewport;
   drawingScale?: number;
   gridVisible: boolean;
@@ -136,10 +137,13 @@ export class DrawingRenderer extends BaseRenderer {
       boundarySelected,
       boundaryDragging,
       hoveredShapeId,
+      preSelectedShapeIds,
       whiteBackground,
       hideSelectionHandles,
       customPatterns,
     } = options;
+
+    const preSelectedSet = preSelectedShapeIds ? new Set(preSelectedShapeIds) : null;
 
     // Set drawing scale for annotation text scaling
     if (drawingScale !== undefined) {
@@ -231,7 +235,7 @@ export class DrawingRenderer extends BaseRenderer {
       if (shape.type !== 'image' || !(shape as ImageShape).isUnderlay) continue;
       if (isShapeInHiddenCategory(shape, hiddenCats)) continue;
       const isSelected = selectedSet.has(shape.id);
-      const isHovered = hoveredShapeId === shape.id;
+      const isHovered = hoveredShapeId === shape.id || (preSelectedSet !== null && preSelectedSet.has(shape.id));
       this.shapeRenderer.drawShape(shape, isSelected, isHovered, whiteBackground, hideSelectionHandles);
     }
     for (const shape of shapes) {
@@ -239,14 +243,14 @@ export class DrawingRenderer extends BaseRenderer {
       if (shape.type === 'image' && (shape as ImageShape).isUnderlay) continue;
       if (isShapeInHiddenCategory(shape, hiddenCats)) continue;
       const isSelected = selectedSet.has(shape.id);
-      const isHovered = hoveredShapeId === shape.id;
+      const isHovered = hoveredShapeId === shape.id || (preSelectedSet !== null && preSelectedSet.has(shape.id));
       this.shapeRenderer.drawShape(shape, isSelected, isHovered, whiteBackground, hideSelectionHandles);
     }
     for (const shape of shapes) {
       if (!shape.visible || shape.type !== 'text') continue;
       if (isShapeInHiddenCategory(shape, hiddenCats)) continue;
       const isSelected = selectedSet.has(shape.id);
-      const isHovered = hoveredShapeId === shape.id;
+      const isHovered = hoveredShapeId === shape.id || (preSelectedSet !== null && preSelectedSet.has(shape.id));
       this.shapeRenderer.drawShape(shape, isSelected, isHovered, whiteBackground, hideSelectionHandles);
     }
 
@@ -256,7 +260,7 @@ export class DrawingRenderer extends BaseRenderer {
       for (const shape of parametricShapes) {
         if (!shape.visible) continue;
         const isSelected = selectedSet.has(shape.id);
-        const isHovered = hoveredShapeId === shape.id;
+        const isHovered = hoveredShapeId === shape.id || (preSelectedSet !== null && preSelectedSet.has(shape.id));
         this.parametricRenderer.drawParametricShape(shape, isSelected, isHovered, whiteBackground);
       }
     }
