@@ -10,8 +10,8 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { X } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
+import { DraggableModal, ModalButton } from '../../shared/DraggableModal';
 
 // ---------------------------------------------------------------------------
 // Symbol definitions
@@ -558,33 +558,11 @@ export function PileSymbolsDialog({ isOpen, onClose }: PileSymbolsDialogProps) {
 
   const [localOrder, setLocalOrder] = useState<Record<string, string[]>>(pileSymbolOrder);
 
-  // Drag state for the dialog itself
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef({ x: 0, y: 0 });
-
   useEffect(() => {
     if (isOpen) {
       setLocalOrder({ ...pileSymbolOrder });
-      setPosition({ x: 0, y: 0 });
     }
   }, [isOpen, pileSymbolOrder]);
-
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button, input, select, label')) return;
-    setIsDragging(true);
-    dragStartRef.current = { x: e.clientX - position.x, y: e.clientY - position.y };
-  }, [position]);
-
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!isDragging) return;
-    setPosition({
-      x: e.clientX - dragStartRef.current.x,
-      y: e.clientY - dragStartRef.current.y,
-    });
-  }, [isDragging]);
-
-  const handleMouseUp = useCallback(() => { setIsDragging(false); }, []);
 
   const handleGroupOrderChange = useCallback((key: string, newOrder: string[]) => {
     setLocalOrder(prev => ({ ...prev, [key]: newOrder }));
@@ -600,73 +578,43 @@ export function PileSymbolsDialog({ isOpen, onClose }: PileSymbolsDialogProps) {
     onClose();
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+    <DraggableModal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Paalsymbolen"
+      width={720}
+      footer={
+        <>
+          <ModalButton onClick={onClose}>Annuleren</ModalButton>
+          <ModalButton onClick={handleSave} variant="primary">Opslaan</ModalButton>
+        </>
+      }
     >
-      <div
-        className="bg-cad-surface border border-cad-border shadow-xl w-[720px] max-h-[85vh] flex flex-col"
-        style={{ transform: `translate(${position.x}px, ${position.y}px)` }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div
-          className="flex items-center justify-between px-4 py-2 border-b border-cad-border cursor-move select-none flex-shrink-0"
-          onMouseDown={handleMouseDown}
-        >
-          <h2 className="text-sm font-semibold text-cad-text">Paalsymbolen</h2>
-          <button onClick={onClose} className="p-1 hover:bg-cad-hover rounded text-cad-text-secondary">
-            <X size={14} />
-          </button>
-        </div>
+      <div className="flex-1 overflow-y-auto p-4 space-y-6">
+        <p className="text-[11px] text-cad-text-dim">
+          Versleep symbolen om de volgorde te bepalen. Het eerste symbool wordt als eerste gebruikt bij het plaatsen van palen.
+        </p>
 
-        {/* Content (scrollable) */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-6">
-          <p className="text-[11px] text-cad-text-dim">
-            Versleep symbolen om de volgorde te bepalen. Het eerste symbool wordt als eerste gebruikt bij het plaatsen van palen.
-          </p>
-
-          {DISPLAY_GROUPS.map(dg => (
-            <div key={dg.key}>
-              <h3 className="text-xs font-bold text-cad-text uppercase tracking-wide mb-3 border-b border-cad-border pb-1">{dg.title}</h3>
-              <div className="space-y-4">
-                {dg.subGroups.map(group => (
-                  <SymbolGrid
-                    key={group.key}
-                    title=""
-                    groupKey={group.key}
-                    allSymbols={group.symbols}
-                    order={localOrder[group.key] ?? group.symbols.map(s => s.id)}
-                    onOrderChange={handleGroupOrderChange}
-                  />
-                ))}
-              </div>
+        {DISPLAY_GROUPS.map(dg => (
+          <div key={dg.key}>
+            <h3 className="text-xs font-bold text-cad-text uppercase tracking-wide mb-3 border-b border-cad-border pb-1">{dg.title}</h3>
+            <div className="space-y-4">
+              {dg.subGroups.map(group => (
+                <SymbolGrid
+                  key={group.key}
+                  title=""
+                  groupKey={group.key}
+                  allSymbols={group.symbols}
+                  order={localOrder[group.key] ?? group.symbols.map(s => s.id)}
+                  onOrderChange={handleGroupOrderChange}
+                />
+              ))}
             </div>
-          ))}
-        </div>
-
-        {/* Footer */}
-        <div className="flex justify-end gap-2 px-4 py-3 border-t border-cad-border flex-shrink-0">
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 text-xs bg-cad-bg border border-cad-border text-cad-text rounded hover:bg-cad-hover"
-          >
-            Annuleren
-          </button>
-          <button
-            onClick={handleSave}
-            className="px-4 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
-          >
-            Opslaan
-          </button>
-        </div>
+          </div>
+        ))}
       </div>
-    </div>
+    </DraggableModal>
   );
 }
 

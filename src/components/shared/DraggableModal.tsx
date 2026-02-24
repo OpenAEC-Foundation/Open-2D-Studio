@@ -10,10 +10,14 @@ interface DraggableModalProps {
   onClose: () => void;
   title: string;
   icon?: ReactNode;
+  /** Extra content rendered in the header row between the title and close button */
+  headerContent?: ReactNode;
   width?: number;
   height?: number;
   children: ReactNode;
   footer?: ReactNode;
+  /** Custom className for the footer wrapper (default: 'px-3 py-2 border-t border-cad-border flex justify-end gap-2') */
+  footerClassName?: string;
   zIndex?: number;
   resizable?: boolean;
   minWidth?: number;
@@ -25,10 +29,12 @@ export function DraggableModal({
   onClose,
   title,
   icon,
+  headerContent,
   width = 500,
   height,
   children,
   footer,
+  footerClassName,
   zIndex = 50,
   resizable = false,
   minWidth = 300,
@@ -117,19 +123,22 @@ export function DraggableModal({
       >
         {/* Header */}
         <div
-          className="flex items-center justify-between px-3 py-1.5 border-b border-cad-border select-none"
+          className="flex items-center border-b border-cad-border select-none"
           style={{ background: 'linear-gradient(to bottom, #ffffff, #f5f5f5)', borderColor: '#d4d4d4' }}
           onMouseDown={handleMouseDown}
         >
-          <h2 className="text-xs font-semibold text-gray-800 flex items-center gap-1.5">
-            {icon}
-            {title}
-          </h2>
+          <div className="flex items-center gap-3 flex-1 px-3 py-1.5">
+            <h2 className="text-xs font-semibold text-gray-800 flex items-center gap-1.5">
+              {icon}
+              {title}
+            </h2>
+            {headerContent}
+          </div>
           <button
             onClick={onClose}
-            className="p-0.5 hover:bg-cad-hover rounded transition-colors text-gray-600 hover:text-gray-800 cursor-default -mr-1"
+            className="self-stretch px-2 -mb-px hover:bg-red-500 hover:text-white transition-colors text-gray-600 cursor-default flex items-center"
           >
-            <X size={14} />
+            <X size={16} />
           </button>
         </div>
 
@@ -140,7 +149,7 @@ export function DraggableModal({
 
         {/* Footer */}
         {footer && (
-          <div className="px-3 py-2 border-t border-cad-border flex justify-end gap-2">
+          <div className={footerClassName || "px-3 py-2 border-t border-cad-border flex justify-end gap-2"}>
             {footer}
           </div>
         )}

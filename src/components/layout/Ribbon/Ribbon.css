@@ -118,6 +118,145 @@
   letter-spacing: 0.3px;
 }
 
+/* Expandable ribbon group */
+.ribbon-group.expandable {
+  position: relative;
+}
+
+/* When expanded, draw continuous left+right border lines through the group */
+.ribbon-group.expandable.expanded::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -7px;
+  right: -1px;
+  border-left: 1px solid var(--theme-border-light);
+  border-right: 1px solid var(--theme-border-light);
+  pointer-events: none;
+}
+
+/* Full-width clickable expand trigger strip at bottom of group */
+.ribbon-group-expand-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-top: auto;
+  padding: 2px 0;
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-top: 1px solid transparent;
+  cursor: default;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.ribbon-group-expand-trigger .ribbon-group-label {
+  margin-top: 0;
+  padding: 0;
+}
+
+.ribbon-group-expand-trigger:focus {
+  outline: none;
+}
+
+.ribbon-group-expand-trigger:hover {
+  background: var(--theme-hover);
+  border-top-color: var(--theme-border-light);
+}
+
+.ribbon-group-expand-trigger:hover .ribbon-group-label {
+  color: var(--theme-text);
+}
+
+.ribbon-group-expand-trigger:hover .ribbon-expand-chevron {
+  color: var(--theme-text);
+}
+
+.ribbon-expand-chevron {
+  color: var(--theme-text-muted);
+  flex-shrink: 0;
+  transition: color 0.12s;
+}
+
+.ribbon-expand-panel {
+  position: absolute;
+  /* Overlap upward into the empty label area so tools feel continuous */
+  top: calc(100% - 16px);
+  /* Align with group separators: prev margin-right(4px) + flex gap(2px) + border overlap(1px) */
+  left: -7px;
+  right: -1px;
+  background: var(--theme-ribbon-content-bg);
+  border-right: 1px solid var(--theme-border-light);
+  border-bottom: 1px solid var(--theme-border-light);
+  border-left: 1px solid var(--theme-border-light);
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.08);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+}
+
+.ribbon-expand-panel-content {
+  display: flex;
+  gap: 2px;
+  padding: 2px 4px 4px 4px;
+}
+
+.ribbon-expand-panel-footer {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 4px;
+}
+
+.ribbon-expand-panel-footer .ribbon-expand-panel-action {
+  position: absolute;
+  left: 4px;
+}
+
+.ribbon-expand-panel-footer .ribbon-group-label {
+  margin-top: 0;
+  padding: 0;
+}
+
+.ribbon-expand-panel-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: var(--theme-text-muted);
+  cursor: default;
+  padding: 0;
+  transition: all 0.12s;
+}
+
+.ribbon-expand-panel-action:hover:not(:disabled) {
+  background: var(--theme-hover);
+  border-color: var(--theme-border-light);
+  color: var(--theme-text);
+}
+
+.ribbon-expand-panel-action.active {
+  background: var(--theme-active);
+  border-color: var(--theme-active-border);
+  color: #ffffff;
+}
+
+.ribbon-expand-panel-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ribbon-expand-panel-action:focus {
+  outline: none;
+}
+
 .ribbon-group-content {
   display: flex;
   gap: 2px;

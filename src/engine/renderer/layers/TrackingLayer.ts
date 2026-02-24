@@ -5,6 +5,8 @@
 import type { Viewport, Point, TrackingLine } from '../types';
 import { BaseRenderer } from '../core/BaseRenderer';
 import { getTrackingLineColor } from '../../geometry/Tracking';
+import type { UnitSettings } from '../../../units/types';
+import { formatNumber } from '../../../units/format';
 
 export class TrackingLayer extends BaseRenderer {
   /**
@@ -86,7 +88,8 @@ export class TrackingLayer extends BaseRenderer {
   drawTrackingLabel(
     trackingLines: TrackingLine[],
     trackingPoint: Point,
-    viewport: Viewport
+    viewport: Viewport,
+    unitSettings?: UnitSettings
   ): void {
     if (trackingLines.length === 0) return;
 
@@ -105,7 +108,9 @@ export class TrackingLayer extends BaseRenderer {
 
     switch (line.type) {
       case 'polar':
-        label = `Polar: ${angleDeg.toFixed(0)}°`;
+        label = unitSettings
+          ? `Polar: ${formatNumber(angleDeg, 0, unitSettings.numberFormat)}°`
+          : `Polar: ${angleDeg.toFixed(0)}°`;
         break;
       case 'parallel':
         label = 'Parallel';

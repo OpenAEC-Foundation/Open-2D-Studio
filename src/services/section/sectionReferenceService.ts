@@ -22,6 +22,8 @@ import type {
 } from '../../types/geometry';
 import type { DimensionShape } from '../../types/dimension';
 import { DIM_ASSOCIATE_STYLE } from '../../constants/cadDefaults';
+import type { UnitSettings } from '../../units/types';
+import { formatElevation } from '../../units/format';
 import { calculateDimensionValue, formatDimAssociateValue } from '../../engine/geometry/DimensionUtils';
 import type { ProjectStructure, ProjectStorey } from '../../state/slices/parametricSlice';
 
@@ -104,7 +106,13 @@ function segmentSegmentIntersection(
  * Format a peil/elevation value (in mm) as a meters label for section views.
  * e.g., 3000 -> "+3.000", 0 -> "±0.000", -300 -> "-0.300"
  */
-export function formatSectionPeilLabel(elevationMm: number): string {
+export function formatSectionPeilLabel(elevationMm: number, unitSettings?: UnitSettings): string {
+  if (unitSettings) {
+    if (elevationMm === 0) {
+      return '\u00b1 0.000';
+    }
+    return formatElevation(elevationMm, unitSettings.numberFormat, 3).replace(/^([+-])/, '$1 ');
+  }
   const elevMeters = Math.abs(elevationMm / 1000);
   if (elevationMm === 0) {
     return '\u00b1 0.000';

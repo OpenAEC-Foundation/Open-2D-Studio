@@ -739,7 +739,7 @@ function computeBodyMoveUpdates(shape: Shape, newPos: Point): Partial<Shape> | n
           end: { x: lv.end.x + dx, y: lv.end.y + dy },
           peil: newElevation,
           elevation: newElevation,
-          label: formatSectionPeilLabel(newElevation),
+          label: formatSectionPeilLabel(newElevation, useAppStore.getState().unitSettings),
         } as Partial<Shape>;
       }
       const newLvPeil = calculatePeilFromY(newLvStartY);
@@ -1313,7 +1313,7 @@ function computeGripUpdates(shape: Shape, gripIndex: number, newPos: Point, edge
             end: { x: levelShape.end.x + dx, y: levelShape.end.y + dy },
             peil: newElevation,
             elevation: newElevation,
-            label: formatSectionPeilLabel(newElevation),
+            label: formatSectionPeilLabel(newElevation, useAppStore.getState().unitSettings),
           } as Partial<Shape>;
         }
         const newPeil = calculatePeilFromY(newStartY);
@@ -1855,7 +1855,7 @@ function computeGripUpdates(shape: Shape, gripIndex: number, newPos: Point, edge
             // Recalculate dimension value (unless user has overridden it)
             if (!dim.valueOverridden) {
               const newValue = calculateDimensionValue(newPoints, dim.dimensionType, dim.linearDirection);
-              const formattedValue = formatDimensionValue(newValue, dim.dimensionType, dim.dimensionStyle.precision);
+              const formattedValue = formatDimensionValue(newValue, dim.dimensionType, dim.dimensionStyle.precision, useAppStore.getState().unitSettings);
               return { points: newPoints, value: formattedValue } as Partial<Shape>;
             }
 

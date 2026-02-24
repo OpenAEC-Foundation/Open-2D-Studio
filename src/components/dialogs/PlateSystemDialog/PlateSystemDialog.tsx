@@ -4,10 +4,11 @@
  * Supports timber floor (houten balklaag), HSB wall, ceiling, and custom system types.
  */
 
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { X, Plus, Trash2 } from 'lucide-react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { Plus, Trash2 } from 'lucide-react';
 import { PROFILE_PRESETS, getPresetById } from '../../../services/parametric/profileLibrary';
 import { SectionDialog } from '../SectionDialog/SectionDialog';
+import { DraggableModal, ModalButton } from '../../shared/DraggableModal';
 import type { ProfilePreset, ProfileType, ParameterValues } from '../../../types/parametric';
 
 interface PlateSystemLayer {
@@ -204,29 +205,6 @@ export function PlateSystemDialog({ isOpen, onClose, onDraw, defaultName }: Plat
     setProfilePickerTarget(null);
   }, [profilePickerTarget, handleProfileSelect, handleEdgeProfileSelect]);
 
-  // Drag state
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef({ x: 0, y: 0 });
-
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button, input, select, label, textarea')) return;
-    setIsDragging(true);
-    dragStartRef.current = { x: e.clientX - position.x, y: e.clientY - position.y };
-  }, [position]);
-
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!isDragging) return;
-    setPosition({
-      x: e.clientX - dragStartRef.current.x,
-      y: e.clientY - dragStartRef.current.y,
-    });
-  }, [isDragging]);
-
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
-
   // Apply preset when system type changes
   const applyPreset = useCallback((type: string) => {
     const preset = SYSTEM_PRESETS[type];
@@ -279,98 +257,174 @@ export function PlateSystemDialog({ isOpen, onClose, onDraw, defaultName }: Plat
     setLayers(layers.map((l, i) => i === index ? { ...l, ...updates } : l));
   };
 
-  useEffect(() => {
-    if (isOpen) {
-      setPosition({ x: 0, y: 0 });
-    }
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
   return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+    <DraggableModal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Plate System"
+      width={480}
+      footer={
+        <>
+          <ModalButton onClick={onClose}>Cancel</ModalButton>
+          <ModalButton onClick={handleDraw} variant="primary">Draw</ModalButton>
+        </>
+      }
     >
-      <div
-        className="bg-cad-surface border border-cad-border shadow-xl w-[480px] max-h-[85vh] flex flex-col"
-        style={{ transform: `translate(${position.x}px, ${position.y}px)` }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div
-          className="flex items-center justify-between px-4 py-2 border-b border-cad-border cursor-move select-none"
-          onMouseDown={handleMouseDown}
-        >
-          <h2 className="text-sm font-semibold text-cad-text">Plate System</h2>
-          <button onClick={onClose} className="p-1 hover:bg-cad-hover rounded text-cad-text-secondary">
-            <X size={14} />
-          </button>
+      {/* Content - scrollable */}
+      <div className="p-4 space-y-4 overflow-y-auto flex-1" style={{ maxHeight: '75vh' }}>
+        {/* System Type */}
+        <div>
+          <div className="text-xs font-semibold text-cad-accent mb-2 uppercase tracking-wide">System Type</div>
+          <div className="flex items-center gap-3">
+            <label className={labelClass}>Type</label>
+            <select
+              value={systemType}
+              onChange={(e) => applyPreset(e.target.value)}
+              className={inputClass}
+            >
+              {Object.entries(SYSTEM_PRESETS).map(([key, preset]) => (
+                <option key={key} value={key}>{preset.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-3 mt-2">
+            <label className={labelClass}>Name (optional)</label>
+            <input
+              type="text"
+              value={systemName}
+              onChange={(e) => setSystemName(e.target.value)}
+              className={inputClass}
+              placeholder="e.g., Floor Level 1"
+            />
+          </div>
         </div>
 
-        {/* Content - scrollable */}
-        <div className="p-4 space-y-4 overflow-y-auto flex-1">
-          {/* System Type */}
-          <div>
-            <div className="text-xs font-semibold text-cad-accent mb-2 uppercase tracking-wide">System Type</div>
+        {/* Main Profile */}
+        <div>
+          <div className="text-xs font-semibold text-cad-accent mb-2 uppercase tracking-wide">
+            Main Profile (Joists/Studs)
+          </div>
+          <div className="space-y-2">
             <div className="flex items-center gap-3">
-              <label className={labelClass}>Type</label>
+              <label className={labelClass}>Material</label>
               <select
-                value={systemType}
-                onChange={(e) => applyPreset(e.target.value)}
+                value={mainMaterial}
+                onChange={(e) => {
+                  setMainMaterial(e.target.value);
+                  setMainProfileId('');
+                }}
                 className={inputClass}
               >
-                {Object.entries(SYSTEM_PRESETS).map(([key, preset]) => (
-                  <option key={key} value={key}>{preset.label}</option>
-                ))}
+                <option value="timber">Timber</option>
+                <option value="steel">Steel</option>
+                <option value="concrete">Concrete</option>
+                <option value="aluminum">Aluminum</option>
+                <option value="generic">Generic</option>
               </select>
             </div>
-            <div className="flex items-center gap-3 mt-2">
-              <label className={labelClass}>Name (optional)</label>
-              <input
-                type="text"
-                value={systemName}
-                onChange={(e) => setSystemName(e.target.value)}
+            <div className="flex items-center gap-3">
+              <label className={labelClass}>Profile</label>
+              <select
+                value={mainProfileId}
+                onChange={(e) => handleProfileSelect(e.target.value)}
                 className={inputClass}
-                placeholder="e.g., Floor Level 1"
+              >
+                <option value="">-- Select profile --</option>
+                {Object.entries(profileOptions).map(([standard, categories]) => (
+                  <optgroup key={standard} label={standard}>
+                    {Object.entries(categories).map(([category, presets]) =>
+                      presets.map(preset => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.name} ({category})
+                        </option>
+                      ))
+                    )}
+                  </optgroup>
+                ))}
+              </select>
+              <button
+                onClick={() => setProfilePickerTarget('main')}
+                className="flex-shrink-0 w-7 h-7 flex items-center justify-center bg-cad-accent/10 hover:bg-cad-accent/20 border border-cad-accent/30 rounded text-cad-accent"
+                title="Browse profiles"
+              >
+                <Plus size={14} />
+              </button>
+            </div>
+            {mainProfileId && (
+              <div className="flex items-center gap-3">
+                <label className={labelClass}>Dimensions</label>
+                <span className="flex-1 h-7 px-2 text-xs bg-cad-bg border border-cad-border text-cad-text-secondary rounded flex items-center">
+                  {mainWidth} x {mainHeight} mm
+                </span>
+              </div>
+            )}
+            <div className="flex items-center gap-3">
+              <label className={labelClass}>Spacing h.o.h. (mm)</label>
+              <input
+                type="number"
+                value={mainSpacing}
+                onChange={(e) => setMainSpacing(Math.max(50, Number(e.target.value)))}
+                className={inputClass}
+                min={50}
+                step={50}
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <label className={labelClass}>Direction (deg)</label>
+              <input
+                type="number"
+                value={mainDirection}
+                onChange={(e) => setMainDirection(Number(e.target.value))}
+                className={inputClass}
+                step={15}
               />
             </div>
           </div>
+        </div>
 
-          {/* Main Profile */}
-          <div>
-            <div className="text-xs font-semibold text-cad-accent mb-2 uppercase tracking-wide">
-              Main Profile (Joists/Studs)
+        {/* Edge Profile */}
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <div className="text-xs font-semibold text-cad-accent uppercase tracking-wide">
+              Edge Profile (Rim Joists)
             </div>
+            <label className="flex items-center gap-1 text-xs text-cad-text-secondary ml-auto cursor-pointer">
+              <input
+                type="checkbox"
+                checked={edgeEnabled}
+                onChange={(e) => setEdgeEnabled(e.target.checked)}
+                className="accent-cad-accent"
+              />
+              Enabled
+            </label>
+          </div>
+          {edgeEnabled && (
             <div className="space-y-2">
               <div className="flex items-center gap-3">
                 <label className={labelClass}>Material</label>
                 <select
-                  value={mainMaterial}
+                  value={edgeMaterial}
                   onChange={(e) => {
-                    setMainMaterial(e.target.value);
-                    setMainProfileId('');
+                    setEdgeMaterial(e.target.value);
+                    setEdgeProfileId('');
                   }}
                   className={inputClass}
                 >
                   <option value="timber">Timber</option>
                   <option value="steel">Steel</option>
                   <option value="concrete">Concrete</option>
-                  <option value="aluminum">Aluminum</option>
                   <option value="generic">Generic</option>
                 </select>
               </div>
               <div className="flex items-center gap-3">
                 <label className={labelClass}>Profile</label>
                 <select
-                  value={mainProfileId}
-                  onChange={(e) => handleProfileSelect(e.target.value)}
+                  value={edgeProfileId}
+                  onChange={(e) => handleEdgeProfileSelect(e.target.value)}
                   className={inputClass}
                 >
                   <option value="">-- Select profile --</option>
-                  {Object.entries(profileOptions).map(([standard, categories]) => (
+                  {Object.entries(edgeProfileOptions).map(([standard, categories]) => (
                     <optgroup key={standard} label={standard}>
                       {Object.entries(categories).map(([category, presets]) =>
                         presets.map(preset => (
@@ -383,209 +437,98 @@ export function PlateSystemDialog({ isOpen, onClose, onDraw, defaultName }: Plat
                   ))}
                 </select>
                 <button
-                  onClick={() => setProfilePickerTarget('main')}
+                  onClick={() => setProfilePickerTarget('edge')}
                   className="flex-shrink-0 w-7 h-7 flex items-center justify-center bg-cad-accent/10 hover:bg-cad-accent/20 border border-cad-accent/30 rounded text-cad-accent"
                   title="Browse profiles"
                 >
                   <Plus size={14} />
                 </button>
               </div>
-              {mainProfileId && (
+              {edgeProfileId && (
                 <div className="flex items-center gap-3">
                   <label className={labelClass}>Dimensions</label>
                   <span className="flex-1 h-7 px-2 text-xs bg-cad-bg border border-cad-border text-cad-text-secondary rounded flex items-center">
-                    {mainWidth} x {mainHeight} mm
+                    {edgeWidth} x {edgeHeight} mm
                   </span>
                 </div>
               )}
-              <div className="flex items-center gap-3">
-                <label className={labelClass}>Spacing h.o.h. (mm)</label>
-                <input
-                  type="number"
-                  value={mainSpacing}
-                  onChange={(e) => setMainSpacing(Math.max(50, Number(e.target.value)))}
-                  className={inputClass}
-                  min={50}
-                  step={50}
-                />
-              </div>
-              <div className="flex items-center gap-3">
-                <label className={labelClass}>Direction (deg)</label>
-                <input
-                  type="number"
-                  value={mainDirection}
-                  onChange={(e) => setMainDirection(Number(e.target.value))}
-                  className={inputClass}
-                  step={15}
-                />
-              </div>
             </div>
-          </div>
-
-          {/* Edge Profile */}
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <div className="text-xs font-semibold text-cad-accent uppercase tracking-wide">
-                Edge Profile (Rim Joists)
-              </div>
-              <label className="flex items-center gap-1 text-xs text-cad-text-secondary ml-auto cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={edgeEnabled}
-                  onChange={(e) => setEdgeEnabled(e.target.checked)}
-                  className="accent-cad-accent"
-                />
-                Enabled
-              </label>
-            </div>
-            {edgeEnabled && (
-              <div className="space-y-2">
-                <div className="flex items-center gap-3">
-                  <label className={labelClass}>Material</label>
-                  <select
-                    value={edgeMaterial}
-                    onChange={(e) => {
-                      setEdgeMaterial(e.target.value);
-                      setEdgeProfileId('');
-                    }}
-                    className={inputClass}
-                  >
-                    <option value="timber">Timber</option>
-                    <option value="steel">Steel</option>
-                    <option value="concrete">Concrete</option>
-                    <option value="generic">Generic</option>
-                  </select>
-                </div>
-                <div className="flex items-center gap-3">
-                  <label className={labelClass}>Profile</label>
-                  <select
-                    value={edgeProfileId}
-                    onChange={(e) => handleEdgeProfileSelect(e.target.value)}
-                    className={inputClass}
-                  >
-                    <option value="">-- Select profile --</option>
-                    {Object.entries(edgeProfileOptions).map(([standard, categories]) => (
-                      <optgroup key={standard} label={standard}>
-                        {Object.entries(categories).map(([category, presets]) =>
-                          presets.map(preset => (
-                            <option key={preset.id} value={preset.id}>
-                              {preset.name} ({category})
-                            </option>
-                          ))
-                        )}
-                      </optgroup>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => setProfilePickerTarget('edge')}
-                    className="flex-shrink-0 w-7 h-7 flex items-center justify-center bg-cad-accent/10 hover:bg-cad-accent/20 border border-cad-accent/30 rounded text-cad-accent"
-                    title="Browse profiles"
-                  >
-                    <Plus size={14} />
-                  </button>
-                </div>
-                {edgeProfileId && (
-                  <div className="flex items-center gap-3">
-                    <label className={labelClass}>Dimensions</label>
-                    <span className="flex-1 h-7 px-2 text-xs bg-cad-bg border border-cad-border text-cad-text-secondary rounded flex items-center">
-                      {edgeWidth} x {edgeHeight} mm
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Layers */}
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <div className="text-xs font-semibold text-cad-accent uppercase tracking-wide">
-                Layers (Sub-Systems)
-              </div>
-              <button
-                onClick={addLayer}
-                className="ml-auto p-1 hover:bg-cad-hover rounded text-cad-accent"
-                title="Add layer"
-              >
-                <Plus size={14} />
-              </button>
-            </div>
-            {layers.length === 0 ? (
-              <div className="text-xs text-cad-text-dim p-2">No layers defined.</div>
-            ) : (
-              <div className="space-y-2">
-                {layers.map((layer, index) => (
-                  <div key={index} className="flex items-center gap-2 p-2 bg-cad-bg rounded border border-cad-border">
-                    <div className="flex-1 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={layer.name}
-                          onChange={(e) => updateLayer(index, { name: e.target.value })}
-                          className="flex-1 h-6 px-1 text-xs bg-cad-surface border border-cad-border text-cad-text rounded"
-                          placeholder="Layer name"
-                        />
-                        <input
-                          type="number"
-                          value={layer.thickness}
-                          onChange={(e) => updateLayer(index, { thickness: Math.max(0.1, Number(e.target.value)) })}
-                          className="w-16 h-6 px-1 text-xs bg-cad-surface border border-cad-border text-cad-text rounded"
-                          min={0.1}
-                          step={0.5}
-                          title="Thickness (mm)"
-                        />
-                        <span className="text-[10px] text-cad-text-dim">mm</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <select
-                          value={layer.material}
-                          onChange={(e) => updateLayer(index, { material: e.target.value })}
-                          className="flex-1 h-6 px-1 text-xs bg-cad-surface border border-cad-border text-cad-text rounded"
-                        >
-                          <option value="timber">Timber</option>
-                          <option value="gypsum">Gypsum</option>
-                          <option value="steel">Steel</option>
-                          <option value="insulation">Insulation</option>
-                          <option value="generic">Generic</option>
-                        </select>
-                        <select
-                          value={layer.position}
-                          onChange={(e) => updateLayer(index, { position: e.target.value as 'top' | 'bottom' })}
-                          className="w-20 h-6 px-1 text-xs bg-cad-surface border border-cad-border text-cad-text rounded"
-                        >
-                          <option value="top">Top</option>
-                          <option value="bottom">Bottom</option>
-                        </select>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => removeLayer(index)}
-                      className="p-1 hover:bg-cad-hover rounded text-cad-text-secondary"
-                      title="Remove layer"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          )}
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-cad-border">
-          <button
-            onClick={onClose}
-            className="px-4 py-1.5 text-xs border border-cad-border text-cad-text rounded hover:bg-cad-hover"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleDraw}
-            className="px-4 py-1.5 text-xs bg-cad-accent text-white rounded hover:bg-cad-accent/90"
-          >
-            Draw
-          </button>
+        {/* Layers */}
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <div className="text-xs font-semibold text-cad-accent uppercase tracking-wide">
+              Layers (Sub-Systems)
+            </div>
+            <button
+              onClick={addLayer}
+              className="ml-auto p-1 hover:bg-cad-hover rounded text-cad-accent"
+              title="Add layer"
+            >
+              <Plus size={14} />
+            </button>
+          </div>
+          {layers.length === 0 ? (
+            <div className="text-xs text-cad-text-dim p-2">No layers defined.</div>
+          ) : (
+            <div className="space-y-2">
+              {layers.map((layer, index) => (
+                <div key={index} className="flex items-center gap-2 p-2 bg-cad-bg rounded border border-cad-border">
+                  <div className="flex-1 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={layer.name}
+                        onChange={(e) => updateLayer(index, { name: e.target.value })}
+                        className="flex-1 h-6 px-1 text-xs bg-cad-surface border border-cad-border text-cad-text rounded"
+                        placeholder="Layer name"
+                      />
+                      <input
+                        type="number"
+                        value={layer.thickness}
+                        onChange={(e) => updateLayer(index, { thickness: Math.max(0.1, Number(e.target.value)) })}
+                        className="w-16 h-6 px-1 text-xs bg-cad-surface border border-cad-border text-cad-text rounded"
+                        min={0.1}
+                        step={0.5}
+                        title="Thickness (mm)"
+                      />
+                      <span className="text-[10px] text-cad-text-dim">mm</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={layer.material}
+                        onChange={(e) => updateLayer(index, { material: e.target.value })}
+                        className="flex-1 h-6 px-1 text-xs bg-cad-surface border border-cad-border text-cad-text rounded"
+                      >
+                        <option value="timber">Timber</option>
+                        <option value="gypsum">Gypsum</option>
+                        <option value="steel">Steel</option>
+                        <option value="insulation">Insulation</option>
+                        <option value="generic">Generic</option>
+                      </select>
+                      <select
+                        value={layer.position}
+                        onChange={(e) => updateLayer(index, { position: e.target.value as 'top' | 'bottom' })}
+                        className="w-20 h-6 px-1 text-xs bg-cad-surface border border-cad-border text-cad-text rounded"
+                      >
+                        <option value="top">Top</option>
+                        <option value="bottom">Bottom</option>
+                      </select>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => removeLayer(index)}
+                    className="p-1 hover:bg-cad-hover rounded text-cad-text-secondary"
+                    title="Remove layer"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -595,6 +538,6 @@ export function PlateSystemDialog({ isOpen, onClose, onDraw, defaultName }: Plat
         onClose={() => setProfilePickerTarget(null)}
         onInsert={handleProfilePickerInsert}
       />
-    </div>
+    </DraggableModal>
   );
 }

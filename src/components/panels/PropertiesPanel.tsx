@@ -1,6 +1,6 @@
 import { memo, useState, useRef, useEffect, useMemo } from 'react';
-import { useAppStore } from '../../state/appStore';
-import { formatLength, parseLength } from '../../units';
+import { useAppStore, useUnitSettings } from '../../state/appStore';
+import { formatLength, parseLength, formatNumber, formatElevation, formatAngle } from '../../units';
 import type { UnitSettings } from '../../units/types';
 import type { LineStyle, Shape, TextAlignment, TextVerticalAlignment, BeamShape, BeamMaterial, BeamJustification, BeamViewMode, LeaderArrowType, LeaderAttachment, LeaderConfig, TextCase, GridlineShape, GridlineBubblePosition, LevelShape, PuntniveauShape, WallShape, WallJustification, WallEndCap, SlabShape, SlabMaterial, SectionCalloutShape, SpaceShape, PlateSystemShape, CPTShape, PileShape, PileTypeDefinition } from '../../types/geometry';
 import type { ParametricShape, ProfileParametricShape, ProfileType, ParameterValues } from '../../types/parametric';
@@ -895,6 +895,7 @@ function GridlineSpacingInput({ gridline }: { gridline: GridlineShape }) {
 
 function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (id: string, updates: Partial<Shape>) => void }) {
   const update = (updates: Record<string, unknown>) => updateShape(shape.id, updates as Partial<Shape>);
+  const unitSettings = useUnitSettings();
 
   switch (shape.type) {
     case 'text': {
@@ -1360,9 +1361,9 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
             <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                 <div className="text-cad-text-dim">Length:</div>
-                <div className="text-cad-text">{length.toFixed(2)} mm</div>
+                <div className="text-cad-text">{formatLength(length, unitSettings)}</div>
                 <div className="text-cad-text-dim">Angle:</div>
-                <div className="text-cad-text">{angle.toFixed(1)}&deg;</div>
+                <div className="text-cad-text">{formatAngle(angle, unitSettings)}</div>
                 <div className="text-cad-text-dim">Flange Width:</div>
                 <div className="text-cad-text">{beam.flangeWidth} mm</div>
               </div>
@@ -1554,9 +1555,9 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
             <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                 <div className="text-cad-text-dim">Length:</div>
-                <div className="text-cad-text">{length.toFixed(2)} mm</div>
+                <div className="text-cad-text">{formatLength(length, unitSettings)}</div>
                 <div className="text-cad-text-dim">Angle:</div>
-                <div className="text-cad-text">{angle.toFixed(1)}&deg;</div>
+                <div className="text-cad-text">{formatAngle(angle, unitSettings)}</div>
               </div>
             </div>
 
@@ -1628,16 +1629,17 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
             }} step={100} />
             {(() => {
               const seaDatum = useAppStore.getState().projectStructure.seaLevelDatum ?? 0;
-              const napElev = seaDatum + ((lv.elevation ?? 0) / 1000);
-              const napSign = napElev >= 0 ? '+' : '';
-              const napStr = napElev.toFixed(napElev === Math.round(napElev) ? 1 : 2);
+              const napElevMM = (seaDatum * 1000) + (lv.elevation ?? 0);
+              const napElev = napElevMM / 1000;
+              const napPrecision = napElev === Math.round(napElev) ? 1 : 2;
+              const napStr = formatElevation(napElevMM, unitSettings.numberFormat, napPrecision);
               return (
                 <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                     <div className="text-cad-text-dim">Display:</div>
                     <div className="text-cad-text">{lv.label}</div>
                     <div className="text-cad-text-dim">NAP Elevation:</div>
-                    <div className="text-cad-text">NAP {napSign}{napStr} m{seaDatum === 0 ? ' (no datum set)' : ''}</div>
+                    <div className="text-cad-text">NAP {napStr} m{seaDatum === 0 ? ' (no datum set)' : ''}</div>
                   </div>
                 </div>
               );
@@ -1648,9 +1650,9 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
             <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                 <div className="text-cad-text-dim">Length:</div>
-                <div className="text-cad-text">{lLength.toFixed(2)} mm</div>
+                <div className="text-cad-text">{formatLength(lLength, unitSettings)}</div>
                 <div className="text-cad-text-dim">Angle:</div>
-                <div className="text-cad-text">{lAngle.toFixed(1)}&deg;</div>
+                <div className="text-cad-text">{formatAngle(lAngle, unitSettings)}</div>
               </div>
             </div>
 
@@ -1727,7 +1729,7 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
                 <div className="text-cad-text-dim">Points:</div>
                 <div className="text-cad-text">{pnv.points.length}</div>
                 <div className="text-cad-text-dim">Area:</div>
-                <div className="text-cad-text">{(pnvArea / 1e6).toFixed(2)} m&sup2;</div>
+                <div className="text-cad-text">{formatNumber(pnvArea / 1e6, 2, unitSettings.numberFormat)} m&sup2;</div>
               </div>
             </div>
           </PropertyGroup>
@@ -1847,7 +1849,7 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
                   >
                     <option value="">(None)</option>
                     {wallSystemTypes.map((ws) => (
-                      <option key={ws.id} value={ws.id}>{ws.name} ({ws.totalThickness.toFixed(0)}mm)</option>
+                      <option key={ws.id} value={ws.id}>{ws.name} ({formatNumber(ws.totalThickness, 0, unitSettings.numberFormat)}mm)</option>
                     ))}
                   </select>
                   {w.wallSystemId && (() => {
@@ -1856,7 +1858,7 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
                     return (
                       <div className="mt-1 p-2 bg-cad-bg rounded border border-cad-border">
                         <div className="text-[10px] text-cad-text-dim font-medium mb-1">
-                          {ws.category} &middot; {ws.layers.length} layers &middot; {ws.totalThickness.toFixed(1)}mm
+                          {ws.category} &middot; {ws.layers.length} layers &middot; {formatNumber(ws.totalThickness, 1, unitSettings.numberFormat)}mm
                         </div>
                         <div className="space-y-0.5">
                           {ws.layers.map((layer) => (
@@ -1984,9 +1986,9 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
             <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                 <div className="text-cad-text-dim">Length:</div>
-                <div className="text-cad-text">{length.toFixed(2)} mm</div>
+                <div className="text-cad-text">{formatLength(length, unitSettings)}</div>
                 <div className="text-cad-text-dim">Angle:</div>
-                <div className="text-cad-text">{angle.toFixed(1)}&deg;</div>
+                <div className="text-cad-text">{formatAngle(angle, unitSettings)}</div>
               </div>
             </div>
             <div className="mb-3">
@@ -2090,9 +2092,9 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
                 <div className="text-cad-text-dim">Points:</div>
                 <div className="text-cad-text">{sl.points.length}</div>
                 <div className="text-cad-text-dim">Area:</div>
-                <div className="text-cad-text">{area.toFixed(2)} mm2</div>
+                <div className="text-cad-text">{formatNumber(area, 2, unitSettings.numberFormat)} mm2</div>
                 <div className="text-cad-text-dim">Perimeter:</div>
-                <div className="text-cad-text">{perimeter.toFixed(2)} mm</div>
+                <div className="text-cad-text">{formatLength(perimeter, unitSettings)}</div>
               </div>
             </div>
           </PropertyGroup>
@@ -2127,7 +2129,7 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
                 <div className="text-cad-text-dim">Points:</div>
                 <div className="text-cad-text">{sp.contourPoints.length}</div>
                 <div className="text-cad-text-dim">Area:</div>
-                <div className="text-cad-text">{(sp.area ?? 0).toFixed(2)} m{'\u00B2'}</div>
+                <div className="text-cad-text">{formatNumber(sp.area ?? 0, 2, unitSettings.numberFormat)} m{'\u00B2'}</div>
               </div>
             </div>
           </PropertyGroup>
@@ -2161,9 +2163,9 @@ function ShapeProperties({ shape, updateShape }: { shape: Shape; updateShape: (i
             <div className="mb-3 p-2 bg-cad-bg rounded border border-cad-border">
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                 <div className="text-cad-text-dim">Length:</div>
-                <div className="text-cad-text">{scLength.toFixed(2)} mm</div>
+                <div className="text-cad-text">{formatLength(scLength, unitSettings)}</div>
                 <div className="text-cad-text-dim">Angle:</div>
-                <div className="text-cad-text">{scAngle.toFixed(1)}&deg;</div>
+                <div className="text-cad-text">{formatAngle(scAngle, unitSettings)}</div>
               </div>
             </div>
 
@@ -3278,6 +3280,7 @@ function PileShapeProperties({ pile, update }: { pile: PileShape; update: (updat
 /** Plate System shape properties - shown when a PlateSystem shape is selected */
 function PlateSystemShapeProperties({ shape, updateShape }: { shape: PlateSystemShape; updateShape: (id: string, updates: Partial<Shape>) => void }) {
   const update = (updates: Record<string, unknown>) => updateShape(shape.id, updates as Partial<Shape>);
+  const unitSettings = useUnitSettings();
   const ps = shape;
 
   // Profile picker dialog state: which target is being browsed ('main' or 'edge')
@@ -3399,9 +3402,9 @@ function PlateSystemShapeProperties({ shape, updateShape }: { shape: PlateSystem
             <div className="text-cad-text-dim">Contour Points:</div>
             <div className="text-cad-text">{ps.contourPoints.length}</div>
             <div className="text-cad-text-dim">Area:</div>
-            <div className="text-cad-text">{psArea.toFixed(2)} mm2</div>
+            <div className="text-cad-text">{formatNumber(psArea, 2, unitSettings.numberFormat)} mm2</div>
             <div className="text-cad-text-dim">Perimeter:</div>
-            <div className="text-cad-text">{psPerimeter.toFixed(2)} mm</div>
+            <div className="text-cad-text">{formatLength(psPerimeter, unitSettings)}</div>
             <div className="text-cad-text-dim">Est. Joists:</div>
             <div className="text-cad-text">~{joistCount}</div>
           </div>
@@ -3466,7 +3469,7 @@ function PlateSystemShapeProperties({ shape, updateShape }: { shape: PlateSystem
                 />
                 <label className="text-xs text-cad-text">
                   Edge {idx + 1}
-                  <span className="text-cad-text-dim ml-1">({edgeLen.toFixed(0)} mm)</span>
+                  <span className="text-cad-text-dim ml-1">({formatLength(edgeLen, unitSettings)})</span>
                 </label>
               </div>
             );
@@ -3557,7 +3560,7 @@ function PlateSystemShapeProperties({ shape, updateShape }: { shape: PlateSystem
               }}
             />
             <div className="text-[10px] text-cad-text-dim mt-1">
-              Position: ({opening.position.x.toFixed(0)}, {opening.position.y.toFixed(0)})
+              Position: ({formatNumber(opening.position.x, 0, unitSettings.numberFormat)}, {formatNumber(opening.position.y, 0, unitSettings.numberFormat)})
             </div>
           </div>
         ))}

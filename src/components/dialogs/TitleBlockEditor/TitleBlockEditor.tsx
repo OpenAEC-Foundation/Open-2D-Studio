@@ -3,9 +3,10 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { X, Upload, Trash2, Plus, RotateCcw } from 'lucide-react';
+import { Upload, Trash2, Plus, RotateCcw } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
 import { BUILT_IN_TEMPLATES } from '../../../services/template/titleBlockService';
+import { DraggableModal, ModalButton } from '../../shared/DraggableModal';
 
 interface TitleBlockEditorProps {
   isOpen: boolean;
@@ -32,9 +33,6 @@ export function TitleBlockEditor({ isOpen, onClose, sheetId }: TitleBlockEditorP
   const [activeTab, setActiveTab] = useState<TabType>('fields');
   const [newRevisionDesc, setNewRevisionDesc] = useState('');
   const [newRevisionBy, setNewRevisionBy] = useState('');
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef({ x: 0, y: 0 });
 
   // Pending changes state - only applied when OK is clicked
   const [pendingChanges, setPendingChanges] = useState<PendingChanges>({
@@ -154,25 +152,7 @@ export function TitleBlockEditor({ isOpen, onClose, sheetId }: TitleBlockEditorP
     onClose();
   }, [onClose]);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button')) return;
-    setIsDragging(true);
-    dragStartRef.current = { x: e.clientX - position.x, y: e.clientY - position.y };
-  }, [position]);
-
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!isDragging) return;
-    setPosition({
-      x: e.clientX - dragStartRef.current.x,
-      y: e.clientY - dragStartRef.current.y,
-    });
-  }, [isDragging]);
-
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
-
-  if (!isOpen || !sheet) return null;
+  if (!sheet) return null;
 
   const titleBlock = sheet.titleBlock;
   const enhancedTitleBlock = titleBlock as unknown as {
@@ -188,108 +168,80 @@ export function TitleBlockEditor({ isOpen, onClose, sheetId }: TitleBlockEditorP
     { id: 'logo', label: 'Logo' },
   ];
 
+  const footerContent = (
+    <>
+      <ModalButton onClick={handleCancel}>Cancel</ModalButton>
+      <ModalButton onClick={handleOk} variant="primary">OK</ModalButton>
+    </>
+  );
+
   return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+    <DraggableModal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={`Title Block Editor - ${sheet.name}`}
+      width={500}
+      height={480}
+      footer={footerContent}
     >
-      <div
-        className="bg-cad-surface border border-cad-border shadow-xl w-[500px] h-[480px] flex flex-col"
-        style={{ transform: `translate(${position.x}px, ${position.y}px)` }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div
-          className="flex items-center justify-between px-3 py-1.5 border-b border-cad-border select-none"
-          style={{ background: 'linear-gradient(to bottom, #ffffff, #f5f5f5)', borderColor: '#d4d4d4' }}
-          onMouseDown={handleMouseDown}
-        >
-          <h2 className="text-xs font-semibold text-gray-800">Title Block Editor - {sheet.name}</h2>
+      {/* Tabs */}
+      <div className="flex border-b border-cad-border">
+        {tabs.map(tab => (
           <button
-            onClick={onClose}
-            className="p-0.5 hover:bg-cad-hover rounded transition-colors text-gray-600 hover:text-gray-800 cursor-default -mr-1"
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-4 py-2 text-sm transition-colors ${
+              activeTab === tab.id
+                ? 'bg-cad-surface text-cad-accent border-b-2 border-cad-accent'
+                : 'text-cad-text-dim hover:text-cad-text hover:bg-cad-hover'
+            }`}
           >
-            <X size={14} />
+            {tab.label}
           </button>
-        </div>
-
-        {/* Tabs */}
-        <div className="flex border-b border-cad-border">
-          {tabs.map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`px-4 py-2 text-sm transition-colors ${
-                activeTab === tab.id
-                  ? 'bg-cad-surface text-cad-accent border-b-2 border-cad-accent'
-                  : 'text-cad-text-dim hover:text-cad-text hover:bg-cad-hover'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4">
-          {activeTab === 'fields' && (
-            <FieldsTab
-              fields={titleBlock.fields}
-              pendingFields={pendingChanges.fields}
-              onUpdateField={handleFieldChange}
-            />
-          )}
-
-          {activeTab === 'template' && (
-            <TemplateTab
-              currentTemplateId={pendingChanges.templateId || enhancedTitleBlock.templateId}
-              paperSize={sheet.paperSize}
-              onApplyTemplate={handleTemplateChange}
-            />
-          )}
-
-          {activeTab === 'revisions' && (
-            <RevisionsTab
-              existingRevisions={enhancedTitleBlock.revisionTable?.revisions || []}
-              pendingRevisions={pendingChanges.revisions}
-              newRevisionDesc={newRevisionDesc}
-              newRevisionBy={newRevisionBy}
-              onDescChange={setNewRevisionDesc}
-              onByChange={setNewRevisionBy}
-              onAddRevision={handleAddRevision}
-            />
-          )}
-
-          {activeTab === 'logo' && (
-            <LogoTab
-              logo={pendingChanges.logoRemoved ? undefined : (pendingChanges.logo || enhancedTitleBlock.logo)}
-              pendingLogo={pendingChanges.logo}
-              logoRemoved={pendingChanges.logoRemoved}
-              onSetLogo={handleSetLogo}
-              onRemoveLogo={handleRemoveLogo}
-            />
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="px-3 py-2 border-t border-cad-border flex justify-end gap-2">
-          <button
-            onClick={handleCancel}
-            className="px-4 py-1.5 text-xs bg-cad-input border border-cad-border text-cad-text hover:bg-cad-hover"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleOk}
-            className="px-4 py-1.5 text-xs bg-cad-accent text-white hover:bg-cad-accent/80"
-          >
-            OK
-          </button>
-        </div>
+        ))}
       </div>
-    </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-4">
+        {activeTab === 'fields' && (
+          <FieldsTab
+            fields={titleBlock.fields}
+            pendingFields={pendingChanges.fields}
+            onUpdateField={handleFieldChange}
+          />
+        )}
+
+        {activeTab === 'template' && (
+          <TemplateTab
+            currentTemplateId={pendingChanges.templateId || enhancedTitleBlock.templateId}
+            paperSize={sheet.paperSize}
+            onApplyTemplate={handleTemplateChange}
+          />
+        )}
+
+        {activeTab === 'revisions' && (
+          <RevisionsTab
+            existingRevisions={enhancedTitleBlock.revisionTable?.revisions || []}
+            pendingRevisions={pendingChanges.revisions}
+            newRevisionDesc={newRevisionDesc}
+            newRevisionBy={newRevisionBy}
+            onDescChange={setNewRevisionDesc}
+            onByChange={setNewRevisionBy}
+            onAddRevision={handleAddRevision}
+          />
+        )}
+
+        {activeTab === 'logo' && (
+          <LogoTab
+            logo={pendingChanges.logoRemoved ? undefined : (pendingChanges.logo || enhancedTitleBlock.logo)}
+            pendingLogo={pendingChanges.logo}
+            logoRemoved={pendingChanges.logoRemoved}
+            onSetLogo={handleSetLogo}
+            onRemoveLogo={handleRemoveLogo}
+          />
+        )}
+      </div>
+    </DraggableModal>
   );
 }
 

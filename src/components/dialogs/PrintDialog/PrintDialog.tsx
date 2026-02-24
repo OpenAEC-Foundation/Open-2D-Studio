@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { X, Printer, FileDown, Save, Trash2, ChevronRight, Settings } from 'lucide-react';
+import { useState, useCallback, useEffect } from 'react';
+import { Printer, FileDown, Save, Trash2, ChevronRight, Settings } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAppStore } from '../../../state/appStore';
 import type { PrintAppearance, RasterQuality, PrintRange } from '../../../state/slices/uiSlice';
@@ -9,6 +9,7 @@ import { SheetSelectionDialog } from './SheetSelectionDialog';
 import { getTemplateById } from '../../../services/template/titleBlockService';
 import { loadCustomSVGTemplates, renderSVGTitleBlock } from '../../../services/export/svgTitleBlockService';
 import { CAD_DEFAULT_FONT } from '../../../constants/cadDefaults';
+import { DraggableModal } from '../../shared/DraggableModal';
 
 const PAPER_SIZES: Record<string, { width: number; height: number; label: string }> = {
   'A4': { width: 210, height: 297, label: 'A4 (210 x 297 mm)' },
@@ -67,42 +68,6 @@ export function PrintDialog({ isOpen, onClose }: PrintDialogProps) {
   const [selectedPrinter, setSelectedPrinter] = useState<string>('');
   const [loadingPrinters, setLoadingPrinters] = useState(false);
 
-  // Drag state
-  const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
-  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button')) return;
-    const rect = dialogRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    dragRef.current = {
-      startX: e.clientX,
-      startY: e.clientY,
-      origX: dragPos?.x ?? rect.left,
-      origY: dragPos?.y ?? rect.top,
-    };
-    const onMove = (ev: MouseEvent) => {
-      if (!dragRef.current) return;
-      setDragPos({
-        x: dragRef.current.origX + (ev.clientX - dragRef.current.startX),
-        y: dragRef.current.origY + (ev.clientY - dragRef.current.startY),
-      });
-    };
-    const onUp = () => {
-      dragRef.current = null;
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }, [dragPos]);
-
-  // Reset position when dialog opens
-  useEffect(() => {
-    if (isOpen) setDragPos(null);
-  }, [isOpen]);
-
   // Fetch available printers when dialog opens
   useEffect(() => {
     if (!isOpen) return;
@@ -121,17 +86,6 @@ export function PrintDialog({ isOpen, onClose }: PrintDialogProps) {
       })
       .finally(() => setLoadingPrinters(false));
   }, [isOpen]);
-
-
-  // Close on Escape key
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
 
   const drawingShapes = shapes.filter(s => s.drawingId === activeDrawingId && s.visible);
   const visibleShapes = drawingShapes.length > 0 ? drawingShapes : shapes.filter(s => s.visible);
@@ -727,35 +681,51 @@ export function PrintDialog({ isOpen, onClose }: PrintDialogProps) {
     loadPrintPreset(name);
   };
 
-  if (!isOpen) return null;
-
   const paper = PAPER_SIZES[settings.paperSize];
   const isLandscape = settings.orientation === 'landscape';
   const paperW = paper ? (isLandscape ? paper.height : paper.width) : 0;
   const paperH = paper ? (isLandscape ? paper.width : paper.height) : 0;
 
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div
-        ref={dialogRef}
-        className="bg-cad-surface border border-cad-border shadow-xl w-[900px] h-[600px] flex flex-col"
-        style={dragPos ? { position: 'fixed', left: dragPos.x, top: dragPos.y, margin: 0 } : undefined}
+  const footerContent = (
+    <>
+      <button
+        onClick={onClose}
+        className="px-3 py-1 text-xs bg-cad-input border border-cad-border text-cad-text hover:bg-cad-hover"
       >
-        {/* Header */}
-        <div
-          className="flex items-center justify-between px-3 py-1.5 border-b border-cad-border select-none"
-          style={{ background: 'linear-gradient(to bottom, #ffffff, #f5f5f5)', borderColor: '#d4d4d4' }}
-          onMouseDown={handleDragStart}
-        >
-          <h2 className="text-xs font-semibold text-gray-800 flex items-center gap-1.5">
-            <Printer size={14} />
-            Print / Plot
-          </h2>
-          <button onClick={onClose} className="p-0.5 hover:bg-cad-hover rounded transition-colors text-gray-600 hover:text-gray-800 cursor-default -mr-1">
-            <X size={14} />
-          </button>
-        </div>
+        Cancel
+      </button>
+      <button
+        onClick={handleExportPDF}
+        disabled={isExporting}
+        className="px-3 py-1 text-xs bg-cad-input border border-cad-border text-cad-text hover:bg-cad-hover disabled:opacity-50 flex items-center gap-1"
+      >
+        <FileDown size={14} />
+        {isExporting ? 'Exporting...' : 'Export PDF'}
+      </button>
+      <button
+        onClick={handlePrint}
+        disabled={isPrinting}
+        className="px-3 py-1 text-xs bg-cad-accent text-white hover:bg-cad-accent/80 disabled:opacity-50 flex items-center gap-1"
+        title="Opens PDF in your default viewer where you can select printer and print"
+      >
+        <Printer size={14} />
+        {isPrinting ? 'Preparing...' : 'Print...'}
+      </button>
+    </>
+  );
 
+  return (
+    <>
+      <DraggableModal
+        isOpen={isOpen}
+        onClose={onClose}
+        title="Print / Plot"
+        icon={<Printer size={14} />}
+        width={900}
+        height={600}
+        footer={footerContent}
+        footerClassName="flex items-center justify-end gap-2 px-3 py-2 border-t border-cad-border"
+      >
         {/* Content */}
         <div className="flex flex-1 overflow-hidden">
           {/* Settings Panel */}
@@ -1075,34 +1045,7 @@ export function PrintDialog({ isOpen, onClose }: PrintDialogProps) {
             </p>
           </div>
         </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-cad-border">
-          <button
-            onClick={onClose}
-            className="px-3 py-1 text-xs bg-cad-input border border-cad-border text-cad-text hover:bg-cad-hover"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleExportPDF}
-            disabled={isExporting}
-            className="px-3 py-1 text-xs bg-cad-input border border-cad-border text-cad-text hover:bg-cad-hover disabled:opacity-50 flex items-center gap-1"
-          >
-            <FileDown size={14} />
-            {isExporting ? 'Exporting...' : 'Export PDF'}
-          </button>
-          <button
-            onClick={handlePrint}
-            disabled={isPrinting}
-            className="px-3 py-1 text-xs bg-cad-accent text-white hover:bg-cad-accent/80 disabled:opacity-50 flex items-center gap-1"
-            title="Opens PDF in your default viewer where you can select printer and print"
-          >
-            <Printer size={14} />
-            {isPrinting ? 'Preparing...' : 'Print...'}
-          </button>
-        </div>
-      </div>
+      </DraggableModal>
 
       {/* Sheet Selection Sub-Dialog */}
       {showSheetSelector && (
@@ -1116,6 +1059,6 @@ export function PrintDialog({ isOpen, onClose }: PrintDialogProps) {
           onCancel={() => setShowSheetSelector(false)}
         />
       )}
-    </div>
+    </>
   );
 }

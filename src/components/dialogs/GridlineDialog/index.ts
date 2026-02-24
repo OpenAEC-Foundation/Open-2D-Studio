@@ -1,1 +1,1 @@
-export { GridlineDialog, default } from './GridlineDialog';
+export { GridlineDialog } from './GridlineDialog';

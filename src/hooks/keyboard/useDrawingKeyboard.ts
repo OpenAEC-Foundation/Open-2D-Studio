@@ -105,8 +105,37 @@ export function useDrawingKeyboard() {
           break;
 
         case 'Escape':
-          // Cancel drawing operation
+          // Finalize drawing if enough points exist, otherwise cancel
           e.preventDefault();
+          if (activeTool === 'polyline' && drawingPoints.length >= 2) {
+            const bulges = useAppStore.getState().drawingBulges;
+            const polylineShape: PolylineShape = {
+              id: generateId(),
+              type: 'polyline',
+              layerId: activeLayerId,
+              drawingId: activeDrawingId,
+              style: { ...currentStyle },
+              visible: true,
+              locked: false,
+              points: [...drawingPoints],
+              closed: false,
+              bulge: bulges && bulges.some(b => b !== 0) ? [...bulges] : undefined,
+            };
+            addShape(polylineShape);
+          } else if (activeTool === 'spline' && drawingPoints.length >= 2) {
+            const splineShape: SplineShape = {
+              id: generateId(),
+              type: 'spline',
+              layerId: activeLayerId,
+              drawingId: activeDrawingId,
+              style: { ...currentStyle },
+              visible: true,
+              locked: false,
+              points: [...drawingPoints],
+              closed: false,
+            };
+            addShape(splineShape);
+          }
           clearDrawingPoints();
           setDrawingPreview(null);
           break;

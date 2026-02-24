@@ -5,6 +5,8 @@
 
 import { IPoint, PointUtils } from './Point';
 import { ILine, LineUtils } from './Line';
+import type { UnitSettings } from '../../units/types';
+import { formatNumber } from '../../units/format';
 
 export type TrackingMode = 'polar' | 'ortho' | 'object';
 
@@ -383,12 +385,14 @@ export function applyTracking(
 /**
  * Get human-readable description of tracking type
  */
-function getTrackingDescription(line: TrackingLine): string {
+function getTrackingDescription(line: TrackingLine, unitSettings?: UnitSettings): string {
   const angleDeg = ((line.angle * 180) / Math.PI + 360) % 360;
 
   switch (line.type) {
     case 'polar':
-      return `Polar: ${angleDeg.toFixed(0)}°`;
+      return unitSettings
+        ? `Polar: ${formatNumber(angleDeg, 0, unitSettings.numberFormat)}°`
+        : `Polar: ${angleDeg.toFixed(0)}°`;
     case 'parallel':
       return 'Parallel';
     case 'perpendicular':

@@ -51,6 +51,7 @@ import { usePileAutoDimensioning } from './hooks/usePileAutoDimensioning';
 import { usePileAutoPuntniveau } from './hooks/usePileAutoPuntniveau';
 import { useKeyboardShortcuts } from './hooks/keyboard/useKeyboardShortcuts';
 import { useGlobalKeyboard } from './hooks/keyboard/useGlobalKeyboard';
+import { useFileOperations } from './hooks/file/useFileOperations';
 import { useAppStore } from './state/appStore';
 import { getDocumentStoreIfExists } from './state/documentStore';
 import { CadApi } from './api';
@@ -60,6 +61,7 @@ import { checkForUpdates } from './services/updater/updaterService';
 import { startAutoSave, restoreAutoSave } from './services/autosave/autoSaveService';
 import { startBonsaiSync } from './services/bonsaiSync';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 import {
   promptSaveBeforeClose,
   showSaveDialog,
@@ -92,6 +94,18 @@ function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', uiTheme);
   }, [uiTheme]);
+
+  // File operations (for file association handling)
+  const { handleOpenPath } = useFileOperations();
+
+  // Listen for file-open events from OS file association (double-click .o2d file)
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return;
+    const unlisten = listen<string>('file-open', (event) => {
+      handleOpenPath(event.payload);
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, [handleOpenPath]);
 
   // Backstage view
   const [backstageOpen, setBackstageOpen] = useState(false);
@@ -417,7 +431,7 @@ function App() {
       <MenuBar onSendFeedback={onSendFeedback} />
 
       {/* Ribbon */}
-      <Ribbon onOpenBackstage={openBackstage} />
+      <Ribbon onOpenBackstage={openBackstage} hidden={backstageOpen} />
 
       {/* Options Bar (shows when Array or similar commands are active) */}
       <OptionsBar />

@@ -18,6 +18,7 @@ import type { TrackingLine } from '../geometry/Tracking';
 import type { IPoint } from '../geometry/Point';
 import type { ParametricShape } from '../../types/parametric';
 import type { CustomHatchPattern, MaterialHatchSettings } from '../../types/hatch';
+import type { UnitSettings } from '../../units/types';
 
 import { DrawingRenderer, DrawingRenderOptions } from './modes/DrawingRenderer';
 import { SheetRenderer, SheetRenderOptions, PlacementPreviewInfo } from './modes/SheetRenderer';
@@ -84,6 +85,8 @@ interface RenderOptions {
   seaLevelDatum?: number;
   /** Hidden IFC categories — shapes in these categories are not rendered */
   hiddenIfcCategories?: string[];
+  /** Unit settings for number formatting in overlays and labels */
+  unitSettings?: UnitSettings;
 }
 
 // Interface for sheet mode rendering (supports both new and legacy property names)
@@ -128,6 +131,8 @@ interface SheetModeRenderOptions {
   hiddenIfcCategories?: string[];
   /** Saved queries for rendering query tables */
   queries?: import('../../state/slices/parametricSlice').SavedQuery[];
+  /** Unit settings for number formatting in overlays and labels */
+  unitSettings?: UnitSettings;
 }
 
 export class CADRenderer {
@@ -201,6 +206,7 @@ export class CADRenderer {
       gridlineExtension: options.gridlineExtension,
       seaLevelDatum: options.seaLevelDatum,
       hiddenIfcCategories: options.hiddenIfcCategories,
+      unitSettings: options.unitSettings,
     };
 
     this.drawingRenderer.render(drawingOptions);
@@ -234,6 +240,7 @@ export class CADRenderer {
       seaLevelDatum: options.seaLevelDatum,
       hiddenIfcCategories: options.hiddenIfcCategories,
       queries: options.queries,
+      unitSettings: options.unitSettings,
     };
 
     this.sheetRenderer.render(sheetOptions);

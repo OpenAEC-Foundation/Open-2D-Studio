@@ -5,7 +5,7 @@
 import type { Point, Shape, SnapType } from '../../types/geometry';
 import type { DimensionType, DimensionShape, DimensionStyle } from '../../types/dimension';
 import type { UnitSettings } from '../../units/types';
-import { formatLength, formatAngle } from '../../units';
+import { formatLength, formatAngle, formatNumber } from '../../units';
 
 // ============================================================================
 // Basic Geometry Helpers
@@ -132,11 +132,11 @@ export function formatDimensionValue(
       : unitSettings;
     return formatLength(value, settings);
   }
-  // Fallback for callers that don't pass unitSettings yet
+  // Fallback for callers that don't pass unitSettings
   if (dimensionType === 'angular') {
-    return value.toFixed(precision ?? 2) + '\u00B0';
+    return formatNumber(value, precision ?? 2, 'period') + '\u00B0';
   }
-  return value.toFixed(precision ?? 2);
+  return formatNumber(value, precision ?? 2, 'period');
 }
 
 /**

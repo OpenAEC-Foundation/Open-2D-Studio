@@ -19,6 +19,8 @@ import type {
   WallType,
   BoundingBox,
 } from '../../types/geometry';
+import type { UnitSettings } from '../../units/types';
+import { formatNumber, formatElevation, applyNumberFormat } from '../../units/format';
 
 /**
  * Generate display text for a shape to be shown in a linked label.
@@ -33,7 +35,8 @@ import type {
  */
 export function getElementLabelText(
   shape: Shape,
-  wallTypes?: WallType[]
+  wallTypes?: WallType[],
+  unitSettings?: UnitSettings
 ): string {
   switch (shape.type) {
     case 'beam': {
@@ -79,10 +82,8 @@ export function getElementLabelText(
 
     case 'level': {
       const level = shape as LevelShape;
-      // Format peil as elevation string (e.g., "+3.000 m", "0.000 m", "-1.200 m")
-      const peilM = level.peil / 1000;
-      const prefix = peilM > 0 ? '+' : '';
-      return `${level.label} (${prefix}${peilM.toFixed(3)} m)`;
+      const fmt = unitSettings?.numberFormat ?? 'period';
+      return `${level.label} (${formatElevation(level.peil, fmt, 3)} m)`;
     }
 
     case 'pile': {
@@ -92,7 +93,7 @@ export function getElementLabelText(
 
     case 'puntniveau': {
       const pn = shape as PuntniveauShape;
-      const napFormatted = formatDutchNumber(pn.puntniveauNAP);
+      const napFormatted = formatDutchNumber(pn.puntniveauNAP, unitSettings);
       return `PUNTNIVEAU: ${napFormatted} m N.A.P.`;
     }
 
@@ -103,7 +104,8 @@ export function getElementLabelText(
         label = `${space.number} - ${label}`;
       }
       if (space.area !== undefined) {
-        label += `\n${space.area.toFixed(2)} m\u00B2`;
+        const fmt = unitSettings?.numberFormat ?? 'period';
+        label += `\n${formatNumber(space.area, 2, fmt)} m\u00B2`;
       }
       return label;
     }
@@ -149,7 +151,8 @@ export function getDefaultLabelTemplate(shapeType: string): string {
  */
 export function getShapePropertyValues(
   shape: Shape,
-  wallTypes?: WallType[]
+  wallTypes?: WallType[],
+  unitSettings?: UnitSettings
 ): Record<string, string> {
   const props: Record<string, string> = {};
 
@@ -159,7 +162,7 @@ export function getShapePropertyValues(
       props['Name'] = space.name || '';
       props['Number'] = space.number || '';
       props['Level'] = space.level || '';
-      props['Area'] = space.area !== undefined ? space.area.toFixed(2) : '';
+      props['Area'] = space.area !== undefined ? formatNumber(space.area, 2, unitSettings?.numberFormat ?? 'period') : '';
       break;
     }
     case 'wall': {
@@ -199,7 +202,7 @@ export function getShapePropertyValues(
     }
     case 'puntniveau': {
       const pn = shape as PuntniveauShape;
-      const napFormatted = formatDutchNumber(pn.puntniveauNAP);
+      const napFormatted = formatDutchNumber(pn.puntniveauNAP, unitSettings);
       props['Name'] = `PUNTNIVEAU: ${napFormatted} m N.A.P.`;
       props['NAP'] = napFormatted;
       props['Value'] = String(pn.puntniveauNAP);
@@ -207,10 +210,9 @@ export function getShapePropertyValues(
     }
     case 'level': {
       const level = shape as LevelShape;
-      const peilM = level.peil / 1000;
-      const prefix = peilM > 0 ? '+' : '';
+      const fmt = unitSettings?.numberFormat ?? 'period';
       props['Name'] = level.label;
-      props['Elevation'] = `${prefix}${peilM.toFixed(3)} m`;
+      props['Elevation'] = `${formatElevation(level.peil, fmt, 3)} m`;
       break;
     }
     case 'gridline': {
@@ -238,9 +240,10 @@ export function getShapePropertyValues(
 export function resolveTemplate(
   template: string,
   shape: Shape,
-  wallTypes?: WallType[]
+  wallTypes?: WallType[],
+  unitSettings?: UnitSettings
 ): string {
-  const props = getShapePropertyValues(shape, wallTypes);
+  const props = getShapePropertyValues(shape, wallTypes, unitSettings);
   return template.replace(/\{(\w+)\}/g, (_match, key: string) => {
     return props[key] ?? '';
   });
@@ -338,11 +341,15 @@ export function findLinkedLabels(shapes: Shape[], linkedToId: string): Shape[] {
 /**
  * Format a number in Dutch notation (comma as decimal separator).
  * Removes trailing zeros after the comma for clean display.
+ * When unitSettings is provided, respects the numberFormat setting.
  * Examples: -18.5 -> "-18,5", 12.0 -> "12", -3.25 -> "-3,25"
  */
-export function formatDutchNumber(value: number): string {
+export function formatDutchNumber(value: number, unitSettings?: UnitSettings): string {
   const formatted = value.toFixed(2);
   const cleaned = formatted.replace(/\.?0+$/, '');
+  if (unitSettings) {
+    return applyNumberFormat(cleaned, unitSettings.numberFormat);
+  }
   return cleaned.replace('.', ',');
 }
 

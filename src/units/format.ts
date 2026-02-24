@@ -22,7 +22,7 @@ export function getUnitSuffix(unit: LengthUnit): string {
 /**
  * Apply number format (period vs comma) to a numeric string
  */
-function applyNumberFormat(numStr: string, format: UnitSettings['numberFormat']): string {
+export function applyNumberFormat(numStr: string, format: UnitSettings['numberFormat']): string {
   if (format === 'comma') {
     // Swap: period → placeholder → comma → period → placeholder → comma
     // "1234.56" → "1234,56" and group separator becomes period
@@ -40,6 +40,60 @@ function applyNumberFormat(numStr: string, format: UnitSettings['numberFormat'])
   const decPart = parts[1];
   const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   return decPart !== undefined ? `${grouped}.${decPart}` : grouped;
+}
+
+/**
+ * Format a plain number (no unit conversion) with the given precision and number format.
+ * Use for area, weight, elevation, scale factor, etc.
+ */
+export function formatNumber(
+  value: number,
+  precision: number,
+  format: UnitSettings['numberFormat']
+): string {
+  const fixed = value.toFixed(precision);
+  return applyNumberFormat(fixed, format);
+}
+
+/**
+ * Format an elevation value (in mm) for display as meters with sign prefix.
+ * Example: +1,234 or -0,500 (EU) / +1.234 or -0.500 (US)
+ */
+export function formatElevation(
+  elevMM: number,
+  format: UnitSettings['numberFormat'],
+  precision: number = 3
+): string {
+  const meters = elevMM / 1000;
+  const sign = meters >= 0 ? '+' : '';
+  const fixed = meters.toFixed(precision);
+  const formatted = applyNumberFormat(fixed, format);
+  return `${sign}${formatted}`;
+}
+
+/**
+ * Normalize a number input string based on number format.
+ * For EU (comma): strips period (thousand sep), replaces comma with period.
+ * For US (period): strips commas (thousand sep).
+ */
+function normalizeNumberInput(numStr: string, format: UnitSettings['numberFormat']): string {
+  if (format === 'comma') {
+    // EU: period is thousand separator, comma is decimal
+    return numStr.replace(/\./g, '').replace(/,/g, '.');
+  }
+  // US: comma is thousand separator, period is decimal
+  return numStr.replace(/,/g, '');
+}
+
+/**
+ * Parse a formatted number string respecting the number format setting.
+ * Returns NaN if the string cannot be parsed.
+ */
+export function parseNumber(input: string, format: UnitSettings['numberFormat']): number {
+  const trimmed = input.trim();
+  if (trimmed === '') return 0;
+  const normalized = normalizeNumberInput(trimmed, format);
+  return parseFloat(normalized);
 }
 
 /**
@@ -153,7 +207,7 @@ export function parseLength(input: string, settings: UnitSettings): number {
   // Try value with unit suffix
   const unitMatch = trimmed.match(/^(-?[\d.,]+)\s*(mm|cm|m|in|ft|"|')$/i);
   if (unitMatch) {
-    const numStr = unitMatch[1].replace(/,/g, '');
+    const numStr = normalizeNumberInput(unitMatch[1], settings.numberFormat);
     const value = parseFloat(numStr);
     if (isNaN(value)) return 0;
     const unitStr = unitMatch[2].toLowerCase();
@@ -166,7 +220,7 @@ export function parseLength(input: string, settings: UnitSettings): number {
   }
 
   // Plain number — interpret as document unit
-  const numStr = trimmed.replace(/,/g, '');
+  const numStr = normalizeNumberInput(trimmed, settings.numberFormat);
   const value = parseFloat(numStr);
   if (isNaN(value)) return 0;
   return toMM(value, settings.lengthUnit);
@@ -176,23 +230,26 @@ export function parseLength(input: string, settings: UnitSettings): number {
  * Parse an angle string into degrees.
  * Accepts: "45", "45°", "0.785rad", "50grad"
  */
-export function parseAngle(input: string, _settings: UnitSettings): number {
+export function parseAngle(input: string, settings: UnitSettings): number {
   const trimmed = input.trim().replace(/°/g, '');
   if (trimmed === '') return 0;
 
   // Check for radians suffix
-  const radMatch = trimmed.match(/^(-?[\d.]+)\s*rad$/i);
+  const radMatch = trimmed.match(/^(-?[\d.,]+)\s*rad$/i);
   if (radMatch) {
-    return parseFloat(radMatch[1]) * (180 / Math.PI);
+    const numStr = normalizeNumberInput(radMatch[1], settings.numberFormat);
+    return parseFloat(numStr) * (180 / Math.PI);
   }
 
   // Check for gradians suffix
-  const gradMatch = trimmed.match(/^(-?[\d.]+)\s*grad$/i);
+  const gradMatch = trimmed.match(/^(-?[\d.,]+)\s*grad$/i);
   if (gradMatch) {
-    return parseFloat(gradMatch[1]) * 0.9; // 1 gradian = 0.9 degrees
+    const numStr = normalizeNumberInput(gradMatch[1], settings.numberFormat);
+    return parseFloat(numStr) * 0.9; // 1 gradian = 0.9 degrees
   }
 
   // Plain number — degrees
-  const value = parseFloat(trimmed.replace(/,/g, ''));
+  const normalized = normalizeNumberInput(trimmed, settings.numberFormat);
+  const value = parseFloat(normalized);
   return isNaN(value) ? 0 : value;
 }

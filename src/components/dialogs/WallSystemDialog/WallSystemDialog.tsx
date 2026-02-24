@@ -10,8 +10,10 @@
  */
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { X, Plus, Trash2, ChevronDown, ChevronUp, Copy, Download, Upload } from 'lucide-react';
-import { useAppStore } from '../../../state/appStore';
+import { Plus, Trash2, ChevronDown, ChevronUp, Copy, Download, Upload } from 'lucide-react';
+import { useAppStore, useUnitSettings } from '../../../state/appStore';
+import { formatNumber } from '../../../units';
+import { DraggableModal } from '../../shared/DraggableModal';
 import type {
   WallSystemType,
   WallSystemLayer,
@@ -71,6 +73,7 @@ function genId(prefix: string): string {
 // ============================================================================
 
 export function WallSystemDialog({ isOpen, onClose }: WallSystemDialogProps) {
+  const unitSettings = useUnitSettings();
   const {
     wallSystemTypes,
     addWallSystemType,
@@ -82,31 +85,6 @@ export function WallSystemDialog({ isOpen, onClose }: WallSystemDialogProps) {
     wallSystemTypes.length > 0 ? wallSystemTypes[0].id : null
   );
   const [activeTab, setActiveTab] = useState<'layers' | 'studs' | 'panels' | 'grid'>('layers');
-
-  // Dragging
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef({ x: 0, y: 0 });
-
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button, input, select, label, canvas')) return;
-    setIsDragging(true);
-    dragStartRef.current = { x: e.clientX - position.x, y: e.clientY - position.y };
-  }, [position]);
-
-  useEffect(() => {
-    if (!isDragging) return;
-    const handleMove = (e: MouseEvent) => {
-      setPosition({ x: e.clientX - dragStartRef.current.x, y: e.clientY - dragStartRef.current.y });
-    };
-    const handleUp = () => setIsDragging(false);
-    window.addEventListener('mousemove', handleMove);
-    window.addEventListener('mouseup', handleUp);
-    return () => {
-      window.removeEventListener('mousemove', handleMove);
-      window.removeEventListener('mouseup', handleUp);
-    };
-  }, [isDragging]);
 
   const selectedSystem = useMemo(
     () => wallSystemTypes.find(ws => ws.id === selectedId) || null,
@@ -254,36 +232,17 @@ export function WallSystemDialog({ isOpen, onClose }: WallSystemDialogProps) {
     input.click();
   };
 
-  if (!isOpen) return null;
-
   const inputClass = 'w-full bg-cad-bg border border-cad-border rounded px-2 py-1 text-xs text-cad-text focus:outline-none focus:border-cad-accent';
   const labelClass = 'block text-[10px] font-medium text-cad-text-dim mb-0.5';
   const btnClass = 'px-2 py-1 text-xs rounded border border-cad-border hover:bg-cad-hover transition-colors';
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-    <div
-      className="bg-cad-panel border border-cad-border rounded-lg shadow-xl flex flex-col"
-      style={{
-        left: position.x !== 0 || position.y !== 0 ? `calc(50% + ${position.x}px)` : undefined,
-        top: position.x !== 0 || position.y !== 0 ? `calc(50% + ${position.y}px)` : undefined,
-        transform: position.x !== 0 || position.y !== 0 ? 'translate(-50%, -50%)' : undefined,
-        position: position.x !== 0 || position.y !== 0 ? 'fixed' : undefined,
-        width: 800,
-        maxHeight: '85vh',
-      }}
-      onMouseDown={handleMouseDown}
+    <DraggableModal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Wall System Editor"
+      width={800}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-cad-border cursor-move select-none">
-        <h2 className="text-sm font-semibold text-cad-text">Wall System Editor</h2>
-        <button onClick={onClose} className="p-1 hover:bg-cad-hover rounded">
-          <X size={14} className="text-cad-text-dim" />
-        </button>
-      </div>
-
       <div className="flex flex-1 overflow-hidden">
         {/* Left panel: type list */}
         <div className="w-52 border-r border-cad-border flex flex-col">
@@ -316,7 +275,7 @@ export function WallSystemDialog({ isOpen, onClose }: WallSystemDialogProps) {
                 }`}
               >
                 <div className="font-medium">{ws.name}</div>
-                <div className="text-[10px] text-cad-text-dim">{ws.category} &middot; {ws.totalThickness.toFixed(1)}mm</div>
+                <div className="text-[10px] text-cad-text-dim">{ws.category} &middot; {formatNumber(ws.totalThickness, 1, unitSettings.numberFormat)}mm</div>
               </button>
             ))}
           </div>
@@ -351,7 +310,7 @@ export function WallSystemDialog({ isOpen, onClose }: WallSystemDialogProps) {
                 <div>
                   <label className={labelClass}>Total Thickness</label>
                   <div className="px-2 py-1 text-xs text-cad-text bg-cad-bg border border-cad-border rounded">
-                    {selectedSystem.totalThickness.toFixed(1)} mm
+                    {formatNumber(selectedSystem.totalThickness, 1, unitSettings.numberFormat)} mm
                   </div>
                 </div>
               </div>
@@ -417,8 +376,7 @@ export function WallSystemDialog({ isOpen, onClose }: WallSystemDialogProps) {
           )}
         </div>
       </div>
-    </div>
-    </div>
+    </DraggableModal>
   );
 }
 
@@ -791,6 +749,7 @@ function GridTab({
 // ============================================================================
 
 function CrossSectionPreview({ system }: { system: WallSystemType }) {
+  const unitSettings = useUnitSettings();
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -857,8 +816,8 @@ function CrossSectionPreview({ system }: { system: WallSystemType }) {
     ctx.fillStyle = '#aaa';
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`Total: ${total.toFixed(1)} mm`, W / 2, H - 3);
-  }, [system]);
+    ctx.fillText(`Total: ${formatNumber(total, 1, unitSettings.numberFormat)} mm`, W / 2, H - 3);
+  }, [system, unitSettings.numberFormat]);
 
   return (
     <canvas

@@ -1,4 +1,6 @@
 import type { Point } from '../../types/geometry';
+import type { UnitSettings } from '../../units/types';
+import { formatNumber as fmtNum } from '../../units/format';
 
 export interface ParsedCoordinate {
   point: Point;
@@ -122,7 +124,10 @@ export function parseCoordinateInput(
 /**
  * Format a point as a coordinate string
  */
-export function formatCoordinate(point: Point, precision: number = 2): string {
+export function formatCoordinate(point: Point, precision: number = 2, unitSettings?: UnitSettings): string {
+  if (unitSettings) {
+    return `${fmtNum(point.x, precision, unitSettings.numberFormat)}, ${fmtNum(point.y, precision, unitSettings.numberFormat)}`;
+  }
   return `${point.x.toFixed(precision)}, ${point.y.toFixed(precision)}`;
 }
 
@@ -150,6 +155,9 @@ export function getAngle(from: Point, to: Point): number {
 /**
  * Format distance and angle for display
  */
-export function formatPolar(distance: number, angle: number, precision: number = 2): string {
+export function formatPolar(distance: number, angle: number, precision: number = 2, unitSettings?: UnitSettings): string {
+  if (unitSettings) {
+    return `${fmtNum(distance, precision, unitSettings.numberFormat)} < ${fmtNum(angle, 1, unitSettings.numberFormat)}°`;
+  }
   return `${distance.toFixed(precision)} < ${angle.toFixed(1)}°`;
 }

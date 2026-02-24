@@ -17,6 +17,7 @@ import { MM_TO_PIXELS, COLORS } from '../types';
 import { CAD_DEFAULT_FONT } from '../../../constants/cadDefaults';
 import { PROFILE_TEMPLATES } from '../../../services/parametric/profileTemplates';
 import { isShapeInHiddenCategory } from '../../../utils/ifcCategoryUtils';
+import type { UnitSettings } from '../../../units/types';
 
 export interface ViewportRenderOptions {
   /** All layers for filtering */
@@ -48,6 +49,8 @@ export interface ViewportRenderOptions {
   seaLevelDatum?: number;
   /** Hidden IFC categories — shapes in these categories are not rendered */
   hiddenIfcCategories?: string[];
+  /** Unit settings for number formatting in overlays and labels */
+  unitSettings?: UnitSettings;
 }
 
 export class ViewportRenderer extends BaseRenderer {
@@ -253,6 +256,11 @@ export class ViewportRenderer extends BaseRenderer {
     // Set sea level datum for NAP elevation display on levels
     if (options?.seaLevelDatum !== undefined) {
       this.shapeRenderer.setSeaLevelDatum(options.seaLevelDatum);
+    }
+
+    // Set unit settings for number formatting
+    if (options?.unitSettings) {
+      this.shapeRenderer.setUnitSettings(options.unitSettings);
     }
 
     // Set shapes lookup for linked label text resolution

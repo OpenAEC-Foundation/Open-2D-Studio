@@ -46,7 +46,8 @@ import {
 } from 'lucide-react';
 import type { UITheme } from '../../../state/slices/snapSlice';
 import { UI_THEMES } from '../../../state/slices/snapSlice';
-import { useAppStore } from '../../../state/appStore';
+import { useAppStore, useUnitSettings } from '../../../state/appStore';
+import { formatNumber } from '../../../units';
 import {
   LineIcon,
   ArcIcon,
@@ -295,11 +296,71 @@ function RibbonMediumButtonStack({ children }: { children: React.ReactNode }) {
   return <div className="ribbon-btn-medium-stack">{children}</div>;
 }
 
-function RibbonGroup({ label, children, noLabels }: { label: string; children: React.ReactNode; noLabels?: boolean }) {
+function RibbonGroup({ label, children, noLabels, expandContent }: { label: string; children: React.ReactNode; noLabels?: boolean; expandContent?: React.ReactNode }) {
+  const [expanded, setExpanded] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const groupRef = useRef<HTMLDivElement>(null);
+  const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!expanded || pinned) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (groupRef.current && !groupRef.current.contains(e.target as Node)) {
+        setExpanded(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [expanded, pinned]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (!expanded || pinned) return;
+    leaveTimerRef.current = setTimeout(() => setExpanded(false), 500);
+  }, [expanded, pinned]);
+
+  const handleMouseEnter = useCallback(() => {
+    if (leaveTimerRef.current) {
+      clearTimeout(leaveTimerRef.current);
+      leaveTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
+    };
+  }, []);
+
   return (
-    <div className={`ribbon-group ${noLabels ? 'no-labels' : ''}`}>
+    <div ref={groupRef} className={`ribbon-group ${noLabels ? 'no-labels' : ''} ${expandContent ? 'expandable' : ''} ${expanded ? 'expanded' : ''}`} onMouseLeave={handleMouseLeave} onMouseEnter={handleMouseEnter}>
       <div className="ribbon-group-content">{children}</div>
-      <div className="ribbon-group-label">{label}</div>
+      {expandContent ? (
+        !expanded && (
+          <button className="ribbon-group-expand-trigger" onClick={() => setExpanded(true)}>
+            <span className="ribbon-group-label">{label}</span>
+            <ChevronDown size={8} className="ribbon-expand-chevron" />
+          </button>
+        )
+      ) : (
+        <div className="ribbon-group-label">{label}</div>
+      )}
+      {expanded && expandContent && (
+        <div className="ribbon-expand-panel">
+          <div className="ribbon-expand-panel-content">
+            {expandContent}
+          </div>
+          <div className="ribbon-expand-panel-footer">
+            <button
+              className={`ribbon-expand-panel-action ${pinned ? 'active' : ''}`}
+              onClick={() => setPinned(!pinned)}
+              title={pinned ? 'Unpin panel' : 'Pin panel open'}
+            >
+              <PinIcon size={10} />
+            </button>
+            <span className="ribbon-group-label">{label}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -581,6 +642,7 @@ export function PilePlanRibbonTable() {
   const activeDrawingId = useAppStore(s => s.activeDrawingId);
   const selectShapes = useAppStore(s => s.selectShapes);
   const selectedShapeIds = useAppStore(s => s.selectedShapeIds);
+  const unitSettings = useUnitSettings();
 
   const piles = useMemo(() =>
     shapes.filter((s): s is PileShape => s.type === 'pile' && s.drawingId === activeDrawingId),
@@ -632,11 +694,11 @@ export function PilePlanRibbonTable() {
                 className={`cursor-default ${selectedSet.has(p.id) ? 'bg-cad-accent/20' : 'hover:bg-cad-border/30'}`}
               >
                 <td className="px-1 text-cad-text">{p.label || '\u2014'}</td>
-                <td className="px-1 text-cad-text text-right tabular-nums">{p.position.x.toFixed(0)}</td>
-                <td className="px-1 text-cad-text text-right tabular-nums">{p.position.y.toFixed(0)}</td>
-                <td className="px-1 text-cad-text text-right tabular-nums">{p.diameter.toFixed(0)}</td>
-                <td className="px-1 text-cad-text text-right tabular-nums">{p.puntniveauNAP != null ? p.puntniveauNAP.toFixed(1) : '\u2014'}</td>
-                <td className="px-1 text-cad-text text-right tabular-nums">{p.bkPaalPeil != null ? p.bkPaalPeil.toFixed(0) : '\u2014'}</td>
+                <td className="px-1 text-cad-text text-right tabular-nums">{formatNumber(p.position.x, 0, unitSettings.numberFormat)}</td>
+                <td className="px-1 text-cad-text text-right tabular-nums">{formatNumber(p.position.y, 0, unitSettings.numberFormat)}</td>
+                <td className="px-1 text-cad-text text-right tabular-nums">{formatNumber(p.diameter, 0, unitSettings.numberFormat)}</td>
+                <td className="px-1 text-cad-text text-right tabular-nums">{p.puntniveauNAP != null ? formatNumber(p.puntniveauNAP, 1, unitSettings.numberFormat) : '\u2014'}</td>
+                <td className="px-1 text-cad-text text-right tabular-nums">{p.bkPaalPeil != null ? formatNumber(p.bkPaalPeil, 0, unitSettings.numberFormat) : '\u2014'}</td>
                 <td className="px-1 text-cad-text-dim">{p.pileType ? PILE_TYPE_LABELS[p.pileType] || p.pileType : '\u2014'}</td>
               </tr>
             ))}
@@ -649,9 +711,10 @@ export function PilePlanRibbonTable() {
 
 interface RibbonProps {
   onOpenBackstage: () => void;
+  hidden?: boolean;
 }
 
-export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
+export const Ribbon = memo(function Ribbon({ onOpenBackstage, hidden }: RibbonProps) {
   const [activeTab, setActiveTab] = useState<RibbonTab>('home');
   const [ifcFilterOpen, setIfcFilterOpen] = useState(false);
   const ifcFilterRef = useRef<HTMLDivElement>(null);
@@ -931,6 +994,8 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
     ));
   };
 
+  if (hidden) return null;
+
   return (
     <div className="ribbon-container">
       {/* Ribbon Tabs */}
@@ -1093,7 +1158,39 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
             </RibbonGroup>
 
             {/* Annotate Group */}
-            <RibbonGroup label="Annotate">
+            <RibbonGroup label="Annotate" expandContent={
+              <>
+                <RibbonButtonStack>
+                  <RibbonSmallButton
+                    icon={<LeaderIcon size={14} />}
+                    label="Leader"
+                    onClick={() => switchToDrawingTool('leader')}
+                    active={activeTool === 'leader'}
+                    disabled={isSheetMode}
+                    shortcut="LE"
+                  />
+                  <RibbonSmallButton
+                    icon={<TableIcon size={14} />}
+                    label="Table"
+                    onClick={() => {}}
+                    disabled={true}
+                  />
+                  <RibbonSmallButton
+                    icon={<CloudIcon size={14} />}
+                    label="Cloud"
+                    onClick={() => {}}
+                    disabled={true}
+                  />
+                </RibbonButtonStack>
+                <RibbonButton
+                  icon={<Type size={24} />}
+                  label="Text Styles"
+                  onClick={() => setTextStyleManagerOpen(true)}
+                  disabled={isSheetMode}
+                  tooltip="Manage text styles"
+                />
+              </>
+            }>
               <RibbonButton
                 icon={<AlignedDimensionIcon size={24} />}
                 label="Aligned"
@@ -1153,35 +1250,6 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                   shortcut="DD"
                 />
               </RibbonButtonStack>
-              <RibbonButtonStack>
-                <RibbonSmallButton
-                  icon={<LeaderIcon size={14} />}
-                  label="Leader"
-                  onClick={() => switchToDrawingTool('leader')}
-                  active={activeTool === 'leader'}
-                  disabled={isSheetMode}
-                  shortcut="LE"
-                />
-                <RibbonSmallButton
-                  icon={<TableIcon size={14} />}
-                  label="Table"
-                  onClick={() => {}}
-                  disabled={true}
-                />
-                <RibbonSmallButton
-                  icon={<CloudIcon size={14} />}
-                  label="Cloud"
-                  onClick={() => {}}
-                  disabled={true}
-                />
-              </RibbonButtonStack>
-              <RibbonButton
-                icon={<Type size={24} />}
-                label="Text Styles"
-                onClick={() => setTextStyleManagerOpen(true)}
-                disabled={isSheetMode}
-                tooltip="Manage text styles"
-              />
             </RibbonGroup>
 
             {/* Modify Group */}
@@ -1240,7 +1308,52 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
             </RibbonGroup>
 
             {/* Edit Group */}
-            <RibbonGroup label="Edit">
+            <RibbonGroup label="Edit" expandContent={
+              <>
+                <RibbonButtonStack>
+                  <RibbonSmallButton
+                    icon={<SplitIcon size={14} />}
+                    label="Split"
+                    onClick={() => {}}
+                    disabled={true}
+                  />
+                  <RibbonSmallButton
+                    icon={<BreakIcon size={14} />}
+                    label="Break"
+                    onClick={() => {}}
+                    disabled={true}
+                  />
+                  <RibbonSmallButton
+                    icon={<JoinIcon size={14} />}
+                    label="Join"
+                    onClick={() => {}}
+                    disabled={true}
+                  />
+                </RibbonButtonStack>
+                <RibbonButtonStack>
+                  <RibbonSmallButton
+                    icon={<ExplodeIcon size={14} />}
+                    label="Explode"
+                    onClick={() => {}}
+                    disabled={true}
+                  />
+                  <RibbonSmallButton
+                    icon={<LengthenIcon size={14} />}
+                    label="Lengthen"
+                    onClick={() => {}}
+                    disabled={true}
+                  />
+                  <RibbonSmallButton
+                    icon={<AlignIcon size={14} />}
+                    label="Align"
+                    onClick={() => switchToolAndCancelCommand('align')}
+                    active={activeTool === 'align'}
+                    disabled={isSheetMode}
+                    shortcut="AL"
+                  />
+                </RibbonButtonStack>
+              </>
+            }>
               <RibbonButtonStack>
                 <RibbonSmallButton
                   icon={<Scissors size={14} />}
@@ -1284,34 +1397,6 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                   disabled={isSheetMode}
                 />
                 <RibbonSmallButton
-                  icon={<SplitIcon size={14} />}
-                  label="Split"
-                  onClick={() => {}}
-                  disabled={true}
-                />
-              </RibbonButtonStack>
-              <RibbonButtonStack>
-                <RibbonSmallButton
-                  icon={<BreakIcon size={14} />}
-                  label="Break"
-                  onClick={() => {}}
-                  disabled={true}
-                />
-                <RibbonSmallButton
-                  icon={<JoinIcon size={14} />}
-                  label="Join"
-                  onClick={() => {}}
-                  disabled={true}
-                />
-                <RibbonSmallButton
-                  icon={<ExplodeIcon size={14} />}
-                  label="Explode"
-                  onClick={() => {}}
-                  disabled={true}
-                />
-              </RibbonButtonStack>
-              <RibbonButtonStack>
-                <RibbonSmallButton
                   icon={<StretchIcon size={14} />}
                   label="Stretch"
                   onClick={() => switchToolAndCancelCommand('elastic')}
@@ -1319,27 +1404,7 @@ export const Ribbon = memo(function Ribbon({ onOpenBackstage }: RibbonProps) {
                   disabled={isSheetMode}
                   shortcut="E"
                 />
-                <RibbonSmallButton
-                  icon={<LengthenIcon size={14} />}
-                  label="Lengthen"
-                  onClick={() => {}}
-                  disabled={true}
-                />
-                <RibbonSmallButton
-                  icon={<AlignIcon size={14} />}
-                  label="Align"
-                  onClick={() => switchToolAndCancelCommand('align')}
-                  active={activeTool === 'align'}
-                  disabled={isSheetMode}
-                  shortcut="AL"
-                />
               </RibbonButtonStack>
-              <RibbonSmallButton
-                icon={<PinIcon size={14} />}
-                label="Pin"
-                onClick={() => {}}
-                disabled={true}
-              />
             </RibbonGroup>
 
             {renderExtensionButtonsForTab('home')}

@@ -19,6 +19,7 @@ import { HandleRenderer } from '../ui/HandleRenderer';
 import { COLORS } from '../types';
 import { generateProfileGeometry } from '../../../services/parametric/geometryGenerators';
 import { isShapeInHiddenCategory } from '../../../utils/ifcCategoryUtils';
+import type { UnitSettings } from '../../../units/types';
 
 export interface DrawingRenderOptions {
   shapes: Shape[];
@@ -76,6 +77,8 @@ export interface DrawingRenderOptions {
   seaLevelDatum?: number;
   /** Hidden IFC categories — shapes in these categories are not rendered */
   hiddenIfcCategories?: string[];
+  /** Unit settings for number formatting in overlays and labels */
+  unitSettings?: UnitSettings;
 }
 
 // Legacy alias
@@ -189,6 +192,11 @@ export class DrawingRenderer extends BaseRenderer {
       this.shapeRenderer.setSeaLevelDatum(options.seaLevelDatum);
     }
 
+    // Set unit settings for number formatting
+    if (options.unitSettings) {
+      this.shapeRenderer.setUnitSettings(options.unitSettings);
+    }
+
     // Set shapes lookup for linked label text resolution
     this.shapeRenderer.setShapesLookup(shapes);
 
@@ -294,7 +302,7 @@ export class DrawingRenderer extends BaseRenderer {
 
     // Draw 2D cursor
     if (options.cursor2DVisible && options.cursor2D) {
-      this.cursorLayer.drawCursor(options.cursor2D, viewport, whiteBackground);
+      this.cursorLayer.drawCursor(options.cursor2D, viewport, whiteBackground, options.unitSettings);
     }
 
     // Draw section placement preview (pending section following mouse)
@@ -327,7 +335,7 @@ export class DrawingRenderer extends BaseRenderer {
       const isDuplicateLabel = (trackingType === 'perpendicular' && snapType === 'perpendicular') ||
                                (trackingType === 'parallel' && snapType === 'parallel');
       if (!isDuplicateLabel) {
-        this.trackingLayer.drawTrackingLabel(currentTrackingLines, trackingPoint, viewport);
+        this.trackingLayer.drawTrackingLabel(currentTrackingLines, trackingPoint, viewport, options.unitSettings);
       }
     }
   }

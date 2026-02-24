@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Open 2D Studio",
-  "version": "0.24.0",
+  "version": "0.27.0",
   "identifier": "com.openndstudio.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -38,6 +38,18 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["o2d"],
+        "description": "Open 2D Studio Project",
+        "mimeType": "application/x-open2dstudio"
+      },
+      {
+        "ext": ["dxf"],
+        "description": "DXF Drawing Exchange Format",
+        "mimeType": "image/vnd.dxf"
+      }
     ],
     "windows": {
       "certificateThumbprint": null,

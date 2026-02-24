@@ -36,6 +36,7 @@ jobs:
         include:
           - platform: 'ubuntu-22.04'
           - platform: 'windows-latest'
+          - platform: 'macos-latest'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -83,6 +84,16 @@ jobs:
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/rpm/*.rpm
             src-tauri/target/release/bundle/appimage/*.AppImage
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Upload artifacts (macOS)
+        if: matrix.platform == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
           retention-days: 30
           if-no-files-found: ignore
 

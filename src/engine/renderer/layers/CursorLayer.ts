@@ -8,12 +8,14 @@
 
 import type { Viewport, Point } from '../types';
 import { BaseRenderer } from '../core/BaseRenderer';
+import type { UnitSettings } from '../../../units/types';
+import { formatCoordinate } from '../../../units/format';
 
 export class CursorLayer extends BaseRenderer {
   /**
    * Draw the 2D cursor at the given world position
    */
-  drawCursor(position: Point, viewport: Viewport, whiteBackground?: boolean): void {
+  drawCursor(position: Point, viewport: Viewport, whiteBackground?: boolean, _unitSettings?: UnitSettings): void {
     const ctx = this.ctx;
 
     ctx.save();
@@ -82,14 +84,16 @@ export class CursorLayer extends BaseRenderer {
   /**
    * Draw cursor coordinate label in screen coordinates
    */
-  drawCursorLabel(position: Point, viewport: Viewport): void {
+  drawCursorLabel(position: Point, viewport: Viewport, unitSettings?: UnitSettings): void {
     const ctx = this.ctx;
     const screen = this.worldToScreen(position, viewport);
 
     ctx.save();
     this.resetTransform();
 
-    const label = `2D Cursor: ${position.x.toFixed(2)}, ${position.y.toFixed(2)}`;
+    const label = unitSettings
+      ? `2D Cursor: ${formatCoordinate(position.x, position.y, unitSettings)}`
+      : `2D Cursor: ${position.x.toFixed(2)}, ${position.y.toFixed(2)}`;
 
     ctx.font = '10px Arial, sans-serif';
     const metrics = ctx.measureText(label);

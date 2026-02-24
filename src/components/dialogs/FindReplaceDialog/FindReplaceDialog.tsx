@@ -6,6 +6,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useAppStore } from '../../../state/appStore';
+import { DraggableModal } from '../../shared/DraggableModal';
 import type { TextShape } from '../../../types/geometry';
 
 interface FindReplaceDialogProps {
@@ -199,32 +200,24 @@ export function FindReplaceDialog({ isOpen, onClose }: FindReplaceDialogProps) {
     }
   }, [onClose, findAll, goToResult, replaceCurrent, currentResultIndex, results.length]);
 
-  if (!isOpen) return null;
+  const footerContent = (
+    <>
+      <span className="mr-4"><kbd className="px-1 bg-cad-bg rounded">Enter</kbd> Find next</span>
+      <span className="mr-4"><kbd className="px-1 bg-cad-bg rounded">Shift+Enter</kbd> Find previous</span>
+      <span><kbd className="px-1 bg-cad-bg rounded">Ctrl+Enter</kbd> Replace</span>
+    </>
+  );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-20">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/50"
-        onClick={onClose}
-      />
-
-      {/* Dialog */}
-      <div
-        className="relative bg-cad-surface border border-cad-border rounded-lg shadow-xl w-[480px]"
-        onKeyDown={handleKeyDown}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-3 border-b border-cad-border">
-          <h2 className="text-sm font-medium text-cad-text">Find & Replace</h2>
-          <button
-            onClick={onClose}
-            className="text-cad-text-dim hover:text-cad-text p-1"
-          >
-            ✕
-          </button>
-        </div>
-
+    <DraggableModal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Find & Replace"
+      width={480}
+      footer={footerContent}
+      footerClassName="px-4 py-2 bg-cad-bg/50 border-t border-cad-border text-xs text-cad-text-dim"
+    >
+      <div onKeyDown={handleKeyDown}>
         {/* Body */}
         <div className="p-4">
           {/* Find field */}
@@ -361,14 +354,7 @@ export function FindReplaceDialog({ isOpen, onClose }: FindReplaceDialogProps) {
             </div>
           )}
         </div>
-
-        {/* Footer with keyboard hints */}
-        <div className="px-4 py-2 bg-cad-bg/50 border-t border-cad-border text-xs text-cad-text-dim">
-          <span className="mr-4"><kbd className="px-1 bg-cad-bg rounded">Enter</kbd> Find next</span>
-          <span className="mr-4"><kbd className="px-1 bg-cad-bg rounded">Shift+Enter</kbd> Find previous</span>
-          <span><kbd className="px-1 bg-cad-bg rounded">Ctrl+Enter</kbd> Replace</span>
-        </div>
       </div>
-    </div>
+    </DraggableModal>
   );
 }

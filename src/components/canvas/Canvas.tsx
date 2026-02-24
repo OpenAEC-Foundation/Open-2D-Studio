@@ -537,6 +537,7 @@ export function Canvas() {
               gridlineExtension: s.gridlineExtension,
               seaLevelDatum: s.projectStructure?.seaLevelDatum ?? 0,
               hiddenIfcCategories: s.hiddenIfcCategories ?? [],
+              unitSettings: s.unitSettings,
             });
           }
         } else {
@@ -596,6 +597,7 @@ export function Canvas() {
             gridlineExtension: s.gridlineExtension,
             seaLevelDatum: s.projectStructure?.seaLevelDatum ?? 0,
             hiddenIfcCategories: s.hiddenIfcCategories ?? [],
+            unitSettings: s.unitSettings,
           });
         }
         } catch (err) {

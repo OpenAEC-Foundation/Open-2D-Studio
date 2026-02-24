@@ -2,11 +2,12 @@
  * NewSheetDialog - Dialog for creating new sheets from templates
  */
 
-import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
-import { X, FileText, Layout, Grid2X2, Columns, Square, Image, Trash2 } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { FileText, Layout, Grid2X2, Columns, Square, Image, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../../state/appStore';
 import { BUILT_IN_SHEET_TEMPLATES } from '../../../services/template/sheetTemplateService';
 import { loadCustomSVGTemplates, deleteCustomSVGTemplate } from '../../../services/export/svgTitleBlockService';
+import { DraggableModal, ModalButton } from '../../shared/DraggableModal';
 import type { SheetTemplate, ViewportPlaceholder, SVGTitleBlockTemplate } from '../../../types/sheet';
 
 interface NewSheetDialogProps {
@@ -28,12 +29,6 @@ export function NewSheetDialog({ isOpen, onClose }: NewSheetDialogProps) {
   // Delete confirmation state
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
 
-  // Drag state for movable modal
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef({ x: 0, y: 0 });
-  const modalRef = useRef<HTMLDivElement>(null);
-
   const { drawings, customSheetTemplates, addSheetFromTemplate, addSheet, sheets, setTitleBlockEditorOpen, switchToSheet } = useAppStore();
 
   // Load SVG title block templates from localStorage
@@ -47,25 +42,6 @@ export function NewSheetDialog({ isOpen, onClose }: NewSheetDialogProps) {
       }
     }
   }, [isOpen, customSheetTemplates.length]);
-
-  // Drag handlers
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button')) return;
-    setIsDragging(true);
-    dragStartRef.current = { x: e.clientX - position.x, y: e.clientY - position.y };
-  }, [position]);
-
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!isDragging) return;
-    setPosition({
-      x: e.clientX - dragStartRef.current.x,
-      y: e.clientY - dragStartRef.current.y,
-    });
-  }, [isDragging]);
-
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
 
   // Combine built-in and custom templates
   const allTemplates = useMemo(() => {
@@ -127,36 +103,25 @@ export function NewSheetDialog({ isOpen, onClose }: NewSheetDialogProps) {
     }));
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-    >
-      <div
-        ref={modalRef}
-        className="bg-cad-surface border border-cad-border shadow-xl w-[700px] h-[500px] flex flex-col"
-        style={{ transform: `translate(${position.x}px, ${position.y}px)` }}
-        onClick={(e) => e.stopPropagation()}
+    <>
+      <DraggableModal
+        isOpen={isOpen}
+        onClose={onClose}
+        title="New Sheet from Template"
+        width={700}
+        height={500}
+        footer={
+          <>
+            <ModalButton onClick={onClose}>
+              Cancel
+            </ModalButton>
+            <ModalButton onClick={handleCreate} variant="primary" disabled={!canCreate}>
+              Create Sheet
+            </ModalButton>
+          </>
+        }
       >
-        {/* Header - Draggable */}
-        <div
-          className="flex items-center justify-between px-3 py-1.5 border-b border-cad-border select-none"
-          style={{ background: 'linear-gradient(to bottom, #ffffff, #f5f5f5)', borderColor: '#d4d4d4' }}
-          onMouseDown={handleMouseDown}
-        >
-          <h2 className="text-xs font-semibold text-gray-800">New Sheet from Template</h2>
-          <button
-            onClick={onClose}
-            className="p-0.5 hover:bg-cad-hover rounded transition-colors text-gray-600 hover:text-gray-800 cursor-default -mr-1"
-          >
-            <X size={14} />
-          </button>
-        </div>
-
         {/* Tabs */}
         <div className="flex border-b border-cad-border">
           <button
@@ -388,28 +353,11 @@ export function NewSheetDialog({ isOpen, onClose }: NewSheetDialogProps) {
             )}
           </div>
         </div>
-
-        {/* Footer */}
-        <div className="px-3 py-2 border-t border-cad-border flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="px-3 py-1 text-xs bg-cad-input border border-cad-border text-cad-text hover:bg-cad-hover"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleCreate}
-            disabled={!canCreate}
-            className="px-3 py-1 text-xs bg-cad-accent text-white hover:bg-cad-accent/80 disabled:bg-cad-input disabled:text-cad-text-dim"
-          >
-            Create Sheet
-          </button>
-        </div>
-      </div>
+      </DraggableModal>
 
       {/* Delete Confirmation Dialog */}
       {deleteConfirm && (
-        <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-10">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
           <div className="bg-cad-surface border border-cad-border shadow-xl p-4 w-[300px]">
             <h3 className="text-sm font-medium text-cad-text mb-2">Delete Sheet Template</h3>
             <p className="text-xs text-cad-text-dim mb-4">
@@ -439,7 +387,7 @@ export function NewSheetDialog({ isOpen, onClose }: NewSheetDialogProps) {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 

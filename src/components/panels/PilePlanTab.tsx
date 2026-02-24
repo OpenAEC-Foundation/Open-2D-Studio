@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { useAppStore, useDrawingShapes } from '../../state/appStore';
+import { useAppStore, useDrawingShapes, useUnitSettings } from '../../state/appStore';
+import { formatNumber } from '../../units';
 import type { PileShape, PileType } from '../../types/geometry';
 
 // Friendly labels for pile types
@@ -13,6 +14,7 @@ const PILE_TYPE_LABELS: Record<PileType, string> = {
 export function PilePlanTab() {
   const shapes = useDrawingShapes();
   const { selectShapes, selectedShapeIds } = useAppStore();
+  const unitSettings = useUnitSettings();
 
   // Filter to pile shapes only
   const piles = useMemo(() => {
@@ -93,13 +95,13 @@ export function PilePlanTab() {
                 >
                   <td className="px-2 py-1 text-cad-text">{pile.label || '—'}</td>
                   <td className="px-2 py-1 text-cad-text text-right tabular-nums">
-                    {pile.position.x.toFixed(0)}
+                    {formatNumber(pile.position.x, 0, unitSettings.numberFormat)}
                   </td>
                   <td className="px-2 py-1 text-cad-text text-right tabular-nums">
-                    {pile.position.y.toFixed(0)}
+                    {formatNumber(pile.position.y, 0, unitSettings.numberFormat)}
                   </td>
                   <td className="px-2 py-1 text-cad-text text-right tabular-nums">
-                    {pile.diameter.toFixed(0)}
+                    {formatNumber(pile.diameter, 0, unitSettings.numberFormat)}
                   </td>
                   <td className="px-2 py-1 text-cad-text-dim">
                     {pile.pileType ? PILE_TYPE_LABELS[pile.pileType] || pile.pileType : '—'}

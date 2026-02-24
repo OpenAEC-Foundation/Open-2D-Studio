@@ -5,7 +5,11 @@ export {
   formatLength,
   formatAngle,
   formatCoordinate,
+  formatNumber,
+  formatElevation,
   parseLength,
   parseAngle,
+  parseNumber,
+  applyNumberFormat,
   getUnitSuffix,
 } from './format';

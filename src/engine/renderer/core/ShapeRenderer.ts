@@ -21,6 +21,9 @@ import { getRotationGizmoVisible, getActiveRotation, getRotationGizmoHovered } f
 import { useAppStore } from '../../../state/appStore';
 import { CAD_DEFAULT_FONT } from '../../../constants/cadDefaults';
 import { getElementLabelText, resolveTemplate } from '../../geometry/LabelUtils';
+import type { UnitSettings } from '../../../units/types';
+import { DEFAULT_UNIT_SETTINGS } from '../../../units/types';
+import { formatNumber, formatElevation } from '../../../units/format';
 
 export class ShapeRenderer extends BaseRenderer {
   private dimensionRenderer: DimensionRenderer;
@@ -53,6 +56,8 @@ export class ShapeRenderer extends BaseRenderer {
   private seaLevelDatum: number = 0;
   // All shapes lookup for linked label text resolution
   private shapesLookup: Map<string, Shape> = new Map();
+  // Unit settings for number formatting
+  private unitSettings: UnitSettings = DEFAULT_UNIT_SETTINGS;
 
   constructor(ctx: CanvasRenderingContext2D, width: number = 0, height: number = 0, dpr?: number) {
     super(ctx, width, height, dpr);
@@ -174,6 +179,13 @@ export class ShapeRenderer extends BaseRenderer {
    */
   setSeaLevelDatum(value: number): void {
     this.seaLevelDatum = value;
+  }
+
+  /**
+   * Set unit settings for number formatting in overlays and labels.
+   */
+  setUnitSettings(settings: UnitSettings): void {
+    this.unitSettings = settings;
   }
 
   /**
@@ -2255,7 +2267,7 @@ export class ShapeRenderer extends BaseRenderer {
           ctx.stroke();
         }
         // Draw elevation text
-        const seLabel = seElev >= 0 ? `+${(seElev / 1000).toFixed(3)}` : `${(seElev / 1000).toFixed(3)}`;
+        const seLabel = formatElevation(seElev, this.unitSettings.numberFormat, 3);
         ctx.save();
         ctx.fillStyle = strokeColor;
         ctx.font = `${seFontSize}px ${CAD_DEFAULT_FONT}`;
@@ -2303,7 +2315,7 @@ export class ShapeRenderer extends BaseRenderer {
             const fontSize = 12 / (viewport?.zoom ?? 1);
             ctx.font = `${fontSize}px sans-serif`;
             ctx.fillStyle = '#00ccff';
-            ctx.fillText(dist.toFixed(1), midX + fontSize * 0.3, midY - fontSize * 0.3);
+            ctx.fillText(formatNumber(dist, 1, this.unitSettings.numberFormat), midX + fontSize * 0.3, midY - fontSize * 0.3);
           }
           ctx.restore();
         }
@@ -2412,7 +2424,7 @@ export class ShapeRenderer extends BaseRenderer {
           let displayAngle = angle % 360;
           if (displayAngle > 180) displayAngle -= 360;
           if (displayAngle < -180) displayAngle += 360;
-          ctx.fillText(`${displayAngle.toFixed(1)}\u00B0`, textX, textY);
+          ctx.fillText(`${formatNumber(displayAngle, 1, this.unitSettings.numberFormat)}\u00B0`, textX, textY);
           ctx.restore();
         }
 
@@ -2470,7 +2482,7 @@ export class ShapeRenderer extends BaseRenderer {
           ctx.font = `${fontSize}px monospace`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
-          ctx.fillText(refDist.toFixed(1), refMidX, refMidY - 4 / zoom);
+          ctx.fillText(formatNumber(refDist, 1, this.unitSettings.numberFormat), refMidX, refMidY - 4 / zoom);
           ctx.restore();
         }
 
@@ -2495,7 +2507,7 @@ export class ShapeRenderer extends BaseRenderer {
         ctx.font = `${fontSize2}px monospace`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        ctx.fillText(curDist.toFixed(1), curMidX, curMidY + 4 / zoom);
+        ctx.fillText(formatNumber(curDist, 1, this.unitSettings.numberFormat), curMidX, curMidY + 4 / zoom);
         ctx.restore();
 
         // Scale factor label near origin
@@ -2506,7 +2518,7 @@ export class ShapeRenderer extends BaseRenderer {
           ctx.font = `bold ${factorFontSize}px monospace`;
           ctx.textAlign = 'left';
           ctx.textBaseline = 'bottom';
-          ctx.fillText(`\u00D7${factor.toFixed(3)}`, origin.x + 8 / zoom, origin.y - 8 / zoom);
+          ctx.fillText(`\u00D7${formatNumber(factor, 3, this.unitSettings.numberFormat)}`, origin.x + 8 / zoom, origin.y - 8 / zoom);
           ctx.restore();
         }
 
@@ -2617,7 +2629,7 @@ export class ShapeRenderer extends BaseRenderer {
     };
 
     // --- Prepare text metrics for gap calculation ---
-    const displayText = length.toFixed(2);
+    const displayText = formatNumber(length, 2, this.unitSettings.numberFormat);
     ctx.font = `${fontSize}px ${CAD_DEFAULT_FONT}`;
     const textMetrics = ctx.measureText(displayText);
     const textGap = textMetrics.width + textPadding * 2;
@@ -2881,9 +2893,9 @@ export class ShapeRenderer extends BaseRenderer {
       if (linkedShape) {
         if (shape.labelTemplate) {
           // Use template-based resolution: {Name}, {Area}, {Thickness}, etc.
-          text = resolveTemplate(shape.labelTemplate, linkedShape, this.wallTypes);
+          text = resolveTemplate(shape.labelTemplate, linkedShape, this.wallTypes, this.unitSettings);
         } else {
-          text = getElementLabelText(linkedShape, this.wallTypes);
+          text = getElementLabelText(linkedShape, this.wallTypes, this.unitSettings);
         }
       }
     }
@@ -3955,7 +3967,7 @@ export class ShapeRenderer extends BaseRenderer {
       ctx.textBaseline = 'middle';
 
       // Background for label
-      const labelText = `${angleDeg.toFixed(1)}\u00B0`;
+      const labelText = `${formatNumber(angleDeg, 1, this.unitSettings.numberFormat)}\u00B0`;
       const metrics = ctx.measureText(labelText);
       const padX = 4 / zoom;
       const padY = 2 / zoom;
@@ -5077,10 +5089,10 @@ export class ShapeRenderer extends BaseRenderer {
     let displayText = label;
     if (this.seaLevelDatum !== 0) {
       // NAP elevation = seaLevelDatum (m) + peil (mm converted to m)
-      const napElevation = this.seaLevelDatum + (shape.elevation / 1000);
-      const napSign = napElevation >= 0 ? '+' : '';
-      const napStr = napElevation.toFixed(napElevation === Math.round(napElevation) ? 1 : 2);
-      displayText = `${label}  (NAP ${napSign}${napStr} m)`;
+      const napElevationMM = (this.seaLevelDatum * 1000) + shape.elevation;
+      const napPrecision = napElevationMM === Math.round(napElevationMM / 1000) * 1000 ? 1 : 2;
+      const napStr = formatElevation(napElevationMM, this.unitSettings.numberFormat, napPrecision);
+      displayText = `${label}  (NAP ${napStr} m)`;
     }
     ctx.fillText(displayText, textX, textY);
 
@@ -5643,7 +5655,7 @@ export class ShapeRenderer extends BaseRenderer {
     }
 
     // Draw elevation text at label position
-    const label = elevation >= 0 ? `+${(elevation / 1000).toFixed(3)}` : `${(elevation / 1000).toFixed(3)}`;
+    const label = formatElevation(elevation, this.unitSettings.numberFormat, 3);
     ctx.save();
     ctx.fillStyle = textColor;
     ctx.font = `${fontSize}px ${CAD_DEFAULT_FONT}`;
@@ -6742,7 +6754,7 @@ export class ShapeRenderer extends BaseRenderer {
     if (area !== undefined) {
       const areaFontSize = fontSize * 0.7;
       ctx.font = `${areaFontSize}px ${CAD_DEFAULT_FONT}`;
-      ctx.fillText(`${area.toFixed(2)} m\u00B2`, labelPosition.x, labelPosition.y + fontSize * 1.2);
+      ctx.fillText(`${formatNumber(area, 2, this.unitSettings.numberFormat)} m\u00B2`, labelPosition.x, labelPosition.y + fontSize * 1.2);
     }
     ctx.restore();
   }

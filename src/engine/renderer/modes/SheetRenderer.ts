@@ -11,6 +11,7 @@ import type { WallType, WallSystemType, SheetQueryTable } from '../../../types/g
 import type { ParametricShape } from '../../../types/parametric';
 import type { CustomHatchPattern, MaterialHatchSettings } from '../../../types/hatch';
 import type { SavedQuery } from '../../../state/slices/parametricSlice';
+import type { UnitSettings } from '../../../units/types';
 import { executeQuery } from '../../../services/query/queryEngine';
 import { BaseRenderer } from '../core/BaseRenderer';
 import { ViewportRenderer } from '../sheet/ViewportRenderer';
@@ -82,6 +83,8 @@ export interface SheetRenderOptions {
   hiddenIfcCategories?: string[];
   /** Saved queries for rendering query tables and placement preview */
   queries?: SavedQuery[];
+  /** Unit settings for number formatting in overlays and labels */
+  unitSettings?: UnitSettings;
 }
 
 export class SheetRenderer extends BaseRenderer {
@@ -228,6 +231,7 @@ export class SheetRenderer extends BaseRenderer {
           gridlineExtension: options.gridlineExtension,
           seaLevelDatum: options.seaLevelDatum,
           hiddenIfcCategories: options.hiddenIfcCategories,
+          unitSettings: options.unitSettings,
         }
       );
     }
