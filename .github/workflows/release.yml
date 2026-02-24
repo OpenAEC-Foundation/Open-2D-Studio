@@ -208,9 +208,7 @@ jobs:
         run: npx tauri android init
 
       - name: Build Android APK
-        run: |
-          export NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973
-          npx tauri android build --apk
+        run: npx tauri android build --apk true
 
       - name: Sign APK
         env:
