@@ -934,7 +934,7 @@ export function recalculateMiterJoins(
  * Offset a shape by a given distance on a given side.
  * Returns a new shape (deep-cloned with new ID).
  */
-export function offsetShape(shape: Shape, distance: number, cursorPos: Point): Shape | null {
+export function offsetShape(shape: Shape, distance: number, cursorPos: Point, flip?: boolean): Shape | null {
   const cloned: Shape = JSON.parse(JSON.stringify(shape));
   (cloned as any).id = generateId();
 
@@ -950,14 +950,15 @@ export function offsetShape(shape: Shape, distance: number, cursorPos: Point): S
       const midX = (cloned.start.x + cloned.end.x) / 2;
       const midY = (cloned.start.y + cloned.end.y) / 2;
       const dotSide = (cursorPos.x - midX) * nx + (cursorPos.y - midY) * ny;
-      const sign = dotSide >= 0 ? 1 : -1;
+      const sign = (dotSide >= 0 ? 1 : -1) * (flip ? -1 : 1);
       cloned.start = { x: cloned.start.x + nx * distance * sign, y: cloned.start.y + ny * distance * sign };
       cloned.end = { x: cloned.end.x + nx * distance * sign, y: cloned.end.y + ny * distance * sign };
       return cloned;
     }
     case 'circle': {
       const dToCenter = Math.hypot(cursorPos.x - cloned.center.x, cursorPos.y - cloned.center.y);
-      if (dToCenter > cloned.radius) {
+      const isOutsideCircle = flip ? (dToCenter <= cloned.radius) : (dToCenter > cloned.radius);
+      if (isOutsideCircle) {
         cloned.radius += distance;
       } else {
         cloned.radius = Math.max(0.1, cloned.radius - distance);
@@ -966,7 +967,8 @@ export function offsetShape(shape: Shape, distance: number, cursorPos: Point): S
     }
     case 'arc': {
       const dToCenter = Math.hypot(cursorPos.x - cloned.center.x, cursorPos.y - cloned.center.y);
-      if (dToCenter > cloned.radius) {
+      const isOutsideArc = flip ? (dToCenter <= cloned.radius) : (dToCenter > cloned.radius);
+      if (isOutsideArc) {
         cloned.radius += distance;
       } else {
         cloned.radius = Math.max(0.1, cloned.radius - distance);
@@ -976,7 +978,8 @@ export function offsetShape(shape: Shape, distance: number, cursorPos: Point): S
     case 'ellipse': {
       const dToCenter = Math.hypot(cursorPos.x - cloned.center.x, cursorPos.y - cloned.center.y);
       const avgRadius = (cloned.radiusX + cloned.radiusY) / 2;
-      if (dToCenter > avgRadius) {
+      const isOutsideEllipse = flip ? (dToCenter <= avgRadius) : (dToCenter > avgRadius);
+      if (isOutsideEllipse) {
         cloned.radiusX += distance;
         cloned.radiusY += distance;
       } else {

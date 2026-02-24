@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Plus, Trash2, Pencil, Check, X, FileText, LayoutTemplate, Hash } from 'lucide-react';
 import { useAppStore, PAPER_SIZES } from '../../state/appStore';
 import { DISCIPLINE_PREFIXES } from '../../services/template/sheetTemplateService';
@@ -21,6 +21,10 @@ export function SheetsTab() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+
+  // Slow-click rename: clicking an already-selected sheet schedules rename,
+  // but a fast double-click cancels it (matching Windows Explorer behavior).
+  const renameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showNewSheetDialog, setShowNewSheetDialog] = useState(false);
   const [newSheetName, setNewSheetName] = useState('');
   const [newSheetPaperSize, setNewSheetPaperSize] = useState<PaperSize>('A4');
@@ -36,6 +40,39 @@ export function SheetsTab() {
   const handleStartEdit = (id: string, name: string) => {
     setEditingId(id);
     setEditName(name);
+  };
+
+  const handleSheetClick = (sheetId: string, sheetName: string) => {
+    // Clear any pending rename timer
+    if (renameTimerRef.current) {
+      clearTimeout(renameTimerRef.current);
+      renameTimerRef.current = null;
+    }
+
+    const isAlreadyActive = sheetId === activeSheetId && editorMode === 'sheet';
+
+    if (isAlreadyActive) {
+      // Sheet is already selected — schedule rename after a delay.
+      // If a dblclick fires, it will cancel this timer.
+      renameTimerRef.current = setTimeout(() => {
+        handleStartEdit(sheetId, sheetName);
+        renameTimerRef.current = null;
+      }, 600);
+    } else {
+      // Clicking a different sheet: discard any in-progress rename
+      if (editingId) {
+        handleCancelEdit();
+      }
+      switchToSheet(sheetId);
+    }
+  };
+
+  const handleSheetDoubleClick = () => {
+    // Fast double-click: cancel any pending rename
+    if (renameTimerRef.current) {
+      clearTimeout(renameTimerRef.current);
+      renameTimerRef.current = null;
+    }
   };
 
   const handleConfirmEdit = () => {
@@ -255,8 +292,8 @@ export function SheetsTab() {
                     ? 'bg-cad-accent/20 border border-cad-accent'
                     : 'hover:bg-cad-border/50 border border-transparent'
                 }`}
-                onClick={() => switchToSheet(sheet.id)}
-                onDoubleClick={() => handleStartEdit(sheet.id, sheet.name)}
+                onClick={() => handleSheetClick(sheet.id, sheet.name)}
+                onDoubleClick={handleSheetDoubleClick}
               >
                 {editingId === sheet.id ? (
                   <div className="flex items-center gap-2">

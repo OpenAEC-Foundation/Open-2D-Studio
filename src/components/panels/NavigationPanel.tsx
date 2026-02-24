@@ -49,7 +49,7 @@ export const NavigationPanel = memo(function NavigationPanel({ onCollapse }: Nav
     const handleMouseUp = () => {
       if (isResizingWidth.current) {
         isResizingWidth.current = false;
-        document.body.style.cursor = '';
+        document.documentElement.classList.remove('cursor-col-resizing');
         document.body.style.userSelect = '';
         setPanelWidth(w => { setSetting('navPanelWidth', w); return w; });
       }
@@ -122,13 +122,14 @@ export const NavigationPanel = memo(function NavigationPanel({ onCollapse }: Nav
         );
       })}
 
-      {/* Horizontal resize handle */}
+      {/* Horizontal resize handle — straddles the panel edge for a solid hit zone */}
       <div
-        className="absolute top-0 right-0 w-px h-full hover:bg-cad-accent z-10"
+        style={{ cursor: 'col-resize', right: -4, width: 8 }}
+        className="absolute top-0 h-full z-50"
         onMouseDown={(e) => {
           e.preventDefault();
           isResizingWidth.current = true;
-          document.body.style.cursor = 'col-resize';
+          document.documentElement.classList.add('cursor-col-resizing');
           document.body.style.userSelect = 'none';
         }}
       />

@@ -200,6 +200,12 @@ body,
   background: var(--theme-accent);
 }
 
+/* Global cursor override during panel resize drag */
+html.cursor-col-resizing,
+html.cursor-col-resizing * {
+  cursor: col-resize !important;
+}
+
 /* Canvas cursor styles */
 .cursor-crosshair {
   cursor: crosshair;

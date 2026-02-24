@@ -68,6 +68,7 @@ export interface ToolState {
   chamferDistance1: number;
   chamferDistance2: number;
   offsetDistance: number;
+  offsetFlipped: boolean;         // Flip offset to opposite side (toggled by Tab)
   rotateAngle: number | null;    // Typed angle override
 
   // Array tool options
@@ -174,6 +175,7 @@ export interface ToolActions {
   setChamferDistance1: (distance: number) => void;
   setChamferDistance2: (distance: number) => void;
   setOffsetDistance: (distance: number) => void;
+  toggleOffsetFlip: () => void;
   setRotateAngle: (angle: number | null) => void;
   setModifyRefShapeId: (id: string | null) => void;
   setArrayMode: (mode: 'linear' | 'radial') => void;
@@ -277,6 +279,7 @@ export const initialToolState: ToolState = {
   chamferDistance1: 5,
   chamferDistance2: 5,
   offsetDistance: 10,
+  offsetFlipped: false,
   rotateAngle: null,
   modifyRefShapeId: null,
 
@@ -359,6 +362,7 @@ export const createToolSlice = (
       state.modifyRefShapeId = null;
       state.sourceSnapAngle = null;
       state.modifyConstrainAxis = null;
+      state.offsetFlipped = false;
       state.modifyOrtho = false;
       // Exit plate system edit mode when switching tools
       if (tool !== 'select') {
@@ -632,6 +636,8 @@ export const createToolSlice = (
     set((state) => { state.chamferDistance2 = distance; }),
   setOffsetDistance: (distance) =>
     set((state) => { state.offsetDistance = distance; }),
+  toggleOffsetFlip: () =>
+    set((state) => { state.offsetFlipped = !state.offsetFlipped; }),
   setRotateAngle: (angle) =>
     set((state) => { state.rotateAngle = angle; }),
   setModifyRefShapeId: (id) =>

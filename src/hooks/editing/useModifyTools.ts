@@ -196,6 +196,8 @@ export function useModifyTools() {
   const chamferDistance1 = useAppStore((s) => s.chamferDistance1);
   const chamferDistance2 = useAppStore((s) => s.chamferDistance2);
   const offsetDistance = useAppStore((s) => s.offsetDistance);
+  const offsetFlipped = useAppStore((s) => s.offsetFlipped);
+  const hoveredShapeId = useAppStore((s) => s.hoveredShapeId);
   const lockedDistance = useAppStore((s) => s.lockedDistance);
   const rotateAngle = useAppStore((s) => s.rotateAngle);
   const modifyRefShapeId = useAppStore((s) => s.modifyRefShapeId);
@@ -1235,7 +1237,7 @@ export function useModifyTools() {
             if (id) {
               const shape = shapes.find((s) => s.id === id);
               if (shape) {
-                const result = offsetShape(shape, offsetDistance, worldPos);
+                const result = offsetShape(shape, offsetDistance, worldPos, offsetFlipped);
                 if (result) {
                   addShapes([result]);
                   triggerGridDimensionRegenIfNeeded([result]);
@@ -1772,7 +1774,7 @@ export function useModifyTools() {
     },
     [activeTool, drawingPoints, selectedShapeIds, shapes, parametricShapes, addDrawingPoint, clearDrawingPoints,
      addShapes, updateShapes, selectShape, selectShapes, modifyCopy, modifyMultiple, scaleMode, scaleFactor,
-     filletRadius, chamferDistance1, chamferDistance2, offsetDistance, rotateAngle, modifyRefShapeId, setModifyRefShapeId,
+     filletRadius, chamferDistance1, chamferDistance2, offsetDistance, offsetFlipped, rotateAngle, modifyRefShapeId, setModifyRefShapeId,
      getSelectedShapes, getSelectedParametricShapes, getPlateSystemChildShapes, activeDrawingId, activeLayerId,
      arrayMode, arrayCount, arraySpacing, arrayAngle,
      cloneParametricShapes, updateProfilePosition, updateProfileRotation, updateProfileScale,
@@ -2165,6 +2167,20 @@ export function useModifyTools() {
           }
           break;
         }
+        case 'offset': {
+          const hoveredShape = hoveredShapeId ? shapes.find(s => s.id === hoveredShapeId) : null;
+          if (hoveredShape) {
+            const result = offsetShape(hoveredShape, offsetDistance, worldPos, offsetFlipped);
+            if (result) {
+              setDrawingPreview({ type: 'modifyPreview', shapes: [result] });
+            } else {
+              setDrawingPreview(null);
+            }
+          } else {
+            setDrawingPreview(null);
+          }
+          break;
+        }
         default:
           setDrawingPreview(null);
           break;
@@ -2172,7 +2188,7 @@ export function useModifyTools() {
     },
     [activeTool, drawingPoints, selectedShapeIds, getSelectedShapes, getSelectedParametricShapes, getPlateSystemChildShapes,
      parametricShapesToGhosts, setDrawingPreview, scaleMode, arrayMode, arrayCount, arraySpacing, arrayAngle,
-     constrainDelta, lockedDistance, shapes, activeDrawingId, selectedGrip]
+     constrainDelta, lockedDistance, shapes, activeDrawingId, selectedGrip, hoveredShapeId, offsetFlipped, offsetDistance]
   );
 
   /**

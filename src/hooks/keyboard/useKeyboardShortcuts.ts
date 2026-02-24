@@ -669,6 +669,13 @@ export function useKeyboardShortcuts() {
         return;
       }
 
+      // TAB (no modifiers) + offset tool: flip offset side
+      if (key === 'tab' && !ctrl && !shift && activeTool === 'offset') {
+        e.preventDefault();
+        useAppStore.getState().toggleOffsetFlip();
+        return;
+      }
+
       // TAB (no modifiers): pre-select connected shapes OR toggle plate system edit mode
       if (key === 'tab' && !ctrl && !shift) {
         // If already in plate system edit mode, exit it
