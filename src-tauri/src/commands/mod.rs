@@ -241,6 +241,13 @@ pub fn open_file_with_default_app(path: String) -> SaveResult {
             },
         }
     }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        SaveResult {
+            success: false,
+            message: "Not supported on this platform".to_string(),
+        }
+    }
 }
 
 /// Get list of available printers
@@ -312,6 +319,10 @@ pub fn get_printers() -> Vec<String> {
             }
             Err(_) => vec![]
         }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        vec![]
     }
 }
 
@@ -417,6 +428,13 @@ pub fn print_file(path: String, printer: Option<String>) -> SaveResult {
             },
         }
     }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        SaveResult {
+            success: false,
+            message: "Printing is not supported on this platform".to_string(),
+        }
+    }
 }
 
 /// Open printer properties/preferences dialog
@@ -482,6 +500,13 @@ pub fn open_printer_properties(printer: String) -> SaveResult {
                     },
                 }
             }
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        SaveResult {
+            success: false,
+            message: "Not supported on this platform".to_string(),
         }
     }
 }
