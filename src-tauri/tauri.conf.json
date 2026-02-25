@@ -61,7 +61,8 @@
       "timestampUrl": "",
       "nsis": {
         "template": "nsis/installer.nsi",
-        "installerHooks": "nsis/hooks.nsh"
+        "installerHooks": "nsis/hooks.nsh",
+        "installerIcon": "icons/icon.ico"
       }
     },
     "createUpdaterArtifacts": "v1Compatible"
