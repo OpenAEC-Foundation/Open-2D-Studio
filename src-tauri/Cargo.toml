@@ -8,6 +8,10 @@ repository = ""
 edition = "2021"
 rust-version = "1.70"
 
+[lib]
+name = "open_nd_studio"
+crate-type = ["staticlib", "cdylib", "lib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
