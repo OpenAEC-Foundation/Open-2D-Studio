@@ -9,7 +9,7 @@ on:
       version:
         description: 'Version tag (e.g., v1.0.0)'
         required: true
-        default: 'v0.28.0'
+        default: 'v0.29.0'
 
 jobs:
   create-release:
@@ -136,13 +136,10 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Build Tauri app
+      - name: Build Tauri app (no upload yet)
         uses: tauri-apps/tauri-action@action-v0.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          includeUpdaterJson: true
 
       - name: Sign Windows installer
         uses: azure/trusted-signing-action@v0.5.0
@@ -160,13 +157,18 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
-      - name: Upload signed installer to release
+      - name: Upload signed Windows artifacts to release
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.create-release.outputs.version }}"
-          for file in src-tauri/target/release/bundle/nsis/*-setup.exe; do
+          # Upload all NSIS bundles (signed exe + nsis.zip + sigs)
+          for file in src-tauri/target/release/bundle/nsis/*; do
+            gh release upload "$VERSION" "$file" --clobber --repo "${{ github.repository }}"
+          done
+          # Upload all MSI bundles
+          for file in src-tauri/target/release/bundle/msi/*; do
             gh release upload "$VERSION" "$file" --clobber --repo "${{ github.repository }}"
           done
 
