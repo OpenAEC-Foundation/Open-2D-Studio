@@ -59,6 +59,29 @@ const files = [
       );
     },
   },
+  {
+    path: resolve(root, 'snap/snapcraft.yaml'),
+    update(content) {
+      return content.replace(
+        /^version:\s*'[^']*'/m,
+        `version: '${newVersion}'`
+      );
+    },
+  },
+  {
+    path: resolve(root, '.github/workflows/snap.yml'),
+    update(content) {
+      return content
+        .replace(
+          /description:\s*'Version tag \(e\.g\., v[^']*\)'/,
+          `description: 'Version tag (e.g., v${newVersion})'`
+        )
+        .replace(
+          /default:\s*'v[^']*'/,
+          `default: 'v${newVersion}'`
+        );
+    },
+  },
 ];
 
 for (const file of files) {

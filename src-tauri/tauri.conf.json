@@ -41,12 +41,16 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["o2d"],
+        "ext": [
+          "o2d"
+        ],
         "description": "Open 2D Studio Project",
         "mimeType": "application/x-open2dstudio"
       },
       {
-        "ext": ["dxf"],
+        "ext": [
+          "dxf"
+        ],
         "description": "DXF Drawing Exchange Format",
         "mimeType": "image/vnd.dxf"
       }
